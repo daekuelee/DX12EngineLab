@@ -13,3 +13,6 @@
 ## Guardrails
 - No rendering features beyond clear color
 - No refactor unless needed to keep build green
+
+## Smoke Test
+- PR workflow check.
