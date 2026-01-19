@@ -1,0 +1,52 @@
+name: Day Contract
+description: Create a Day contract issue (plan + evidence checklist)
+title: "DayX (YYYY-MM-DD): <contract title>"
+labels: ["day", "contract"]
+body:
+  - type: input
+    id: day
+    attributes:
+      label: Day
+      placeholder: "Day0.5 / Day1 / Day2 ..."
+    validations:
+      required: true
+
+  - type: input
+    id: date
+    attributes:
+      label: Date (KST)
+      placeholder: "YYYY-MM-DD"
+    validations:
+      required: false
+
+  - type: textarea
+    id: contract
+    attributes:
+      label: One-sentence contract
+      placeholder: "After today, what must be true?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: must
+    attributes:
+      label: Must (DoD)
+      placeholder: "- [ ] ...\n- [ ] ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence checklist
+      value: "- [ ] Build green (VS2022 x64)\n- [ ] Debug layer: 0 errors\n- [ ] Logs captured\n- [ ] Screenshot/Capture saved"
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks / Mitigation
+      placeholder: "- Risk:\n- Mitigation:"
+    validations:
+      required: false
