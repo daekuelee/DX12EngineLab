@@ -361,3 +361,12 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Our repo conventions
+/build/
+*.log
+
+# If you generate captures locally (keep folder, ignore heavy files if you want)
+# /captures/*.rdc
+# /captures/*.wpix
+# /captures/*.pix3
