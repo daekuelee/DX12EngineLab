@@ -106,6 +106,8 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)
+</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -124,12 +126,18 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="DX12EngineLab.h" />
+    <ClInclude Include="Engine\App.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="Renderer\DX12\Dx12Context.h" />
+    <ClInclude Include="Renderer\DX12\Dx12Debug.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp" />
+    <ClCompile Include="Engine\App.cpp" />
+    <ClCompile Include="Renderer\DX12\Dx12Context.cpp" />
+    <ClCompile Include="Renderer\DX12\Dx12Debug.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="DX12EngineLab.rc" />
