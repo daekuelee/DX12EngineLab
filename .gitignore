@@ -370,3 +370,4 @@ FodyWeavers.xsd
 # /captures/*.rdc
 # /captures/*.wpix
 # /captures/*.pix3
+.claude/settings.local.json
