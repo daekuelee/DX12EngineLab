@@ -3,6 +3,7 @@
 
 #include "framework.h"
 #include "DX12EngineLab.h"
+#include "Engine/App.h"
 
 #define MAX_LOADSTRING 100
 
@@ -10,6 +11,10 @@
 HINSTANCE hInst;                                // current instance
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
+HWND g_hWnd = nullptr;                          // main window handle
+
+// Application instance
+static Engine::App g_app;
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -40,17 +45,36 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_DX12ENGINELAB));
 
-    MSG msg;
+    MSG msg = {};
 
-    // Main message loop:
-    while (GetMessage(&msg, nullptr, 0, 0))
+    // Main game loop using PeekMessage for non-blocking message processing
+    bool running = true;
+    while (running)
     {
-        if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
+            if (msg.message == WM_QUIT)
+            {
+                running = false;
+                break;
+            }
+
+            if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+            {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+        }
+
+        if (running)
+        {
+            // Update and render when no messages are pending
+            g_app.Tick();
         }
     }
+
+    // Shutdown the application
+    g_app.Shutdown();
 
     return (int) msg.wParam;
 }
@@ -101,6 +125,14 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
       CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
 
    if (!hWnd)
+   {
+      return FALSE;
+   }
+
+   g_hWnd = hWnd; // Store window handle globally
+
+   // Initialize the application
+   if (!g_app.Initialize(hWnd))
    {
       return FALSE;
    }
