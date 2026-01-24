@@ -42,7 +42,14 @@ VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
     static const char* kPixelShader = R"(
 float4 PSMain() : SV_Target
 {
-    return float4(1.0, 1.0, 1.0, 1.0);
+    return float4(0.90, 0.10, 0.10, 1.0); // Red
+}
+)";
+
+    static const char* kFloorPixelShader = R"(
+float4 PSFloor() : SV_Target
+{
+    return float4(0.90, 0.85, 0.70, 1.0); // Beige
 }
 )";
 
@@ -76,9 +83,11 @@ float4 PSMain() : SV_Target
     void ShaderLibrary::Shutdown()
     {
         m_pso.Reset();
+        m_floorPso.Reset();
         m_rootSignature.Reset();
         m_vsBlob.Reset();
         m_psBlob.Reset();
+        m_floorPsBlob.Reset();
     }
 
     bool ShaderLibrary::CompileShaders()
@@ -133,6 +142,30 @@ float4 PSMain() : SV_Target
             if (errorBlob)
             {
                 OutputDebugStringA("PS compile error: ");
+                OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
+            }
+            return false;
+        }
+
+        // Compile floor pixel shader
+        hr = D3DCompile(
+            kFloorPixelShader,
+            strlen(kFloorPixelShader),
+            "PSFloor",
+            nullptr,
+            nullptr,
+            "PSFloor",
+            "ps_5_1",
+            compileFlags,
+            0,
+            &m_floorPsBlob,
+            &errorBlob);
+
+        if (FAILED(hr))
+        {
+            if (errorBlob)
+            {
+                OutputDebugStringA("Floor PS compile error: ");
                 OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
             }
             return false;
@@ -233,9 +266,11 @@ float4 PSMain() : SV_Target
         blend.RenderTarget[0].LogicOp = D3D12_LOGIC_OP_NOOP;
         blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-        // Depth stencil (disabled for now)
+        // Depth stencil (enabled)
         D3D12_DEPTH_STENCIL_DESC depthStencil = {};
-        depthStencil.DepthEnable = FALSE;
+        depthStencil.DepthEnable = TRUE;
+        depthStencil.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        depthStencil.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
         depthStencil.StencilEnable = FALSE;
 
         // PSO description
@@ -251,9 +286,16 @@ float4 PSMain() : SV_Target
         psoDesc.SampleMask = UINT_MAX;
         psoDesc.NumRenderTargets = 1;
         psoDesc.RTVFormats[0] = rtvFormat;
+        psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         psoDesc.SampleDesc.Count = 1;
 
         HRESULT hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_pso));
+        if (FAILED(hr))
+            return false;
+
+        // Create floor PSO (same as main PSO but with floor pixel shader)
+        psoDesc.PS = { m_floorPsBlob->GetBufferPointer(), m_floorPsBlob->GetBufferSize() };
+        hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_floorPso));
         return SUCCEEDED(hr);
     }
 }

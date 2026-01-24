@@ -150,7 +150,57 @@ namespace Renderer
             }
         }
 
-        // 8. Create CBV/SRV/UAV descriptor heap (shader-visible)
+        // 8. Create DSV descriptor heap
+        {
+            D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+            dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+            dsvHeapDesc.NumDescriptors = 1;
+            dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+
+            ThrowIfFailed(m_device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&m_dsvHeap)),
+                "Failed to create DSV heap\n");
+        }
+
+        // 9. Create depth buffer
+        {
+            D3D12_HEAP_PROPERTIES heapProps = {};
+            heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+            D3D12_RESOURCE_DESC depthDesc = {};
+            depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            depthDesc.Width = m_width;
+            depthDesc.Height = m_height;
+            depthDesc.DepthOrArraySize = 1;
+            depthDesc.MipLevels = 1;
+            depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
+            depthDesc.SampleDesc.Count = 1;
+            depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+            D3D12_CLEAR_VALUE clearValue = {};
+            clearValue.Format = DXGI_FORMAT_D32_FLOAT;
+            clearValue.DepthStencil.Depth = 1.0f;
+            clearValue.DepthStencil.Stencil = 0;
+
+            ThrowIfFailed(m_device->CreateCommittedResource(
+                &heapProps,
+                D3D12_HEAP_FLAG_NONE,
+                &depthDesc,
+                D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                &clearValue,
+                IID_PPV_ARGS(&m_depthBuffer)),
+                "Failed to create depth buffer\n");
+
+            // Create DSV
+            D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+            dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+            dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+            dsvDesc.Texture2D.MipSlice = 0;
+
+            m_device->CreateDepthStencilView(m_depthBuffer.Get(), &dsvDesc,
+                m_dsvHeap->GetCPUDescriptorHandleForHeapStart());
+        }
+
+        // 10. Create CBV/SRV/UAV descriptor heap (shader-visible)
         {
             D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
             heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -331,15 +381,19 @@ namespace Renderer
         D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
         rtvHandle.ptr += static_cast<SIZE_T>(backBufferIndex) * m_rtvDescriptorSize;
         {
-            const float clearColor[] = { 0.05f, 0.07f, 0.10f, 1.0f };
+            const float clearColor[] = { 0.53f, 0.81f, 0.92f, 1.0f }; // Sky blue
             m_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
         }
+
+        // 10b. Clear depth buffer
+        D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+        m_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
         // 11. Set render state
         m_commandList->SetGraphicsRootSignature(m_shaderLibrary.GetRootSignature());
         m_commandList->RSSetViewports(1, &m_viewport);
         m_commandList->RSSetScissorRects(1, &m_scissorRect);
-        m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+        m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
         m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         // 12. Set descriptor heaps
@@ -358,20 +412,25 @@ namespace Renderer
         m_commandList->SetGraphicsRootConstantBufferView(0, frameCtx.frameCBGpuVA); // b0: ViewProj
         m_commandList->SetGraphicsRootDescriptorTable(1, m_frameRing.GetSrvGpuHandle(srvFrameIndex)); // t0: Transforms SRV
 
-        // 14. Draw scene based on mode
+        // 14. Draw floor first (single draw call, uses instance 0 transform which is identity-like)
+        m_commandList->SetPipelineState(m_shaderLibrary.GetFloorPSO());
+        m_scene.RecordDrawFloor(m_commandList.Get());
+
+        // 15. Draw cubes based on mode
+        m_commandList->SetPipelineState(m_shaderLibrary.GetPSO());
         uint32_t drawCalls = 0;
         if (ToggleSystem::GetDrawMode() == DrawMode::Instanced)
         {
             m_scene.RecordDraw(m_commandList.Get(), InstanceCount);
-            drawCalls = 1;
+            drawCalls = 2; // 1 floor + 1 cubes
         }
         else
         {
             m_scene.RecordDrawNaive(m_commandList.Get(), InstanceCount);
-            drawCalls = InstanceCount;
+            drawCalls = 1 + InstanceCount; // 1 floor + 10000 cubes
         }
 
-        // 15. Transition backbuffer: RENDER_TARGET -> PRESENT
+        // 16. Transition backbuffer: RENDER_TARGET -> PRESENT
         {
             D3D12_RESOURCE_BARRIER barrier = {};
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -444,6 +503,8 @@ namespace Renderer
             m_backBuffers[i].Reset();
 
         m_rtvHeap.Reset();
+        m_dsvHeap.Reset();
+        m_depthBuffer.Reset();
         m_cbvSrvUavHeap.Reset();
         m_swapChain.Reset();
         m_commandQueue.Reset();

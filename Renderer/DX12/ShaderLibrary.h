@@ -33,6 +33,7 @@ namespace Renderer
         // Accessors
         ID3D12RootSignature* GetRootSignature() const { return m_rootSignature.Get(); }
         ID3D12PipelineState* GetPSO() const { return m_pso.Get(); }
+        ID3D12PipelineState* GetFloorPSO() const { return m_floorPso.Get(); }
 
     private:
         bool CreateRootSignature(ID3D12Device* device);
@@ -44,5 +45,7 @@ namespace Renderer
 
         Microsoft::WRL::ComPtr<ID3DBlob> m_vsBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> m_psBlob;
+        Microsoft::WRL::ComPtr<ID3DBlob> m_floorPsBlob;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> m_floorPso;
     };
 }

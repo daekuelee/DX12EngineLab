@@ -26,7 +26,13 @@ namespace Renderer
             return false;
         }
 
-        OutputDebugStringA("RenderScene: Cube geometry created successfully\n");
+        if (!CreateFloorGeometry(device, queue))
+        {
+            OutputDebugStringA("RenderScene: Failed to create floor geometry\n");
+            return false;
+        }
+
+        OutputDebugStringA("RenderScene: Geometry created successfully\n");
         return true;
     }
 
@@ -44,6 +50,12 @@ namespace Renderer
         m_vbv = {};
         m_ibv = {};
         m_indexCount = 0;
+
+        m_floorVertexBuffer.Reset();
+        m_floorIndexBuffer.Reset();
+        m_floorVbv = {};
+        m_floorIbv = {};
+        m_floorIndexCount = 0;
     }
 
     void RenderScene::RecordDraw(ID3D12GraphicsCommandList* cmdList, uint32_t instanceCount)
@@ -67,6 +79,15 @@ namespace Renderer
         {
             cmdList->DrawIndexedInstanced(m_indexCount, 1, 0, 0, i);
         }
+    }
+
+    void RenderScene::RecordDrawFloor(ID3D12GraphicsCommandList* cmdList)
+    {
+        cmdList->IASetVertexBuffers(0, 1, &m_floorVbv);
+        cmdList->IASetIndexBuffer(&m_floorIbv);
+
+        // Floor uses instance 0's transform (identity at origin)
+        cmdList->DrawIndexedInstanced(m_floorIndexCount, 1, 0, 0, 0);
     }
 
     bool RenderScene::CreateCubeGeometry(ID3D12Device* device, ID3D12CommandQueue* queue)
@@ -167,6 +188,99 @@ namespace Renderer
             m_ibv.BufferLocation = m_indexBuffer->GetGPUVirtualAddress();
             m_ibv.SizeInBytes = static_cast<UINT>(ibBytes);
             m_ibv.Format = DXGI_FORMAT_R16_UINT;
+        }
+
+        return true;
+    }
+
+    bool RenderScene::CreateFloorGeometry(ID3D12Device* device, ID3D12CommandQueue* queue)
+    {
+        // Large floor quad at y=-0.01 (slightly below cubes at y=0)
+        struct Vertex { float x, y, z; };
+
+        const Vertex vertices[] = {
+            {-200.0f, -0.01f, -200.0f},
+            {-200.0f, -0.01f,  200.0f},
+            { 200.0f, -0.01f,  200.0f},
+            { 200.0f, -0.01f, -200.0f}
+        };
+
+        const uint16_t indices[] = {
+            0, 1, 2,
+            0, 2, 3
+        };
+
+        m_floorIndexCount = _countof(indices);
+
+        const uint64_t vbBytes = sizeof(vertices);
+        const uint64_t ibBytes = sizeof(indices);
+
+        // Create floor vertex buffer in DEFAULT heap
+        {
+            D3D12_HEAP_PROPERTIES heapProps = {};
+            heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+            D3D12_RESOURCE_DESC desc = {};
+            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            desc.Width = vbBytes;
+            desc.Height = 1;
+            desc.DepthOrArraySize = 1;
+            desc.MipLevels = 1;
+            desc.SampleDesc.Count = 1;
+            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+            HRESULT hr = device->CreateCommittedResource(
+                &heapProps,
+                D3D12_HEAP_FLAG_NONE,
+                &desc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                nullptr,
+                IID_PPV_ARGS(&m_floorVertexBuffer));
+
+            if (FAILED(hr))
+                return false;
+
+            if (!UploadBuffer(device, queue, m_floorVertexBuffer.Get(), vertices, vbBytes,
+                             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER))
+                return false;
+
+            m_floorVbv.BufferLocation = m_floorVertexBuffer->GetGPUVirtualAddress();
+            m_floorVbv.SizeInBytes = static_cast<UINT>(vbBytes);
+            m_floorVbv.StrideInBytes = sizeof(Vertex);
+        }
+
+        // Create floor index buffer in DEFAULT heap
+        {
+            D3D12_HEAP_PROPERTIES heapProps = {};
+            heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+            D3D12_RESOURCE_DESC desc = {};
+            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            desc.Width = ibBytes;
+            desc.Height = 1;
+            desc.DepthOrArraySize = 1;
+            desc.MipLevels = 1;
+            desc.SampleDesc.Count = 1;
+            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+            HRESULT hr = device->CreateCommittedResource(
+                &heapProps,
+                D3D12_HEAP_FLAG_NONE,
+                &desc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                nullptr,
+                IID_PPV_ARGS(&m_floorIndexBuffer));
+
+            if (FAILED(hr))
+                return false;
+
+            if (!UploadBuffer(device, queue, m_floorIndexBuffer.Get(), indices, ibBytes,
+                             D3D12_RESOURCE_STATE_INDEX_BUFFER))
+                return false;
+
+            m_floorIbv.BufferLocation = m_floorIndexBuffer->GetGPUVirtualAddress();
+            m_floorIbv.SizeInBytes = static_cast<UINT>(ibBytes);
+            m_floorIbv.Format = DXGI_FORMAT_R16_UINT;
         }
 
         return true;

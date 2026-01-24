@@ -27,6 +27,9 @@ namespace Renderer
         // Record draw commands - naive mode (instanceCount draw calls, 1 instance each)
         void RecordDrawNaive(ID3D12GraphicsCommandList* cmdList, uint32_t instanceCount);
 
+        // Record draw commands for floor (single draw call)
+        void RecordDrawFloor(ID3D12GraphicsCommandList* cmdList);
+
         // Accessors
         uint32_t GetIndexCount() const { return m_indexCount; }
         D3D12_VERTEX_BUFFER_VIEW GetVBView() const { return m_vbv; }
@@ -34,6 +37,7 @@ namespace Renderer
 
     private:
         bool CreateCubeGeometry(ID3D12Device* device, ID3D12CommandQueue* queue);
+        bool CreateFloorGeometry(ID3D12Device* device, ID3D12CommandQueue* queue);
         bool UploadBuffer(ID3D12Device* device, ID3D12CommandQueue* queue,
                          ID3D12Resource* dstDefault, const void* srcData, uint64_t numBytes,
                          D3D12_RESOURCE_STATES afterState);
@@ -44,6 +48,13 @@ namespace Renderer
         D3D12_VERTEX_BUFFER_VIEW m_vbv = {};
         D3D12_INDEX_BUFFER_VIEW m_ibv = {};
         uint32_t m_indexCount = 0;
+
+        // Floor geometry in DEFAULT heap
+        Microsoft::WRL::ComPtr<ID3D12Resource> m_floorVertexBuffer;
+        Microsoft::WRL::ComPtr<ID3D12Resource> m_floorIndexBuffer;
+        D3D12_VERTEX_BUFFER_VIEW m_floorVbv = {};
+        D3D12_INDEX_BUFFER_VIEW m_floorIbv = {};
+        uint32_t m_floorIndexCount = 0;
 
         // Temporary resources for upload (fence for synchronization)
         Microsoft::WRL::ComPtr<ID3D12Fence> m_uploadFence;

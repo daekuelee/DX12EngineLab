@@ -47,6 +47,10 @@ namespace Renderer
         uint32_t m_rtvDescriptorSize = 0;
         Microsoft::WRL::ComPtr<ID3D12Resource> m_backBuffers[FrameCount];
 
+        // DSV heap and depth buffer
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
+        Microsoft::WRL::ComPtr<ID3D12Resource> m_depthBuffer;
+
         // CBV/SRV/UAV heap (shader-visible) for transforms SRV
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_cbvSrvUavHeap;
         uint32_t m_cbvSrvUavDescriptorSize = 0;
