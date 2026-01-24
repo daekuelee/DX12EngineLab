@@ -8,8 +8,73 @@ using namespace DirectX;
 
 using Microsoft::WRL::ComPtr;
 
+// Handedness switch: set to 0 for LH if RH produces inverted/invisible scene
+#define USE_RIGHT_HANDED 1
+
 namespace Renderer
 {
+    //-------------------------------------------------------------------------
+    // Camera Presets
+    //-------------------------------------------------------------------------
+    enum class CameraPreset : uint32_t
+    {
+        A = 0,  // Default - 3/4 isometric-ish
+        B = 1,  // Closer / more dramatic depth
+        C = 2,  // Higher / calmer / overview
+        Count
+    };
+
+    struct CameraPresetDesc
+    {
+        XMFLOAT3 eye;
+        XMFLOAT3 target;
+        XMFLOAT3 up;
+        float fovY;     // radians
+        float nearZ;
+        float farZ;
+    };
+
+    static const CameraPresetDesc kCameraPresets[] =
+    {
+        // Preset A (Default - 3/4 isometric-ish)
+        { {0.0f, 180.0f, -220.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, XM_PIDIV4, 1.0f, 1000.0f },
+        // Preset B (Closer / more dramatic depth)
+        { {0.0f, 120.0f, -160.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, XMConvertToRadians(55.0f), 0.5f, 800.0f },
+        // Preset C (Higher / calmer / overview)
+        { {0.0f, 260.0f, -320.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, XMConvertToRadians(40.0f), 2.0f, 1500.0f },
+    };
+
+    static CameraPreset s_currentCameraPreset = CameraPreset::A;
+    static bool s_camKeyWasDown[3] = { false, false, false }; // Debounce for keys 1, 2, 3
+
+    static const char* GetCameraPresetName(CameraPreset preset)
+    {
+        switch (preset)
+        {
+            case CameraPreset::A: return "A";
+            case CameraPreset::B: return "B";
+            case CameraPreset::C: return "C";
+            default: return "?";
+        }
+    }
+
+    static XMMATRIX BuildViewProj(const CameraPresetDesc& desc, float aspect)
+    {
+        XMVECTOR eye = XMLoadFloat3(&desc.eye);
+        XMVECTOR target = XMLoadFloat3(&desc.target);
+        XMVECTOR up = XMLoadFloat3(&desc.up);
+
+#if USE_RIGHT_HANDED
+        XMMATRIX view = XMMatrixLookAtRH(eye, target, up);
+        XMMATRIX proj = XMMatrixPerspectiveFovRH(desc.fovY, aspect, desc.nearZ, desc.farZ);
+#else
+        XMMATRIX view = XMMatrixLookAtLH(eye, target, up);
+        XMMATRIX proj = XMMatrixPerspectiveFovLH(desc.fovY, aspect, desc.nearZ, desc.farZ);
+#endif
+
+        return XMMatrixMultiply(view, proj);
+    }
+
     static void ThrowIfFailed(HRESULT hr, const char* msg = nullptr)
     {
         if (FAILED(hr))
@@ -270,6 +335,29 @@ namespace Renderer
         if (!m_initialized)
             return;
 
+        // 0. Handle camera preset hotkeys (1, 2, 3) with debounce
+        {
+            const int keys[] = { '1', '2', '3' };
+            const CameraPreset presets[] = { CameraPreset::A, CameraPreset::B, CameraPreset::C };
+
+            for (int i = 0; i < 3; ++i)
+            {
+                bool isDown = (GetAsyncKeyState(keys[i]) & 0x8000) != 0;
+                if (isDown && !s_camKeyWasDown[i])
+                {
+                    s_currentCameraPreset = presets[i];
+                    const CameraPresetDesc& desc = kCameraPresets[static_cast<uint32_t>(s_currentCameraPreset)];
+                    char buf[128];
+                    sprintf_s(buf, "CAM: preset=%s eye=(%.0f,%.0f,%.0f) fov=%.0fdeg\n",
+                        GetCameraPresetName(s_currentCameraPreset),
+                        desc.eye.x, desc.eye.y, desc.eye.z,
+                        XMConvertToDegrees(desc.fovY));
+                    OutputDebugStringA(buf);
+                }
+                s_camKeyWasDown[i] = isDown;
+            }
+        }
+
         // 1. Begin frame - get fence-gated frame context using monotonic frameId
         uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
         FrameContext& frameCtx = m_frameRing.BeginFrame(m_frameId);
@@ -277,23 +365,12 @@ namespace Renderer
         // 2. Get backbuffer index (separate from frame resource index!)
         uint32_t backBufferIndex = GetBackBufferIndex();
 
-        // 3. Update ViewProj constant buffer (DirectXMath perspective + LookAt)
+        // 3. Update ViewProj constant buffer (camera preset + DirectXMath)
         {
             float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
+            const CameraPresetDesc& camDesc = kCameraPresets[static_cast<uint32_t>(s_currentCameraPreset)];
 
-            // Camera position: elevated, looking at grid center
-            XMVECTOR eye = XMVectorSet(0.0f, 150.0f, -200.0f, 1.0f);
-            XMVECTOR target = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
-            XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-
-            XMMATRIX view = XMMatrixLookAtRH(eye, target, up);
-
-            float fov = XM_PIDIV4;  // 45 degrees
-            float nearZ = 1.0f;
-            float farZ = 500.0f;
-            XMMATRIX proj = XMMatrixPerspectiveFovRH(fov, aspect, nearZ, farZ);
-
-            XMMATRIX viewProj = XMMatrixMultiply(view, proj);
+            XMMATRIX viewProj = BuildViewProj(camDesc, aspect);
 
             // DirectXMath uses row-major, HLSL row_major matches - no transpose needed
             XMFLOAT4X4 vpMatrix;
