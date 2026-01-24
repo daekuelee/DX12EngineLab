@@ -116,24 +116,24 @@ float4 PSMain(PSIn pin) : SV_Target
     float3 dpdy = ddy(pin.WorldPos);
     float3 N = normalize(cross(dpdx, dpdy));
 
-    // Directional light from upper-left-front
-    float3 lightDir = normalize(float3(-0.5, -0.7, -0.5));
+    // Directional light from above-front (more vertical = brighter tops)
+    float3 lightDir = normalize(float3(-0.3, -0.9, -0.3));
 
-    // Lambert: ambient + diffuse
-    float ambient = 0.25;
+    // Lambert: reduced ambient for stronger face contrast
+    float ambient = 0.18;
     float NdotL = max(0.0, dot(N, -lightDir));
     float lighting = ambient + (1.0 - ambient) * NdotL;
 
     // Procedural material variation based on grid cell (spacing = 2.0)
     float3 cellIdx = floor(pin.WorldPos / 2.0);
     float checker = fmod(cellIdx.x + cellIdx.z, 2.0);  // 0 or 1
-    float variation = 1.0 - checker * 0.08;  // 1.0 or 0.92
+    float variation = 1.0 - checker * 0.12;  // 1.0 or 0.88 (stronger contrast)
 
-    // Base red color with lighting and variation (purer red to avoid gamma-induced yellow tint)
-    float3 baseColor = float3(0.85, 0.08, 0.08);
+    // Saturated red-orange for warmth and visibility against cool floor
+    float3 baseColor = float3(0.92, 0.18, 0.08);
     float3 litColor = baseColor * lighting * variation;
 
-    // Gamma correction: linear to sRGB (prevents yellow tint on bright faces)
+    // Gamma correction: linear to sRGB
     float3 srgbColor = pow(litColor, 1.0 / 2.2);
     return float4(srgbColor, 1.0);
 }
@@ -143,7 +143,8 @@ float4 PSMain(PSIn pin) : SV_Target
     static const char* kFloorPixelShader = R"(
 float4 PSFloor() : SV_Target
 {
-    return float4(0.90, 0.85, 0.70, 1.0); // Beige
+    // Cool gray floor contrasts with warm red/orange cubes
+    return float4(0.35, 0.40, 0.45, 1.0);
 }
 )";
 
