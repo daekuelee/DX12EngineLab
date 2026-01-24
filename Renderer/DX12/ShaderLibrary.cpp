@@ -114,7 +114,7 @@ float4 PSMain(PSIn pin) : SV_Target
     // Compute face normal from screen-space derivatives
     float3 dpdx = ddx(pin.WorldPos);
     float3 dpdy = ddy(pin.WorldPos);
-    float3 N = normalize(cross(dpdx, dpdy));
+    float3 N = normalize(cross(dpdy, dpdx));  // Reversed for correct outward normals
 
     // Directional light from above-front (more vertical = brighter tops)
     float3 lightDir = normalize(float3(-0.3, -0.9, -0.3));
