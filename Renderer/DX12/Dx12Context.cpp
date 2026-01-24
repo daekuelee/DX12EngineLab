@@ -2,6 +2,9 @@
 #include "Dx12Debug.h"
 #include "ToggleSystem.h"
 #include <cstdio>
+#include <DirectXMath.h>
+
+using namespace DirectX;
 
 using Microsoft::WRL::ComPtr;
 
@@ -274,24 +277,28 @@ namespace Renderer
         // 2. Get backbuffer index (separate from frame resource index!)
         uint32_t backBufferIndex = GetBackBufferIndex();
 
-        // 3. Update ViewProj constant buffer (top-down orthographic)
+        // 3. Update ViewProj constant buffer (DirectXMath perspective + LookAt)
         {
             float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
-            float scale = 0.01f;    // Maps -100..100 to -1..1
-            float zScale = 0.005f;  // 1/(far-near), maps Y to NDC depth
-            float zOffset = 0.5f;   // Center the depth range
 
-            // Top-down orthographic view (row-major for v * M)
-            // Camera looks down -Y at the XZ grid
-            // World X -> Screen X, World Z -> Screen Y, World Y -> Depth
-            float viewProj[16] = {
-                scale / aspect,  0.0f,    0.0f,    0.0f,   // X -> screen X
-                0.0f,            0.0f,    zScale,  0.0f,   // Z -> depth
-                0.0f,           -scale,   0.0f,    0.0f,   // -Y -> screen Y
-                0.0f,            0.0f,    zOffset, 1.0f
-            };
+            // Camera position: elevated, looking at grid center
+            XMVECTOR eye = XMVectorSet(0.0f, 150.0f, -200.0f, 1.0f);
+            XMVECTOR target = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+            XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
 
-            memcpy(frameCtx.frameCBMapped, viewProj, sizeof(viewProj));
+            XMMATRIX view = XMMatrixLookAtRH(eye, target, up);
+
+            float fov = XM_PIDIV4;  // 45 degrees
+            float nearZ = 1.0f;
+            float farZ = 500.0f;
+            XMMATRIX proj = XMMatrixPerspectiveFovRH(fov, aspect, nearZ, farZ);
+
+            XMMATRIX viewProj = XMMatrixMultiply(view, proj);
+
+            // DirectXMath uses row-major, HLSL row_major matches - no transpose needed
+            XMFLOAT4X4 vpMatrix;
+            XMStoreFloat4x4(&vpMatrix, viewProj);
+            memcpy(frameCtx.frameCBMapped, &vpMatrix, sizeof(vpMatrix));
         }
 
         // 4. Update transforms (100x100 grid = 10k instances)
