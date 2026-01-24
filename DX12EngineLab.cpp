@@ -4,6 +4,7 @@
 #include "framework.h"
 #include "DX12EngineLab.h"
 #include "Engine/App.h"
+#include "Renderer/DX12/ToggleSystem.h"
 
 #define MAX_LOADSTRING 100
 
@@ -180,6 +181,37 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             HDC hdc = BeginPaint(hWnd, &ps);
             // TODO: Add any drawing code that uses hdc here...
             EndPaint(hWnd, &ps);
+        }
+        break;
+    case WM_KEYDOWN:
+        {
+            // 'T' key toggles draw mode (instanced <-> naive)
+            if (wParam == 'T')
+            {
+                Renderer::ToggleSystem::ToggleDrawMode();
+                Renderer::ToggleSystem::RequestDiagnosticLog(); // Trigger diagnostic log on next frame
+                OutputDebugStringA("Draw mode toggled\n");
+            }
+            // F1 key toggles sentinel_Instance0 proof (moved from '1' to avoid camera preset collision)
+            else if (wParam == VK_F1)
+            {
+                bool current = Renderer::ToggleSystem::IsSentinelInstance0Enabled();
+                Renderer::ToggleSystem::SetSentinelInstance0(!current);
+                OutputDebugStringA(current ? "sentinel_Instance0: OFF\n" : "sentinel_Instance0: ON\n");
+            }
+            // F2 key toggles stomp_Lifetime proof (moved from '2' to avoid camera preset collision)
+            else if (wParam == VK_F2)
+            {
+                bool current = Renderer::ToggleSystem::IsStompLifetimeEnabled();
+                Renderer::ToggleSystem::SetStompLifetime(!current);
+                OutputDebugStringA(current ? "stomp_Lifetime: OFF\n" : "stomp_Lifetime: ON\n");
+            }
+            // 'G' key toggles grid (cubes) visibility for floor debugging
+            else if (wParam == 'G')
+            {
+                Renderer::ToggleSystem::ToggleGrid();
+                OutputDebugStringA(Renderer::ToggleSystem::IsGridEnabled() ? "Grid: ON\n" : "Grid: OFF\n");
+            }
         }
         break;
     case WM_DESTROY:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include "../Renderer/DX12/Dx12Context.h"
 
 namespace Engine
 {
@@ -19,6 +20,7 @@ namespace Engine
 
     private:
         HWND m_hwnd = nullptr;
+        Renderer::Dx12Context m_renderer;
         bool m_initialized = false;
     };
 }
