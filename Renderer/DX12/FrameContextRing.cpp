@@ -1,6 +1,9 @@
 #include "FrameContextRing.h"
 #include <cstdio>
 
+// Must match ShaderLibrary.cpp
+#define MICROTEST_MODE 0
+
 namespace Renderer
 {
     // CBV requires 256-byte alignment
@@ -159,15 +162,24 @@ namespace Renderer
     {
         FrameContext& ctx = m_frames[frameIndex];
 
-        // B-2: Raw buffer SRV for ByteAddressBuffer in shader
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
         srvDesc.Buffer.FirstElement = 0;
+
+#if MICROTEST_MODE
+        // Raw buffer SRV for ByteAddressBuffer (diagnostic mode)
+        srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
         srvDesc.Buffer.NumElements = InstanceCount * 16;  // 16 floats per matrix
         srvDesc.Buffer.StructureByteStride = 0;           // Must be 0 for raw
         srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+#else
+        // StructuredBuffer SRV for production (float4x4 per element)
+        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        srvDesc.Buffer.NumElements = InstanceCount;
+        srvDesc.Buffer.StructureByteStride = sizeof(float) * 16;  // 64 bytes per matrix
+        srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+#endif
 
         // Get CPU handle at this frame's SRV slot
         D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_srvHeap->GetCPUDescriptorHandleForHeapStart();

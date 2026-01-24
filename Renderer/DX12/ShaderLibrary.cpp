@@ -4,10 +4,15 @@
 
 using Microsoft::WRL::ComPtr;
 
+// Compile-time toggle: 0 = production StructuredBuffer, 1 = diagnostic ByteAddressBuffer (Microtest B)
+#define MICROTEST_MODE 0
+
 namespace Renderer
 {
-    // Embedded HLSL - matches root signature ABI (b0, t0)
-    // B-2: Uses ByteAddressBuffer for raw SRV read test with color sentinel
+#if MICROTEST_MODE
+    // ========================================================================
+    // MICROTEST MODE: ByteAddressBuffer + color sentinel (diagnostic)
+    // ========================================================================
     static const char* kVertexShader = R"(
 cbuffer FrameCB : register(b0, space0)
 {
@@ -16,11 +21,7 @@ cbuffer FrameCB : register(b0, space0)
 
 ByteAddressBuffer TransformsRaw : register(t0, space0);
 
-struct VSIn
-{
-    float3 Pos : POSITION;
-};
-
+struct VSIn { float3 Pos : POSITION; };
 struct VSOut
 {
     float4 Pos : SV_Position;
@@ -41,27 +42,16 @@ VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
 
     // B-2: Read matrix from raw SRV and check translation
     uint byteOffset = iid * 64;
-    float4 row0 = asfloat(TransformsRaw.Load4(byteOffset + 0));
-    float4 row1 = asfloat(TransformsRaw.Load4(byteOffset + 16));
-    float4 row2 = asfloat(TransformsRaw.Load4(byteOffset + 32));
     float4 row3 = asfloat(TransformsRaw.Load4(byteOffset + 48));
 
     float epsilon = 0.5f;
-    // Row-major: translation in row3.xyz
-    bool rowMatch = (abs(row3.x - tx) < epsilon) && (abs(row3.z - tz) < epsilon);
-    // Column-major: translation in col3 (row0.w, row1.w, row2.w)
-    bool colMatch = (abs(row0.w - tx) < epsilon) && (abs(row2.w - tz) < epsilon);
+    bool match = (abs(row3.x - tx) < epsilon) && (abs(row3.z - tz) < epsilon);
 
-    if (rowMatch || colMatch)
-        o.Color = float4(0.0, 1.0, 0.0, 1.0);  // GREEN = match
-    else
-        o.Color = float4(1.0, 0.0, 0.0, 1.0);  // RED = mismatch
-
+    o.Color = match ? float4(0.0, 1.0, 0.0, 1.0) : float4(1.0, 0.0, 0.0, 1.0);
     return o;
 }
 )";
 
-    // B-2: Pixel shader passes through color from vertex shader
     static const char* kPixelShader = R"(
 struct PSIn
 {
@@ -74,6 +64,43 @@ float4 PSMain(PSIn pin) : SV_Target
     return pin.Color;
 }
 )";
+
+#else
+    // ========================================================================
+    // PRODUCTION MODE: StructuredBuffer with row_major transforms
+    // ========================================================================
+    static const char* kVertexShader = R"(
+cbuffer FrameCB : register(b0, space0)
+{
+    row_major float4x4 ViewProj;
+};
+
+struct TransformData
+{
+    row_major float4x4 M;
+};
+StructuredBuffer<TransformData> Transforms : register(t0, space0);
+
+struct VSIn { float3 Pos : POSITION; };
+struct VSOut { float4 Pos : SV_Position; };
+
+VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
+{
+    VSOut o;
+    float4x4 world = Transforms[iid].M;
+    float3 worldPos = mul(float4(vin.Pos, 1.0), world).xyz;
+    o.Pos = mul(float4(worldPos, 1.0), ViewProj);
+    return o;
+}
+)";
+
+    static const char* kPixelShader = R"(
+float4 PSMain() : SV_Target
+{
+    return float4(0.90, 0.10, 0.10, 1.0);  // Red cubes
+}
+)";
+#endif
 
     static const char* kFloorPixelShader = R"(
 float4 PSFloor() : SV_Target
