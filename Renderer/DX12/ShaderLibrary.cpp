@@ -32,9 +32,13 @@ struct VSOut
 VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
 {
     VSOut o;
-    float4x4 M = Transforms[iid].M;
-    float4 wpos = mul(float4(vin.Pos, 1.0), M);
-    o.Pos = mul(wpos, ViewProj);
+    // Microtest A: bypass transforms SRV, compute grid position from instance ID
+    uint gx = iid % 100;
+    uint gz = iid / 100;
+    float tx = float(gx) * 2.0f - 99.0f;
+    float tz = float(gz) * 2.0f - 99.0f;
+    float3 worldPos = vin.Pos + float3(tx, 0.0f, tz);
+    o.Pos = mul(float4(worldPos, 1.0), ViewProj);
     return o;
 }
 )";
