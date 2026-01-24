@@ -111,40 +111,19 @@ struct PSIn
 
 float4 PSMain(PSIn pin, uint primID : SV_PrimitiveID) : SV_Target
 {
-    // Hardcoded per-face normals (6 faces, 2 triangles each = 12 triangles per cube)
+    // DEBUG MODE: Face-based colors for visual verification
     // Order matches index buffer: -Z, +Z, -X, +X, +Y, -Y
-    static const float3 faceNormals[6] = {
-        float3(0, 0, -1),   // -Z (front): triangles 0-1
-        float3(0, 0, +1),   // +Z (back): triangles 2-3
-        float3(-1, 0, 0),   // -X (left): triangles 4-5
-        float3(+1, 0, 0),   // +X (right): triangles 6-7
-        float3(0, +1, 0),   // +Y (top): triangles 8-9
-        float3(0, -1, 0),   // -Y (bottom): triangles 10-11
+    static const float3 faceDebugColors[6] = {
+        float3(0, 1, 0),      // 0: -Z (front): Green
+        float3(1, 1, 0),      // 1: +Z (back): Yellow
+        float3(0, 0, 1),      // 2: -X (left): Blue
+        float3(1, 0.5, 0),    // 3: +X (right): Orange
+        float3(1, 0, 0),      // 4: +Y (top): Red
+        float3(0, 1, 1),      // 5: -Y (bottom): Cyan
     };
 
     uint faceIndex = (primID % 12) / 2;  // 12 triangles per cube instance
-    float3 N = faceNormals[faceIndex];
-
-    // Directional light from above-front (more vertical = brighter tops)
-    float3 lightDir = normalize(float3(-0.3, -0.9, -0.3));
-
-    // Lambert: reduced ambient for stronger face contrast
-    float ambient = 0.18;
-    float NdotL = max(0.0, dot(N, -lightDir));
-    float lighting = ambient + (1.0 - ambient) * NdotL;
-
-    // Procedural material variation based on grid cell (spacing = 2.0)
-    float3 cellIdx = floor(pin.WorldPos / 2.0);
-    float checker = fmod(cellIdx.x + cellIdx.z, 2.0);  // 0 or 1
-    float variation = 1.0 - checker * 0.12;  // 1.0 or 0.88 (stronger contrast)
-
-    // Saturated red-orange for warmth and visibility against cool floor
-    float3 baseColor = float3(0.92, 0.18, 0.08);
-    float3 litColor = baseColor * lighting * variation;
-
-    // Gamma correction: linear to sRGB
-    float3 srgbColor = pow(litColor, 1.0 / 2.2);
-    return float4(srgbColor, 1.0);
+    return float4(faceDebugColors[faceIndex], 1.0);
 }
 )";
 #endif

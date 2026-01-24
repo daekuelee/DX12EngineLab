@@ -122,18 +122,18 @@ namespace Renderer
         };
 
         const uint16_t indices[] = {
-            // -Z face (front)
-            0, 1, 2, 0, 2, 3,
-            // +Z face (back)
-            4, 6, 5, 4, 7, 6,
-            // -X face (left)
-            4, 5, 1, 4, 1, 0,
-            // +X face (right)
-            3, 2, 6, 3, 6, 7,
-            // +Y face (top)
-            1, 5, 6, 1, 6, 2,
-            // -Y face (bottom)
-            4, 0, 3, 4, 3, 7
+            // -Z face (front) - CW viewed from -Z
+            0, 2, 1,  0, 3, 2,
+            // +Z face (back) - CW viewed from +Z
+            4, 6, 5,  4, 7, 6,
+            // -X face (left) - CW viewed from -X
+            0, 1, 5,  0, 5, 4,
+            // +X face (right) - CW viewed from +X
+            3, 6, 2,  3, 7, 6,
+            // +Y face (top) - CW viewed from +Y
+            1, 2, 6,  1, 6, 5,
+            // -Y face (bottom) - CW viewed from -Y
+            0, 4, 7,  0, 7, 3
         };
 
         m_indexCount = _countof(indices);
