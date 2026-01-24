@@ -1,11 +1,9 @@
 #include "ShaderLibrary.h"
+#include "RenderConfig.h"
 #include <d3dcompiler.h>
 #include <cstring>
 
 using Microsoft::WRL::ComPtr;
-
-// Compile-time toggle: 0 = production StructuredBuffer, 1 = diagnostic ByteAddressBuffer (Microtest B)
-#define MICROTEST_MODE 0
 
 namespace Renderer
 {
@@ -109,6 +107,25 @@ float4 PSFloor() : SV_Target
 }
 )";
 
+    // Floor vertex shader - does NOT read transforms, just applies ViewProj directly
+    // This fixes z-fighting: floor no longer shares cube VS that reads Transforms[iid]
+    static const char* kFloorVertexShader = R"(
+cbuffer FrameCB : register(b0, space0)
+{
+    row_major float4x4 ViewProj;
+};
+
+struct VSIn { float3 Pos : POSITION; };
+struct VSOut { float4 Pos : SV_Position; };
+
+VSOut VSFloor(VSIn vin)
+{
+    VSOut o;
+    o.Pos = mul(float4(vin.Pos, 1.0), ViewProj);
+    return o;
+}
+)";
+
     // Marker shaders - pass-through VS (vertices already in NDC), solid color PS
     static const char* kMarkerVertexShader = R"(
 struct VSIn
@@ -173,6 +190,7 @@ float4 PSMarker() : SV_Target
         m_markerRootSignature.Reset();
         m_vsBlob.Reset();
         m_psBlob.Reset();
+        m_floorVsBlob.Reset();
         m_floorPsBlob.Reset();
         m_markerVsBlob.Reset();
         m_markerPsBlob.Reset();
@@ -254,6 +272,30 @@ float4 PSMarker() : SV_Target
             if (errorBlob)
             {
                 OutputDebugStringA("Floor PS compile error: ");
+                OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
+            }
+            return false;
+        }
+
+        // Compile floor vertex shader (no transforms, just ViewProj)
+        hr = D3DCompile(
+            kFloorVertexShader,
+            strlen(kFloorVertexShader),
+            "VSFloor",
+            nullptr,
+            nullptr,
+            "VSFloor",
+            "vs_5_1",
+            compileFlags,
+            0,
+            &m_floorVsBlob,
+            &errorBlob);
+
+        if (FAILED(hr))
+        {
+            if (errorBlob)
+            {
+                OutputDebugStringA("Floor VS compile error: ");
                 OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
             }
             return false;
@@ -429,9 +471,12 @@ float4 PSMarker() : SV_Target
         if (FAILED(hr))
             return false;
 
-        // Create floor PSO (same as main PSO but with floor pixel shader)
+        // Create floor PSO with floor-specific VS (no transforms read) and floor PS
         // Floor winding is CCW from above, but FrontCounterClockwise=FALSE means CCW=back-facing.
         // Disable culling for floor quad to ensure visibility regardless of winding.
+        // CRITICAL: Floor VS does NOT read Transforms[iid], fixing z-fighting bug where floor
+        // was shifted by Transforms[0] translation (-99, 0, -99)
+        psoDesc.VS = { m_floorVsBlob->GetBufferPointer(), m_floorVsBlob->GetBufferSize() };
         psoDesc.PS = { m_floorPsBlob->GetBufferPointer(), m_floorPsBlob->GetBufferSize() };
         psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
         hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_floorPso));

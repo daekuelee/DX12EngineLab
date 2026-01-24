@@ -1,8 +1,6 @@
 #include "FrameContextRing.h"
+#include "RenderConfig.h"
 #include <cstdio>
-
-// Must match ShaderLibrary.cpp
-#define MICROTEST_MODE 0
 
 namespace Renderer
 {

@@ -47,6 +47,7 @@ namespace Renderer
 
         Microsoft::WRL::ComPtr<ID3DBlob> m_vsBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> m_psBlob;
+        Microsoft::WRL::ComPtr<ID3DBlob> m_floorVsBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> m_floorPsBlob;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> m_floorPso;
 

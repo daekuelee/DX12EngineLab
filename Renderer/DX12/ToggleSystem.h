@@ -41,8 +41,14 @@ namespace Renderer
         static void RequestDiagnosticLog() { s_logDiagnostics = true; }
         static void ClearDiagnosticLog() { s_logDiagnostics = false; }
 
+        // Grid (cube) visibility toggle for debugging floor isolation
+        static bool IsGridEnabled() { return s_gridEnabled; }
+        static void SetGridEnabled(bool enabled) { s_gridEnabled = enabled; }
+        static void ToggleGrid() { s_gridEnabled = !s_gridEnabled; }
+
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
+        static inline bool s_gridEnabled = true;
 
         // Diagnostic flags (for S7 proof toggles)
         static inline bool s_sentinelInstance0 = false;

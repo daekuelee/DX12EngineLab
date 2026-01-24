@@ -528,32 +528,51 @@ namespace Renderer
             }
         }
 
-        // 14. Draw floor first (single draw call, uses instance 0 transform which is identity-like)
+        // 14. Draw floor first (single draw call, floor VS does NOT read transforms)
         m_commandList->SetPipelineState(m_shaderLibrary.GetFloorPSO());
         m_scene.RecordDrawFloor(m_commandList.Get());
 
-        // 15. Draw cubes based on mode
-        m_commandList->SetPipelineState(m_shaderLibrary.GetPSO());
-        uint32_t drawCalls = 0;
-        if (ToggleSystem::GetDrawMode() == DrawMode::Instanced)
+        // 15. Draw cubes based on mode (only if grid enabled)
+        uint32_t drawCalls = 1; // 1 floor (always drawn)
+        if (ToggleSystem::IsGridEnabled())
         {
-            m_scene.RecordDraw(m_commandList.Get(), InstanceCount);
-            drawCalls = 2; // 1 floor + 1 cubes
-        }
-        else
-        {
-            m_scene.RecordDrawNaive(m_commandList.Get(), InstanceCount);
-            drawCalls = 1 + InstanceCount; // 1 floor + 10000 cubes
-
-            // B-1: Once-per-second naive path verification
-            static DWORD s_lastNaiveLogTime = 0;
-            DWORD naiveNow = GetTickCount();
-            if (naiveNow - s_lastNaiveLogTime > 1000)
+            m_commandList->SetPipelineState(m_shaderLibrary.GetPSO());
+            if (ToggleSystem::GetDrawMode() == DrawMode::Instanced)
             {
-                s_lastNaiveLogTime = naiveNow;
-                char buf[128];
-                sprintf_s(buf, "B1-NAIVE: StartInstance first=0 last=%u (expected 0 and %u)\n",
-                          InstanceCount - 1, InstanceCount - 1);
+                m_scene.RecordDraw(m_commandList.Get(), InstanceCount);
+                drawCalls += 1; // +1 instanced cube draw
+            }
+            else
+            {
+                m_scene.RecordDrawNaive(m_commandList.Get(), InstanceCount);
+                drawCalls += InstanceCount; // +10000 naive cube draws
+
+                // B-1: Once-per-second naive path verification
+                static DWORD s_lastNaiveLogTime = 0;
+                DWORD naiveNow = GetTickCount();
+                if (naiveNow - s_lastNaiveLogTime > 1000)
+                {
+                    s_lastNaiveLogTime = naiveNow;
+                    char buf[128];
+                    sprintf_s(buf, "B1-NAIVE: StartInstance first=0 last=%u (expected 0 and %u)\n",
+                              InstanceCount - 1, InstanceCount - 1);
+                    OutputDebugStringA(buf);
+                }
+            }
+        }
+
+        // PASS proof log (throttled 1/sec): shows PSO pointers, SRV index, grid state, mode
+        {
+            static DWORD s_lastPassLogTime = 0;
+            DWORD now = GetTickCount();
+            if (now - s_lastPassLogTime > 1000)
+            {
+                s_lastPassLogTime = now;
+                char buf[256];
+                sprintf_s(buf, "PASS: floor_pso=%p cubes_pso=%p cubes_srvIdx=%u grid=%d mode=%s\n",
+                    m_shaderLibrary.GetFloorPSO(), m_shaderLibrary.GetPSO(),
+                    srvFrameIndex, ToggleSystem::IsGridEnabled() ? 1 : 0,
+                    ToggleSystem::GetDrawModeName());
                 OutputDebugStringA(buf);
             }
         }

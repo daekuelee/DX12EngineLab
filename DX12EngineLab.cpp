@@ -206,6 +206,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 Renderer::ToggleSystem::SetStompLifetime(!current);
                 OutputDebugStringA(current ? "stomp_Lifetime: OFF\n" : "stomp_Lifetime: ON\n");
             }
+            // 'G' key toggles grid (cubes) visibility for floor debugging
+            else if (wParam == 'G')
+            {
+                Renderer::ToggleSystem::ToggleGrid();
+                OutputDebugStringA(Renderer::ToggleSystem::IsGridEnabled() ? "Grid: ON\n" : "Grid: OFF\n");
+            }
         }
         break;
     case WM_DESTROY:
