@@ -539,6 +539,8 @@ namespace Renderer
             m_commandList->SetPipelineState(m_shaderLibrary.GetPSO());
             if (ToggleSystem::GetDrawMode() == DrawMode::Instanced)
             {
+                uint32_t zero = 0;
+                m_commandList->SetGraphicsRoot32BitConstants(2, 1, &zero, 0);  // RP_InstanceOffset = 0
                 m_scene.RecordDraw(m_commandList.Get(), InstanceCount);
                 drawCalls += 1; // +1 instanced cube draw
             }

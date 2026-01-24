@@ -84,10 +84,12 @@ namespace Renderer
         cmdList->IASetVertexBuffers(0, 1, &m_vbv);
         cmdList->IASetIndexBuffer(&m_ibv);
 
-        // Naive: 10k individual draw calls, each with StartInstanceLocation to read correct transform
+        // Naive: 10k individual draw calls, each with InstanceOffset root constant
+        // SV_InstanceID does NOT include StartInstanceLocation, so we pass offset via root constant
         for (uint32_t i = 0; i < instanceCount; ++i)
         {
-            cmdList->DrawIndexedInstanced(m_indexCount, 1, 0, 0, i);
+            cmdList->SetGraphicsRoot32BitConstants(2, 1, &i, 0);  // RP_InstanceOffset
+            cmdList->DrawIndexedInstanced(m_indexCount, 1, 0, 0, 0);
         }
     }
 

@@ -73,6 +73,11 @@ cbuffer FrameCB : register(b0, space0)
     row_major float4x4 ViewProj;
 };
 
+cbuffer InstanceCB : register(b1, space0)
+{
+    uint InstanceOffset;
+};
+
 struct TransformData
 {
     row_major float4x4 M;
@@ -85,7 +90,7 @@ struct VSOut { float4 Pos : SV_Position; };
 VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
 {
     VSOut o;
-    float4x4 world = Transforms[iid].M;
+    float4x4 world = Transforms[iid + InstanceOffset].M;
     float3 worldPos = mul(float4(vin.Pos, 1.0), world).xyz;
     o.Pos = mul(float4(worldPos, 1.0), ViewProj);
     return o;
@@ -379,6 +384,13 @@ float4 PSMarker() : SV_Target
         rootParams[RP_TransformsTable].DescriptorTable.NumDescriptorRanges = 1;
         rootParams[RP_TransformsTable].DescriptorTable.pDescriptorRanges = &srvRange;
         rootParams[RP_TransformsTable].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+        // RP2: Instance offset root constant (b1 space0) - 1 DWORD for naive draw mode
+        rootParams[RP_InstanceOffset].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        rootParams[RP_InstanceOffset].Constants.ShaderRegister = 1;  // b1
+        rootParams[RP_InstanceOffset].Constants.RegisterSpace = 0;
+        rootParams[RP_InstanceOffset].Constants.Num32BitValues = 1;
+        rootParams[RP_InstanceOffset].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
         D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSigDesc = {};
         rootSigDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
