@@ -85,7 +85,11 @@ struct TransformData
 StructuredBuffer<TransformData> Transforms : register(t0, space0);
 
 struct VSIn { float3 Pos : POSITION; };
-struct VSOut { float4 Pos : SV_Position; };
+struct VSOut
+{
+    float4 Pos : SV_Position;
+    float3 WorldPos : TEXCOORD0;
+};
 
 VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
 {
@@ -93,14 +97,36 @@ VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
     float4x4 world = Transforms[iid + InstanceOffset].M;
     float3 worldPos = mul(float4(vin.Pos, 1.0), world).xyz;
     o.Pos = mul(float4(worldPos, 1.0), ViewProj);
+    o.WorldPos = worldPos;
     return o;
 }
 )";
 
     static const char* kPixelShader = R"(
-float4 PSMain() : SV_Target
+struct PSIn
 {
-    return float4(0.90, 0.10, 0.10, 1.0);  // Red cubes
+    float4 Pos : SV_Position;
+    float3 WorldPos : TEXCOORD0;
+};
+
+float4 PSMain(PSIn pin) : SV_Target
+{
+    // Compute face normal from screen-space derivatives
+    float3 dpdx = ddx(pin.WorldPos);
+    float3 dpdy = ddy(pin.WorldPos);
+    float3 N = normalize(cross(dpdx, dpdy));
+
+    // Directional light from upper-left-front
+    float3 lightDir = normalize(float3(-0.5, -0.7, -0.5));
+
+    // Lambert: ambient + diffuse
+    float ambient = 0.25;
+    float NdotL = max(0.0, dot(N, -lightDir));
+    float lighting = ambient + (1.0 - ambient) * NdotL;
+
+    // Base red color with lighting
+    float3 baseColor = float3(0.90, 0.10, 0.10);
+    return float4(baseColor * lighting, 1.0);
 }
 )";
 #endif

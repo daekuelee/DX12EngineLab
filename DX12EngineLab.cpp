@@ -192,8 +192,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 Renderer::ToggleSystem::RequestDiagnosticLog(); // Trigger diagnostic log on next frame
                 OutputDebugStringA("Draw mode toggled\n");
             }
-            // '1' key toggles sentinel_Instance0 proof
-            else if (wParam == '1')
+            // F1 key toggles sentinel_Instance0 proof (moved from '1' to avoid camera preset collision)
+            else if (wParam == VK_F1)
             {
                 bool current = Renderer::ToggleSystem::IsSentinelInstance0Enabled();
                 Renderer::ToggleSystem::SetSentinelInstance0(!current);
