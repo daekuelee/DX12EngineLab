@@ -399,10 +399,11 @@ namespace Renderer
                         tz = 150.0f;  // Far back
                     }
 
-                    // Row-major 4x4 identity with translation in last row
-                    transforms[idx * 16 + 0] = 1.0f;  transforms[idx * 16 + 1] = 0.0f;  transforms[idx * 16 + 2] = 0.0f;  transforms[idx * 16 + 3] = 0.0f;
-                    transforms[idx * 16 + 4] = 0.0f;  transforms[idx * 16 + 5] = 1.0f;  transforms[idx * 16 + 6] = 0.0f;  transforms[idx * 16 + 7] = 0.0f;
-                    transforms[idx * 16 + 8] = 0.0f;  transforms[idx * 16 + 9] = 0.0f;  transforms[idx * 16 + 10] = 1.0f; transforms[idx * 16 + 11] = 0.0f;
+                    // Row-major 4x4 scale+translate matrix (scale creates gaps between cubes)
+                    const float cubeScale = 0.7f;  // Scale down for visible gaps between cubes
+                    transforms[idx * 16 + 0] = cubeScale;  transforms[idx * 16 + 1] = 0.0f;  transforms[idx * 16 + 2] = 0.0f;  transforms[idx * 16 + 3] = 0.0f;
+                    transforms[idx * 16 + 4] = 0.0f;  transforms[idx * 16 + 5] = cubeScale;  transforms[idx * 16 + 6] = 0.0f;  transforms[idx * 16 + 7] = 0.0f;
+                    transforms[idx * 16 + 8] = 0.0f;  transforms[idx * 16 + 9] = 0.0f;  transforms[idx * 16 + 10] = cubeScale; transforms[idx * 16 + 11] = 0.0f;
                     transforms[idx * 16 + 12] = tx;   transforms[idx * 16 + 13] = ty;   transforms[idx * 16 + 14] = tz;   transforms[idx * 16 + 15] = 1.0f;
 
                     ++idx;
