@@ -368,19 +368,18 @@ namespace Renderer
         ThrowIfFailed(m_commandList->Reset(frameCtx.allocator.Get(), m_shaderLibrary.GetPSO()),
             "Failed to reset command list\n");
 
-        // 6. Barrier: transforms default buffer COPY_DEST (already in COPY_DEST on first frame)
-        // Note: Buffer starts in COPY_DEST state, first barrier is SRV->COPY_DEST after first use
-        // For simplicity, we track state with a static - proper tracking would use ResourceStateTracker
-        static bool s_firstFrame = true;
-        if (!s_firstFrame)
+        // 6. Barrier: transforms default buffer -> COPY_DEST (per-frame state tracking, fixes #527)
+        // Each frame context tracks its own transformsState to handle triple-buffering correctly
+        if (frameCtx.transformsState != D3D12_RESOURCE_STATE_COPY_DEST)
         {
             D3D12_RESOURCE_BARRIER barrier = {};
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barrier.Transition.pResource = frameCtx.transformsDefault.Get();
             barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            barrier.Transition.StateBefore = frameCtx.transformsState;
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
             m_commandList->ResourceBarrier(1, &barrier);
+            frameCtx.transformsState = D3D12_RESOURCE_STATE_COPY_DEST;
         }
 
         // 7. Copy transforms from upload to default
@@ -395,9 +394,8 @@ namespace Renderer
             barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             m_commandList->ResourceBarrier(1, &barrier);
+            frameCtx.transformsState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         }
-
-        s_firstFrame = false;
 
         // B-3: Record readback copy for content verification (runs once)
         if (!s_readbackPending && !s_readbackDumped)
@@ -412,20 +410,22 @@ namespace Renderer
                     &bufDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_transformsReadback));
             }
 
-            // Barrier: SRV -> COPY_SOURCE
+            // Barrier: current state -> COPY_SOURCE (using tracked state)
             D3D12_RESOURCE_BARRIER barrier = {};
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barrier.Transition.pResource = frameCtx.transformsDefault.Get();
-            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            barrier.Transition.StateBefore = frameCtx.transformsState;
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
             m_commandList->ResourceBarrier(1, &barrier);
+            frameCtx.transformsState = D3D12_RESOURCE_STATE_COPY_SOURCE;
 
             m_commandList->CopyResource(s_transformsReadback.Get(), frameCtx.transformsDefault.Get());
 
-            // Barrier: COPY_SOURCE -> SRV
+            // Barrier: COPY_SOURCE -> SRV (restore for shader reads)
             barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             m_commandList->ResourceBarrier(1, &barrier);
+            frameCtx.transformsState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
             s_readbackPending = true;
         }

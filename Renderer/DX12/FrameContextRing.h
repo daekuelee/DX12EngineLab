@@ -26,6 +26,10 @@ namespace Renderer
         // Transforms buffer - default heap (GPU reads as SRV)
         Microsoft::WRL::ComPtr<ID3D12Resource> transformsDefault;
 
+        // Per-frame resource state tracking (fixes #527 barrier mismatch)
+        // Initialized to COPY_DEST since that's the creation state
+        D3D12_RESOURCE_STATES transformsState = D3D12_RESOURCE_STATE_COPY_DEST;
+
         // SRV slot index in the shader-visible heap (per-frame to avoid stomp)
         uint32_t srvSlot = 0;
     };
