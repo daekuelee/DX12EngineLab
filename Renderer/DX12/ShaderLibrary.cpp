@@ -109,12 +109,21 @@ struct PSIn
     float3 WorldPos : TEXCOORD0;
 };
 
-float4 PSMain(PSIn pin) : SV_Target
+float4 PSMain(PSIn pin, uint primID : SV_PrimitiveID) : SV_Target
 {
-    // Compute face normal from screen-space derivatives
-    float3 dpdx = ddx(pin.WorldPos);
-    float3 dpdy = ddy(pin.WorldPos);
-    float3 N = normalize(cross(dpdy, dpdx));  // Reversed for correct outward normals
+    // Hardcoded per-face normals (6 faces, 2 triangles each = 12 triangles per cube)
+    // Order matches index buffer: -Z, +Z, -X, +X, +Y, -Y
+    static const float3 faceNormals[6] = {
+        float3(0, 0, -1),   // -Z (front): triangles 0-1
+        float3(0, 0, +1),   // +Z (back): triangles 2-3
+        float3(-1, 0, 0),   // -X (left): triangles 4-5
+        float3(+1, 0, 0),   // +X (right): triangles 6-7
+        float3(0, +1, 0),   // +Y (top): triangles 8-9
+        float3(0, -1, 0),   // -Y (bottom): triangles 10-11
+    };
+
+    uint faceIndex = (primID % 12) / 2;  // 12 triangles per cube instance
+    float3 N = faceNormals[faceIndex];
 
     // Directional light from above-front (more vertical = brighter tops)
     float3 lightDir = normalize(float3(-0.3, -0.9, -0.3));
