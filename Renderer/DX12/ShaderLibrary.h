@@ -34,6 +34,8 @@ namespace Renderer
         ID3D12RootSignature* GetRootSignature() const { return m_rootSignature.Get(); }
         ID3D12PipelineState* GetPSO() const { return m_pso.Get(); }
         ID3D12PipelineState* GetFloorPSO() const { return m_floorPso.Get(); }
+        ID3D12PipelineState* GetMarkerPSO() const { return m_markerPso.Get(); }
+        ID3D12RootSignature* GetMarkerRootSignature() const { return m_markerRootSignature.Get(); }
 
     private:
         bool CreateRootSignature(ID3D12Device* device);
@@ -47,5 +49,11 @@ namespace Renderer
         Microsoft::WRL::ComPtr<ID3DBlob> m_psBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> m_floorPsBlob;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> m_floorPso;
+
+        // Marker shaders (pass-through VS, solid color PS)
+        Microsoft::WRL::ComPtr<ID3DBlob> m_markerVsBlob;
+        Microsoft::WRL::ComPtr<ID3DBlob> m_markerPsBlob;
+        Microsoft::WRL::ComPtr<ID3D12PipelineState> m_markerPso;
+        Microsoft::WRL::ComPtr<ID3D12RootSignature> m_markerRootSignature;
     };
 }

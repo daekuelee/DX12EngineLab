@@ -430,6 +430,12 @@ namespace Renderer
             drawCalls = 1 + InstanceCount; // 1 floor + 10000 cubes
         }
 
+        // 15b. Draw corner markers (visual diagnostic - pass-through VS, no transforms)
+        m_commandList->SetGraphicsRootSignature(m_shaderLibrary.GetMarkerRootSignature());
+        m_commandList->SetPipelineState(m_shaderLibrary.GetMarkerPSO());
+        m_scene.RecordDrawMarkers(m_commandList.Get());
+        drawCalls += 1; // +1 for markers
+
         // 16. Transition backbuffer: RENDER_TARGET -> PRESENT
         {
             D3D12_RESOURCE_BARRIER barrier = {};
@@ -454,6 +460,29 @@ namespace Renderer
             sprintf_s(evidenceBuf, "mode=%s draws=%u cpu_record_ms=%.3f frameId=%u\n",
                 ToggleSystem::GetDrawModeName(), drawCalls, cpuRecordMs, frameResourceIndex);
             OutputDebugStringA(evidenceBuf);
+        }
+
+        // Diagnostic: log viewport/scissor/client mismatch
+        {
+            static uint64_t s_lastLogFrame = 0;
+            bool shouldLog = (m_frameId == 0) || ToggleSystem::ShouldLogDiagnostics() || ((m_frameId - s_lastLogFrame) >= 60);
+            if (shouldLog)
+            {
+                RECT clientRect;
+                GetClientRect(m_hwnd, &clientRect);
+                char diagBuf[512];
+                sprintf_s(diagBuf,
+                    "DIAG[%llu]: client=%dx%d viewport=(%.0f,%.0f,%.0f,%.0f) scissor=(%ld,%ld,%ld,%ld)=%ldx%ld mode=%s instances=%u draws=%u\n",
+                    m_frameId,
+                    clientRect.right - clientRect.left, clientRect.bottom - clientRect.top,
+                    m_viewport.TopLeftX, m_viewport.TopLeftY, m_viewport.Width, m_viewport.Height,
+                    m_scissorRect.left, m_scissorRect.top, m_scissorRect.right, m_scissorRect.bottom,
+                    m_scissorRect.right - m_scissorRect.left, m_scissorRect.bottom - m_scissorRect.top,
+                    ToggleSystem::GetDrawModeName(), InstanceCount, drawCalls);
+                OutputDebugStringA(diagBuf);
+                s_lastLogFrame = m_frameId;
+                ToggleSystem::ClearDiagnosticLog();
+            }
         }
 
         ID3D12CommandList* commandLists[] = { m_commandList.Get() };

@@ -30,6 +30,9 @@ namespace Renderer
         // Record draw commands for floor (single draw call)
         void RecordDrawFloor(ID3D12GraphicsCommandList* cmdList);
 
+        // Record draw commands for corner markers (visual diagnostic)
+        void RecordDrawMarkers(ID3D12GraphicsCommandList* cmdList);
+
         // Accessors
         uint32_t GetIndexCount() const { return m_indexCount; }
         D3D12_VERTEX_BUFFER_VIEW GetVBView() const { return m_vbv; }
@@ -38,6 +41,7 @@ namespace Renderer
     private:
         bool CreateCubeGeometry(ID3D12Device* device, ID3D12CommandQueue* queue);
         bool CreateFloorGeometry(ID3D12Device* device, ID3D12CommandQueue* queue);
+        bool CreateMarkerGeometry(ID3D12Device* device, ID3D12CommandQueue* queue);
         bool UploadBuffer(ID3D12Device* device, ID3D12CommandQueue* queue,
                          ID3D12Resource* dstDefault, const void* srcData, uint64_t numBytes,
                          D3D12_RESOURCE_STATES afterState);
@@ -55,6 +59,11 @@ namespace Renderer
         D3D12_VERTEX_BUFFER_VIEW m_floorVbv = {};
         D3D12_INDEX_BUFFER_VIEW m_floorIbv = {};
         uint32_t m_floorIndexCount = 0;
+
+        // Marker geometry in DEFAULT heap (corner triangles for visual diagnostic)
+        Microsoft::WRL::ComPtr<ID3D12Resource> m_markerVertexBuffer;
+        D3D12_VERTEX_BUFFER_VIEW m_markerVbv = {};
+        uint32_t m_markerVertexCount = 0;
 
         // Temporary resources for upload (fence for synchronization)
         Microsoft::WRL::ComPtr<ID3D12Fence> m_uploadFence;

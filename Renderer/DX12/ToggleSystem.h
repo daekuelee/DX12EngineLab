@@ -36,11 +36,19 @@ namespace Renderer
         static bool IsStompLifetimeEnabled() { return s_stompLifetime; }
         static void SetStompLifetime(bool enabled) { s_stompLifetime = enabled; }
 
+        // Diagnostic logging trigger
+        static bool ShouldLogDiagnostics() { return s_logDiagnostics; }
+        static void RequestDiagnosticLog() { s_logDiagnostics = true; }
+        static void ClearDiagnosticLog() { s_logDiagnostics = false; }
+
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
 
         // Diagnostic flags (for S7 proof toggles)
         static inline bool s_sentinelInstance0 = false;
         static inline bool s_stompLifetime = false;
+
+        // Diagnostic logging flag
+        static inline bool s_logDiagnostics = false;
     };
 }

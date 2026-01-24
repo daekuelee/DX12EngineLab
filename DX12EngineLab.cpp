@@ -189,6 +189,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (wParam == 'T')
             {
                 Renderer::ToggleSystem::ToggleDrawMode();
+                Renderer::ToggleSystem::RequestDiagnosticLog(); // Trigger diagnostic log on next frame
                 OutputDebugStringA("Draw mode toggled\n");
             }
             // '1' key toggles sentinel_Instance0 proof

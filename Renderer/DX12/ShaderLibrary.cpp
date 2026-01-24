@@ -53,6 +53,34 @@ float4 PSFloor() : SV_Target
 }
 )";
 
+    // Marker shaders - pass-through VS (vertices already in NDC), solid color PS
+    static const char* kMarkerVertexShader = R"(
+struct VSIn
+{
+    float3 Pos : POSITION;
+};
+
+struct VSOut
+{
+    float4 Pos : SV_Position;
+};
+
+VSOut VSMarker(VSIn vin)
+{
+    VSOut o;
+    // Pass-through: vertices are already in clip space (NDC)
+    o.Pos = float4(vin.Pos, 1.0);
+    return o;
+}
+)";
+
+    static const char* kMarkerPixelShader = R"(
+float4 PSMarker() : SV_Target
+{
+    return float4(1.0, 0.0, 1.0, 1.0); // Magenta for visibility
+}
+)";
+
     bool ShaderLibrary::Initialize(ID3D12Device* device, DXGI_FORMAT rtvFormat)
     {
         if (!device)
@@ -84,10 +112,14 @@ float4 PSFloor() : SV_Target
     {
         m_pso.Reset();
         m_floorPso.Reset();
+        m_markerPso.Reset();
         m_rootSignature.Reset();
+        m_markerRootSignature.Reset();
         m_vsBlob.Reset();
         m_psBlob.Reset();
         m_floorPsBlob.Reset();
+        m_markerVsBlob.Reset();
+        m_markerPsBlob.Reset();
     }
 
     bool ShaderLibrary::CompileShaders()
@@ -166,6 +198,54 @@ float4 PSFloor() : SV_Target
             if (errorBlob)
             {
                 OutputDebugStringA("Floor PS compile error: ");
+                OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
+            }
+            return false;
+        }
+
+        // Compile marker vertex shader
+        hr = D3DCompile(
+            kMarkerVertexShader,
+            strlen(kMarkerVertexShader),
+            "VSMarker",
+            nullptr,
+            nullptr,
+            "VSMarker",
+            "vs_5_1",
+            compileFlags,
+            0,
+            &m_markerVsBlob,
+            &errorBlob);
+
+        if (FAILED(hr))
+        {
+            if (errorBlob)
+            {
+                OutputDebugStringA("Marker VS compile error: ");
+                OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
+            }
+            return false;
+        }
+
+        // Compile marker pixel shader
+        hr = D3DCompile(
+            kMarkerPixelShader,
+            strlen(kMarkerPixelShader),
+            "PSMarker",
+            nullptr,
+            nullptr,
+            "PSMarker",
+            "ps_5_1",
+            compileFlags,
+            0,
+            &m_markerPsBlob,
+            &errorBlob);
+
+        if (FAILED(hr))
+        {
+            if (errorBlob)
+            {
+                OutputDebugStringA("Marker PS compile error: ");
                 OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
             }
             return false;
@@ -296,6 +376,73 @@ float4 PSFloor() : SV_Target
         // Create floor PSO (same as main PSO but with floor pixel shader)
         psoDesc.PS = { m_floorPsBlob->GetBufferPointer(), m_floorPsBlob->GetBufferSize() };
         hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_floorPso));
-        return SUCCEEDED(hr);
+        if (FAILED(hr))
+            return false;
+
+        // Create marker root signature (empty - no bindings needed)
+        {
+            D3D12_VERSIONED_ROOT_SIGNATURE_DESC markerRootSigDesc = {};
+            markerRootSigDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
+            markerRootSigDesc.Desc_1_1.NumParameters = 0;
+            markerRootSigDesc.Desc_1_1.pParameters = nullptr;
+            markerRootSigDesc.Desc_1_1.NumStaticSamplers = 0;
+            markerRootSigDesc.Desc_1_1.pStaticSamplers = nullptr;
+            markerRootSigDesc.Desc_1_1.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+            ComPtr<ID3DBlob> signatureBlob;
+            ComPtr<ID3DBlob> errorBlob;
+
+            hr = D3D12SerializeVersionedRootSignature(&markerRootSigDesc, &signatureBlob, &errorBlob);
+            if (FAILED(hr))
+            {
+                if (errorBlob)
+                {
+                    OutputDebugStringA("Marker root signature serialize error: ");
+                    OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
+                }
+                return false;
+            }
+
+            hr = device->CreateRootSignature(
+                0,
+                signatureBlob->GetBufferPointer(),
+                signatureBlob->GetBufferSize(),
+                IID_PPV_ARGS(&m_markerRootSignature));
+
+            if (FAILED(hr))
+                return false;
+        }
+
+        // Create marker PSO (pass-through VS, solid color PS, no depth test)
+        {
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC markerPsoDesc = {};
+            markerPsoDesc.pRootSignature = m_markerRootSignature.Get();
+            markerPsoDesc.VS = { m_markerVsBlob->GetBufferPointer(), m_markerVsBlob->GetBufferSize() };
+            markerPsoDesc.PS = { m_markerPsBlob->GetBufferPointer(), m_markerPsBlob->GetBufferSize() };
+            markerPsoDesc.InputLayout = { inputLayout, _countof(inputLayout) };
+            markerPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+            markerPsoDesc.RasterizerState = rasterizer;
+            markerPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE; // No culling for markers
+            markerPsoDesc.BlendState = blend;
+
+            // Disable depth test for markers (always on top)
+            D3D12_DEPTH_STENCIL_DESC markerDepth = {};
+            markerDepth.DepthEnable = FALSE;
+            markerDepth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+            markerDepth.StencilEnable = FALSE;
+            markerPsoDesc.DepthStencilState = markerDepth;
+
+            markerPsoDesc.SampleMask = UINT_MAX;
+            markerPsoDesc.NumRenderTargets = 1;
+            markerPsoDesc.RTVFormats[0] = rtvFormat;
+            markerPsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+            markerPsoDesc.SampleDesc.Count = 1;
+
+            hr = device->CreateGraphicsPipelineState(&markerPsoDesc, IID_PPV_ARGS(&m_markerPso));
+            if (FAILED(hr))
+                return false;
+        }
+
+        return true;
     }
 }

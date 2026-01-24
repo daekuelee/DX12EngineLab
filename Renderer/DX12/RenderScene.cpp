@@ -32,6 +32,12 @@ namespace Renderer
             return false;
         }
 
+        if (!CreateMarkerGeometry(device, queue))
+        {
+            OutputDebugStringA("RenderScene: Failed to create marker geometry\n");
+            return false;
+        }
+
         OutputDebugStringA("RenderScene: Geometry created successfully\n");
         return true;
     }
@@ -56,6 +62,10 @@ namespace Renderer
         m_floorVbv = {};
         m_floorIbv = {};
         m_floorIndexCount = 0;
+
+        m_markerVertexBuffer.Reset();
+        m_markerVbv = {};
+        m_markerVertexCount = 0;
     }
 
     void RenderScene::RecordDraw(ID3D12GraphicsCommandList* cmdList, uint32_t instanceCount)
@@ -88,6 +98,13 @@ namespace Renderer
 
         // Floor uses instance 0's transform (identity at origin)
         cmdList->DrawIndexedInstanced(m_floorIndexCount, 1, 0, 0, 0);
+    }
+
+    void RenderScene::RecordDrawMarkers(ID3D12GraphicsCommandList* cmdList)
+    {
+        cmdList->IASetVertexBuffers(0, 1, &m_markerVbv);
+        // No index buffer - using DrawInstanced with vertex buffer only
+        cmdList->DrawInstanced(m_markerVertexCount, 1, 0, 0);
     }
 
     bool RenderScene::CreateCubeGeometry(ID3D12Device* device, ID3D12CommandQueue* queue)
@@ -281,6 +298,76 @@ namespace Renderer
             m_floorIbv.BufferLocation = m_floorIndexBuffer->GetGPUVirtualAddress();
             m_floorIbv.SizeInBytes = static_cast<UINT>(ibBytes);
             m_floorIbv.Format = DXGI_FORMAT_R16_UINT;
+        }
+
+        return true;
+    }
+
+    bool RenderScene::CreateMarkerGeometry(ID3D12Device* device, ID3D12CommandQueue* queue)
+    {
+        // 4 small triangles at NDC corners to visually prove drawable region
+        // Each triangle is 3 vertices, total 12 vertices
+        // Vertices are already in clip space (NDC), will use pass-through VS
+        struct Vertex { float x, y, z; };
+
+        const float s = 0.08f; // Size in NDC (8% of screen)
+        const Vertex vertices[] = {
+            // Bottom-left (NDC -1,-1) - appears at bottom-left of screen
+            {-1.0f,       -1.0f,       0.5f},
+            {-1.0f + s,   -1.0f,       0.5f},
+            {-1.0f,       -1.0f + s,   0.5f},
+
+            // Bottom-right (NDC 1,-1) - appears at bottom-right of screen
+            { 1.0f - s,   -1.0f,       0.5f},
+            { 1.0f,       -1.0f,       0.5f},
+            { 1.0f,       -1.0f + s,   0.5f},
+
+            // Top-left (NDC -1,1) - appears at top-left of screen
+            {-1.0f,        1.0f - s,   0.5f},
+            {-1.0f + s,    1.0f,       0.5f},
+            {-1.0f,        1.0f,       0.5f},
+
+            // Top-right (NDC 1,1) - appears at top-right of screen
+            { 1.0f - s,    1.0f,       0.5f},
+            { 1.0f,        1.0f,       0.5f},
+            { 1.0f,        1.0f - s,   0.5f},
+        };
+
+        m_markerVertexCount = _countof(vertices);
+        const uint64_t vbBytes = sizeof(vertices);
+
+        // Create marker vertex buffer in DEFAULT heap
+        {
+            D3D12_HEAP_PROPERTIES heapProps = {};
+            heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+            D3D12_RESOURCE_DESC desc = {};
+            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            desc.Width = vbBytes;
+            desc.Height = 1;
+            desc.DepthOrArraySize = 1;
+            desc.MipLevels = 1;
+            desc.SampleDesc.Count = 1;
+            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+            HRESULT hr = device->CreateCommittedResource(
+                &heapProps,
+                D3D12_HEAP_FLAG_NONE,
+                &desc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                nullptr,
+                IID_PPV_ARGS(&m_markerVertexBuffer));
+
+            if (FAILED(hr))
+                return false;
+
+            if (!UploadBuffer(device, queue, m_markerVertexBuffer.Get(), vertices, vbBytes,
+                             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER))
+                return false;
+
+            m_markerVbv.BufferLocation = m_markerVertexBuffer->GetGPUVirtualAddress();
+            m_markerVbv.SizeInBytes = static_cast<UINT>(vbBytes);
+            m_markerVbv.StrideInBytes = sizeof(Vertex);
         }
 
         return true;
