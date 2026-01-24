@@ -124,9 +124,18 @@ float4 PSMain(PSIn pin) : SV_Target
     float NdotL = max(0.0, dot(N, -lightDir));
     float lighting = ambient + (1.0 - ambient) * NdotL;
 
-    // Base red color with lighting
-    float3 baseColor = float3(0.90, 0.10, 0.10);
-    return float4(baseColor * lighting, 1.0);
+    // Procedural material variation based on grid cell (spacing = 2.0)
+    float3 cellIdx = floor(pin.WorldPos / 2.0);
+    float checker = fmod(cellIdx.x + cellIdx.z, 2.0);  // 0 or 1
+    float variation = 1.0 - checker * 0.08;  // 1.0 or 0.92
+
+    // Base red color with lighting and variation (purer red to avoid gamma-induced yellow tint)
+    float3 baseColor = float3(0.85, 0.08, 0.08);
+    float3 litColor = baseColor * lighting * variation;
+
+    // Gamma correction: linear to sRGB (prevents yellow tint on bright faces)
+    float3 srgbColor = pow(litColor, 1.0 / 2.2);
+    return float4(srgbColor, 1.0);
 }
 )";
 #endif
