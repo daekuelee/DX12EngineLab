@@ -44,6 +44,32 @@ namespace Renderer
             CreateSRV(device, i);
         }
 
+        // B-1: One-time SRV heap diagnostic log
+        OutputDebugStringA("=== SRV HEAP INIT ===\n");
+        {
+            char buf[256];
+            D3D12_DESCRIPTOR_HEAP_DESC heapDesc = m_srvHeap->GetDesc();
+            sprintf_s(buf, "srvIncrementSize=%u heapNumDescriptors=%u\n",
+                      m_srvIncrementSize, heapDesc.NumDescriptors);
+            OutputDebugStringA(buf);
+
+            D3D12_GPU_DESCRIPTOR_HANDLE heapGpuStart = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+            sprintf_s(buf, "heapGpuStart=0x%llX\n", heapGpuStart.ptr);
+            OutputDebugStringA(buf);
+
+            for (uint32_t i = 0; i < FrameCount; ++i)
+            {
+                D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
+                cpu.ptr += static_cast<SIZE_T>(m_frames[i].srvSlot) * m_srvIncrementSize;
+                D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+                gpu.ptr += static_cast<SIZE_T>(m_frames[i].srvSlot) * m_srvIncrementSize;
+                sprintf_s(buf, "frame[%u] srvSlot=%u CPU=0x%llX GPU=0x%llX\n",
+                          i, m_frames[i].srvSlot, cpu.ptr, gpu.ptr);
+                OutputDebugStringA(buf);
+            }
+        }
+        OutputDebugStringA("=====================\n");
+
         return true;
     }
 
@@ -133,14 +159,15 @@ namespace Renderer
     {
         FrameContext& ctx = m_frames[frameIndex];
 
+        // B-2: Raw buffer SRV for ByteAddressBuffer in shader
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
         srvDesc.Buffer.FirstElement = 0;
-        srvDesc.Buffer.NumElements = InstanceCount;
-        srvDesc.Buffer.StructureByteStride = sizeof(float) * 16; // float4x4 = 64 bytes
-        srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+        srvDesc.Buffer.NumElements = InstanceCount * 16;  // 16 floats per matrix
+        srvDesc.Buffer.StructureByteStride = 0;           // Must be 0 for raw
+        srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
 
         // Get CPU handle at this frame's SRV slot
         D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_srvHeap->GetCPUDescriptorHandleForHeapStart();

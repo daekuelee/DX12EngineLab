@@ -7,6 +7,11 @@ using Microsoft::WRL::ComPtr;
 
 namespace Renderer
 {
+    // B-3: Static state for transforms readback verification
+    static ComPtr<ID3D12Resource> s_transformsReadback;
+    static bool s_readbackPending = false;
+    static bool s_readbackDumped = false;
+
     static void ThrowIfFailed(HRESULT hr, const char* msg = nullptr)
     {
         if (FAILED(hr))
@@ -271,6 +276,34 @@ namespace Renderer
         uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
         FrameContext& frameCtx = m_frameRing.BeginFrame(m_frameId);
 
+        // B-3: Dump readback data (runs once, after fence wait ensures GPU completed)
+        if (s_readbackPending && !s_readbackDumped)
+        {
+            s_readbackDumped = true;
+            s_readbackPending = false;
+
+            float* data = nullptr;
+            const uint32_t kLastIdx = InstanceCount - 1;
+            D3D12_RANGE readRange = { 0, static_cast<SIZE_T>(InstanceCount) * 64 };
+            s_transformsReadback->Map(0, &readRange, reinterpret_cast<void**>(&data));
+
+            char buf[256];
+            OutputDebugStringA("=== B3 TRANSFORMS READBACK ===\n");
+            sprintf_s(buf, "T[0] (x,z): (%.2f, %.2f) expected (-99, -99)\n",
+                      data[12], data[14]);
+            OutputDebugStringA(buf);
+            sprintf_s(buf, "T[1] (x,z): (%.2f, %.2f) expected (-97, -99)\n",
+                      data[16+12], data[16+14]);
+            OutputDebugStringA(buf);
+            sprintf_s(buf, "T[%u] (x,z): (%.2f, %.2f) expected (99, 99)\n",
+                      kLastIdx, data[kLastIdx*16+12], data[kLastIdx*16+14]);
+            OutputDebugStringA(buf);
+            OutputDebugStringA("===============================\n");
+
+            D3D12_RANGE writeRange = { 0, 0 };
+            s_transformsReadback->Unmap(0, &writeRange);
+        }
+
         // 2. Get backbuffer index (separate from frame resource index!)
         uint32_t backBufferIndex = GetBackBufferIndex();
 
@@ -366,6 +399,37 @@ namespace Renderer
 
         s_firstFrame = false;
 
+        // B-3: Record readback copy for content verification (runs once)
+        if (!s_readbackPending && !s_readbackDumped)
+        {
+            // Create readback buffer on first use
+            if (!s_transformsReadback)
+            {
+                D3D12_HEAP_PROPERTIES readbackHeap = {};
+                readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+                D3D12_RESOURCE_DESC bufDesc = frameCtx.transformsDefault->GetDesc();
+                m_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE,
+                    &bufDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_transformsReadback));
+            }
+
+            // Barrier: SRV -> COPY_SOURCE
+            D3D12_RESOURCE_BARRIER barrier = {};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource = frameCtx.transformsDefault.Get();
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            m_commandList->ResourceBarrier(1, &barrier);
+
+            m_commandList->CopyResource(s_transformsReadback.Get(), frameCtx.transformsDefault.Get());
+
+            // Barrier: COPY_SOURCE -> SRV
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            m_commandList->ResourceBarrier(1, &barrier);
+
+            s_readbackPending = true;
+        }
+
         // 9. Transition backbuffer: PRESENT -> RENDER_TARGET
         {
             D3D12_RESOURCE_BARRIER barrier = {};
@@ -412,6 +476,38 @@ namespace Renderer
         m_commandList->SetGraphicsRootConstantBufferView(0, frameCtx.frameCBGpuVA); // b0: ViewProj
         m_commandList->SetGraphicsRootDescriptorTable(1, m_frameRing.GetSrvGpuHandle(srvFrameIndex)); // t0: Transforms SRV
 
+        // B-1: Once-per-second bind diagnostic log
+        {
+            static DWORD s_lastBindLogTime = 0;
+            DWORD now = GetTickCount();
+            if (now - s_lastBindLogTime > 1000)
+            {
+                s_lastBindLogTime = now;
+                char buf[512];
+
+                D3D12_DESCRIPTOR_HEAP_DESC heapDesc = m_cbvSrvUavHeap->GetDesc();
+                D3D12_GPU_DESCRIPTOR_HANDLE heapGpuStart = m_cbvSrvUavHeap->GetGPUDescriptorHandleForHeapStart();
+                D3D12_GPU_DESCRIPTOR_HANDLE boundHandle = m_frameRing.GetSrvGpuHandle(srvFrameIndex);
+
+                bool validPtr = (boundHandle.ptr >= heapGpuStart.ptr);
+                SIZE_T offset = validPtr ? (boundHandle.ptr - heapGpuStart.ptr) : 0;
+                bool validOffset = validPtr && (offset % m_cbvSrvUavDescriptorSize == 0);
+                bool withinHeap = validPtr && (offset < static_cast<SIZE_T>(heapDesc.NumDescriptors) * m_cbvSrvUavDescriptorSize);
+
+                sprintf_s(buf,
+                    "B1-BIND: heap=0x%p heapGpuStart=0x%llX boundGpu=0x%llX offset=%llu "
+                    "frame=%u mode=%s validOffset=%d withinHeap=%d\n",
+                    m_cbvSrvUavHeap.Get(), heapGpuStart.ptr, boundHandle.ptr, static_cast<unsigned long long>(offset),
+                    srvFrameIndex,
+                    ToggleSystem::GetDrawModeName(),
+                    validOffset ? 1 : 0, withinHeap ? 1 : 0);
+                OutputDebugStringA(buf);
+
+                if (!validOffset || !withinHeap)
+                    OutputDebugStringA("*** B1 FAIL: Invalid descriptor binding! ***\n");
+            }
+        }
+
         // 14. Draw floor first (single draw call, uses instance 0 transform which is identity-like)
         m_commandList->SetPipelineState(m_shaderLibrary.GetFloorPSO());
         m_scene.RecordDrawFloor(m_commandList.Get());
@@ -428,6 +524,18 @@ namespace Renderer
         {
             m_scene.RecordDrawNaive(m_commandList.Get(), InstanceCount);
             drawCalls = 1 + InstanceCount; // 1 floor + 10000 cubes
+
+            // B-1: Once-per-second naive path verification
+            static DWORD s_lastNaiveLogTime = 0;
+            DWORD naiveNow = GetTickCount();
+            if (naiveNow - s_lastNaiveLogTime > 1000)
+            {
+                s_lastNaiveLogTime = naiveNow;
+                char buf[128];
+                sprintf_s(buf, "B1-NAIVE: StartInstance first=0 last=%u (expected 0 and %u)\n",
+                          InstanceCount - 1, InstanceCount - 1);
+                OutputDebugStringA(buf);
+            }
         }
 
         // 15b. Draw corner markers (visual diagnostic - pass-through VS, no transforms)
@@ -454,12 +562,18 @@ namespace Renderer
         QueryPerformanceCounter(&recordEnd);
         double cpuRecordMs = static_cast<double>(recordEnd.QuadPart - recordStart.QuadPart) * 1000.0 / static_cast<double>(perfFreq.QuadPart);
 
-        // Log evidence: mode, draws, cpu_record_ms, frameId (S6 acceptance)
+        // Log evidence: mode, draws, cpu_record_ms, frameId (throttled to once per second)
         {
-            char evidenceBuf[256];
-            sprintf_s(evidenceBuf, "mode=%s draws=%u cpu_record_ms=%.3f frameId=%u\n",
-                ToggleSystem::GetDrawModeName(), drawCalls, cpuRecordMs, frameResourceIndex);
-            OutputDebugStringA(evidenceBuf);
+            static DWORD s_lastEvidenceLogTime = 0;
+            DWORD now = GetTickCount();
+            if (now - s_lastEvidenceLogTime > 1000)
+            {
+                s_lastEvidenceLogTime = now;
+                char evidenceBuf[256];
+                sprintf_s(evidenceBuf, "mode=%s draws=%u cpu_record_ms=%.3f frameId=%u\n",
+                    ToggleSystem::GetDrawModeName(), drawCalls, cpuRecordMs, frameResourceIndex);
+                OutputDebugStringA(evidenceBuf);
+            }
         }
 
         // Diagnostic: log viewport/scissor/client mismatch
@@ -515,6 +629,11 @@ namespace Renderer
 
         // Wait for all GPU work to complete
         m_frameRing.WaitForAll();
+
+        // B-3: Release readback resource
+        s_transformsReadback.Reset();
+        s_readbackPending = false;
+        s_readbackDumped = false;
 
         // Shutdown scene
         m_scene.Shutdown();

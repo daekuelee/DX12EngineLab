@@ -7,17 +7,14 @@ using Microsoft::WRL::ComPtr;
 namespace Renderer
 {
     // Embedded HLSL - matches root signature ABI (b0, t0)
+    // B-2: Uses ByteAddressBuffer for raw SRV read test with color sentinel
     static const char* kVertexShader = R"(
 cbuffer FrameCB : register(b0, space0)
 {
     row_major float4x4 ViewProj;
 };
 
-struct TransformData
-{
-    row_major float4x4 M;
-};
-StructuredBuffer<TransformData> Transforms : register(t0, space0);
+ByteAddressBuffer TransformsRaw : register(t0, space0);
 
 struct VSIn
 {
@@ -27,26 +24,54 @@ struct VSIn
 struct VSOut
 {
     float4 Pos : SV_Position;
+    nointerpolation float4 Color : COLOR;
 };
 
 VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
 {
     VSOut o;
-    // Microtest A: bypass transforms SRV, compute grid position from instance ID
+
+    // Microtest A: compute grid from SV_InstanceID (known-good)
     uint gx = iid % 100;
     uint gz = iid / 100;
     float tx = float(gx) * 2.0f - 99.0f;
     float tz = float(gz) * 2.0f - 99.0f;
     float3 worldPos = vin.Pos + float3(tx, 0.0f, tz);
     o.Pos = mul(float4(worldPos, 1.0), ViewProj);
+
+    // B-2: Read matrix from raw SRV and check translation
+    uint byteOffset = iid * 64;
+    float4 row0 = asfloat(TransformsRaw.Load4(byteOffset + 0));
+    float4 row1 = asfloat(TransformsRaw.Load4(byteOffset + 16));
+    float4 row2 = asfloat(TransformsRaw.Load4(byteOffset + 32));
+    float4 row3 = asfloat(TransformsRaw.Load4(byteOffset + 48));
+
+    float epsilon = 0.5f;
+    // Row-major: translation in row3.xyz
+    bool rowMatch = (abs(row3.x - tx) < epsilon) && (abs(row3.z - tz) < epsilon);
+    // Column-major: translation in col3 (row0.w, row1.w, row2.w)
+    bool colMatch = (abs(row0.w - tx) < epsilon) && (abs(row2.w - tz) < epsilon);
+
+    if (rowMatch || colMatch)
+        o.Color = float4(0.0, 1.0, 0.0, 1.0);  // GREEN = match
+    else
+        o.Color = float4(1.0, 0.0, 0.0, 1.0);  // RED = mismatch
+
     return o;
 }
 )";
 
+    // B-2: Pixel shader passes through color from vertex shader
     static const char* kPixelShader = R"(
-float4 PSMain() : SV_Target
+struct PSIn
 {
-    return float4(0.90, 0.10, 0.10, 1.0); // Red
+    float4 Pos : SV_Position;
+    nointerpolation float4 Color : COLOR;
+};
+
+float4 PSMain(PSIn pin) : SV_Target
+{
+    return pin.Color;
 }
 )";
 
