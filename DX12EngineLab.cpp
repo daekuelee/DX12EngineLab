@@ -4,6 +4,7 @@
 #include "framework.h"
 #include "DX12EngineLab.h"
 #include "Engine/App.h"
+#include "Renderer/DX12/ToggleSystem.h"
 
 #define MAX_LOADSTRING 100
 
@@ -180,6 +181,37 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             HDC hdc = BeginPaint(hWnd, &ps);
             // TODO: Add any drawing code that uses hdc here...
             EndPaint(hWnd, &ps);
+        }
+        break;
+    case WM_KEYDOWN:
+        {
+            // 'T' key toggles draw mode (instanced <-> naive)
+            if (wParam == 'T')
+            {
+                Renderer::ToggleSystem::ToggleDrawMode();
+                OutputDebugStringA("Draw mode toggled\n");
+            }
+            // '1' key toggles sentinel_Instance0 proof
+            else if (wParam == '1')
+            {
+                bool current = Renderer::ToggleSystem::IsSentinelInstance0Enabled();
+                Renderer::ToggleSystem::SetSentinelInstance0(!current);
+                OutputDebugStringA(current ? "sentinel_Instance0: OFF\n" : "sentinel_Instance0: ON\n");
+            }
+            // '2' key toggles stomp_Lifetime proof
+            else if (wParam == '2')
+            {
+                bool current = Renderer::ToggleSystem::IsStompLifetimeEnabled();
+                Renderer::ToggleSystem::SetStompLifetime(!current);
+                OutputDebugStringA(current ? "stomp_Lifetime: OFF\n" : "stomp_Lifetime: ON\n");
+            }
+            // '3' key toggles break_RPIndexSwap proof
+            else if (wParam == '3')
+            {
+                bool current = Renderer::ToggleSystem::IsBreakRPIndexSwapEnabled();
+                Renderer::ToggleSystem::SetBreakRPIndexSwap(!current);
+                OutputDebugStringA(current ? "break_RPIndexSwap: OFF\n" : "break_RPIndexSwap: ON\n");
+            }
         }
         break;
     case WM_DESTROY:

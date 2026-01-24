@@ -5,13 +5,17 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include "FrameContextRing.h"
+#include "ShaderLibrary.h"
+#include "RenderScene.h"
 
 namespace Renderer
 {
     class Dx12Context
     {
     public:
-        static constexpr uint32_t FrameCount = 2;
+        // Use FrameContextRing's FrameCount (3) for triple buffering
+        static constexpr uint32_t FrameCount = FrameContextRing::FrameCount;
 
         Dx12Context() = default;
         ~Dx12Context() = default;
@@ -23,12 +27,15 @@ namespace Renderer
         void Render();
         void Shutdown();
 
+        // Accessors for backbuffer (RTV selection only - NOT for frame resources)
+        uint32_t GetBackBufferIndex() const { return m_swapChain ? m_swapChain->GetCurrentBackBufferIndex() : 0; }
+
     private:
         HWND m_hwnd = nullptr;
         uint32_t m_width = 0;
         uint32_t m_height = 0;
 
-        // Core DX12 objects (forward-declared as COM pointers)
+        // Core DX12 objects
         Microsoft::WRL::ComPtr<IDXGIFactory6> m_factory;
         Microsoft::WRL::ComPtr<IDXGIAdapter1> m_adapter;
         Microsoft::WRL::ComPtr<ID3D12Device> m_device;
@@ -39,16 +46,27 @@ namespace Renderer
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
         uint32_t m_rtvDescriptorSize = 0;
         Microsoft::WRL::ComPtr<ID3D12Resource> m_backBuffers[FrameCount];
-        uint32_t m_frameIndex = 0;
 
-        // Command allocator and list (per-frame in a full implementation)
-        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_commandAllocator;
+        // CBV/SRV/UAV heap (shader-visible) for transforms SRV
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_cbvSrvUavHeap;
+        uint32_t m_cbvSrvUavDescriptorSize = 0;
+
+        // Frame resource management (per-frame allocators, fence-gated reuse)
+        FrameContextRing m_frameRing;
+        uint64_t m_frameId = 0; // Monotonic counter for frame resource selection
+
+        // Shader library (root sig + PSO)
+        ShaderLibrary m_shaderLibrary;
+
+        // Render scene (geometry + transforms)
+        RenderScene m_scene;
+
+        // Command list (shared, reset per-frame with per-frame allocator)
         Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_commandList;
 
-        // Fence for synchronization
-        Microsoft::WRL::ComPtr<ID3D12Fence> m_fence;
-        uint64_t m_fenceValue = 0;
-        HANDLE m_fenceEvent = nullptr;
+        // Viewport and scissor
+        D3D12_VIEWPORT m_viewport = {};
+        D3D12_RECT m_scissorRect = {};
 
         bool m_initialized = false;
     };

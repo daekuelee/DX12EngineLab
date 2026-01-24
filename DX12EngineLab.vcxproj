@@ -102,12 +102,12 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)
-</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -118,10 +118,12 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -130,6 +132,10 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="Renderer\DX12\Dx12Context.h" />
     <ClInclude Include="Renderer\DX12\Dx12Debug.h" />
+    <ClInclude Include="Renderer\DX12\FrameContextRing.h" />
+    <ClInclude Include="Renderer\DX12\ShaderLibrary.h" />
+    <ClInclude Include="Renderer\DX12\RenderScene.h" />
+    <ClInclude Include="Renderer\DX12\ToggleSystem.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
@@ -138,6 +144,9 @@
     <ClCompile Include="Engine\App.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Context.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Debug.cpp" />
+    <ClCompile Include="Renderer\DX12\FrameContextRing.cpp" />
+    <ClCompile Include="Renderer\DX12\ShaderLibrary.cpp" />
+    <ClCompile Include="Renderer\DX12\RenderScene.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="DX12EngineLab.rc" />
