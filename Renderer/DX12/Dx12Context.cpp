@@ -7,11 +7,6 @@ using Microsoft::WRL::ComPtr;
 
 namespace Renderer
 {
-    // B-3: Static state for transforms readback verification
-    static ComPtr<ID3D12Resource> s_transformsReadback;
-    static bool s_readbackPending = false;
-    static bool s_readbackDumped = false;
-
     static void ThrowIfFailed(HRESULT hr, const char* msg = nullptr)
     {
         if (FAILED(hr))
@@ -276,34 +271,6 @@ namespace Renderer
         uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
         FrameContext& frameCtx = m_frameRing.BeginFrame(m_frameId);
 
-        // B-3: Dump readback data (runs once, after fence wait ensures GPU completed)
-        if (s_readbackPending && !s_readbackDumped)
-        {
-            s_readbackDumped = true;
-            s_readbackPending = false;
-
-            float* data = nullptr;
-            const uint32_t kLastIdx = InstanceCount - 1;
-            D3D12_RANGE readRange = { 0, static_cast<SIZE_T>(InstanceCount) * 64 };
-            s_transformsReadback->Map(0, &readRange, reinterpret_cast<void**>(&data));
-
-            char buf[256];
-            OutputDebugStringA("=== B3 TRANSFORMS READBACK ===\n");
-            sprintf_s(buf, "T[0] (x,z): (%.2f, %.2f) expected (-99, -99)\n",
-                      data[12], data[14]);
-            OutputDebugStringA(buf);
-            sprintf_s(buf, "T[1] (x,z): (%.2f, %.2f) expected (-97, -99)\n",
-                      data[16+12], data[16+14]);
-            OutputDebugStringA(buf);
-            sprintf_s(buf, "T[%u] (x,z): (%.2f, %.2f) expected (99, 99)\n",
-                      kLastIdx, data[kLastIdx*16+12], data[kLastIdx*16+14]);
-            OutputDebugStringA(buf);
-            OutputDebugStringA("===============================\n");
-
-            D3D12_RANGE writeRange = { 0, 0 };
-            s_transformsReadback->Unmap(0, &writeRange);
-        }
-
         // 2. Get backbuffer index (separate from frame resource index!)
         uint32_t backBufferIndex = GetBackBufferIndex();
 
@@ -395,39 +362,6 @@ namespace Renderer
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             m_commandList->ResourceBarrier(1, &barrier);
             frameCtx.transformsState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        }
-
-        // B-3: Record readback copy for content verification (runs once)
-        if (!s_readbackPending && !s_readbackDumped)
-        {
-            // Create readback buffer on first use
-            if (!s_transformsReadback)
-            {
-                D3D12_HEAP_PROPERTIES readbackHeap = {};
-                readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
-                D3D12_RESOURCE_DESC bufDesc = frameCtx.transformsDefault->GetDesc();
-                m_device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE,
-                    &bufDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_transformsReadback));
-            }
-
-            // Barrier: current state -> COPY_SOURCE (using tracked state)
-            D3D12_RESOURCE_BARRIER barrier = {};
-            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Transition.pResource = frameCtx.transformsDefault.Get();
-            barrier.Transition.StateBefore = frameCtx.transformsState;
-            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-            m_commandList->ResourceBarrier(1, &barrier);
-            frameCtx.transformsState = D3D12_RESOURCE_STATE_COPY_SOURCE;
-
-            m_commandList->CopyResource(s_transformsReadback.Get(), frameCtx.transformsDefault.Get());
-
-            // Barrier: COPY_SOURCE -> SRV (restore for shader reads)
-            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            m_commandList->ResourceBarrier(1, &barrier);
-            frameCtx.transformsState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-
-            s_readbackPending = true;
         }
 
         // 9. Transition backbuffer: PRESENT -> RENDER_TARGET
@@ -629,11 +563,6 @@ namespace Renderer
 
         // Wait for all GPU work to complete
         m_frameRing.WaitForAll();
-
-        // B-3: Release readback resource
-        s_transformsReadback.Reset();
-        s_readbackPending = false;
-        s_readbackDumped = false;
 
         // Shutdown scene
         m_scene.Shutdown();
