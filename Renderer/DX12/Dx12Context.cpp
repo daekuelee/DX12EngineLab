@@ -224,18 +224,21 @@ namespace Renderer
         // 2. Get backbuffer index (separate from frame resource index!)
         uint32_t backBufferIndex = GetBackBufferIndex();
 
-        // 3. Update ViewProj constant buffer (simple orthographic for now)
+        // 3. Update ViewProj constant buffer (top-down orthographic)
         {
             float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
-            float scale = 0.01f; // Scale down to fit 100x100 grid
+            float scale = 0.01f;    // Maps -100..100 to -1..1
+            float zScale = 0.005f;  // 1/(far-near), maps Y to NDC depth
+            float zOffset = 0.5f;   // Center the depth range
 
-            // Simple orthographic projection matrix (row-major)
-            // Maps world coords to NDC: x/y scaled, z passed through
+            // Top-down orthographic view (row-major for v * M)
+            // Camera looks down -Y at the XZ grid
+            // World X -> Screen X, World Z -> Screen Y, World Y -> Depth
             float viewProj[16] = {
-                scale / aspect, 0.0f,  0.0f, 0.0f,
-                0.0f,           scale, 0.0f, 0.0f,
-                0.0f,           0.0f,  1.0f, 0.0f,
-                0.0f,           0.0f,  0.0f, 1.0f
+                scale / aspect,  0.0f,    0.0f,    0.0f,   // X -> screen X
+                0.0f,            0.0f,    zScale,  0.0f,   // Z -> depth
+                0.0f,           -scale,   0.0f,    0.0f,   // -Y -> screen Y
+                0.0f,            0.0f,    zOffset, 1.0f
             };
 
             memcpy(frameCtx.frameCBMapped, viewProj, sizeof(viewProj));
