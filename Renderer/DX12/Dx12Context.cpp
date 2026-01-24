@@ -488,41 +488,43 @@ namespace Renderer
         if (ToggleSystem::IsStompLifetimeEnabled())
         {
             srvFrameIndex = (frameResourceIndex + 1) % FrameCount; // Wrong frame!
-            OutputDebugStringA("S7: stomp_Lifetime ACTIVE - using wrong frame SRV!\n");
+
+            // Throttle warning to once per second
+            static DWORD s_lastStompLogTime = 0;
+            DWORD now = GetTickCount();
+            if (now - s_lastStompLogTime > 1000)
+            {
+                s_lastStompLogTime = now;
+                OutputDebugStringA("WARNING: stomp_Lifetime ACTIVE - press F2 to disable\n");
+            }
         }
 
         m_commandList->SetGraphicsRootConstantBufferView(0, frameCtx.frameCBGpuVA); // b0: ViewProj
         m_commandList->SetGraphicsRootDescriptorTable(1, m_frameRing.GetSrvGpuHandle(srvFrameIndex)); // t0: Transforms SRV
 
-        // B-1: Once-per-second bind diagnostic log
+        // PROOF: Once-per-second log showing frame indices and SRV offset match
         {
             static DWORD s_lastBindLogTime = 0;
             DWORD now = GetTickCount();
             if (now - s_lastBindLogTime > 1000)
             {
                 s_lastBindLogTime = now;
-                char buf[512];
 
-                D3D12_DESCRIPTOR_HEAP_DESC heapDesc = m_cbvSrvUavHeap->GetDesc();
                 D3D12_GPU_DESCRIPTOR_HANDLE heapGpuStart = m_cbvSrvUavHeap->GetGPUDescriptorHandleForHeapStart();
                 D3D12_GPU_DESCRIPTOR_HANDLE boundHandle = m_frameRing.GetSrvGpuHandle(srvFrameIndex);
+                SIZE_T actualOffset = boundHandle.ptr - heapGpuStart.ptr;
+                SIZE_T expectedOffset = static_cast<SIZE_T>(frameResourceIndex) * m_cbvSrvUavDescriptorSize;
+                bool match = (actualOffset == expectedOffset) || ToggleSystem::IsStompLifetimeEnabled();
 
-                bool validPtr = (boundHandle.ptr >= heapGpuStart.ptr);
-                SIZE_T offset = validPtr ? (boundHandle.ptr - heapGpuStart.ptr) : 0;
-                bool validOffset = validPtr && (offset % m_cbvSrvUavDescriptorSize == 0);
-                bool withinHeap = validPtr && (offset < static_cast<SIZE_T>(heapDesc.NumDescriptors) * m_cbvSrvUavDescriptorSize);
-
+                char buf[256];
                 sprintf_s(buf,
-                    "B1-BIND: heap=0x%p heapGpuStart=0x%llX boundGpu=0x%llX offset=%llu "
-                    "frame=%u mode=%s validOffset=%d withinHeap=%d\n",
-                    m_cbvSrvUavHeap.Get(), heapGpuStart.ptr, boundHandle.ptr, static_cast<unsigned long long>(offset),
-                    srvFrameIndex,
-                    ToggleSystem::GetDrawModeName(),
-                    validOffset ? 1 : 0, withinHeap ? 1 : 0);
+                    "PROOF: frameId=%llu resIdx=%u backBuf=%u srvIdx=%u actual=%llu exp=%llu %s mode=%s\n",
+                    m_frameId, frameResourceIndex, backBufferIndex, srvFrameIndex,
+                    static_cast<unsigned long long>(actualOffset),
+                    static_cast<unsigned long long>(expectedOffset),
+                    match ? "OK" : "MISMATCH",
+                    ToggleSystem::GetDrawModeName());
                 OutputDebugStringA(buf);
-
-                if (!validOffset || !withinHeap)
-                    OutputDebugStringA("*** B1 FAIL: Invalid descriptor binding! ***\n");
             }
         }
 

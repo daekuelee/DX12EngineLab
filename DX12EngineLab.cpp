@@ -199,8 +199,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 Renderer::ToggleSystem::SetSentinelInstance0(!current);
                 OutputDebugStringA(current ? "sentinel_Instance0: OFF\n" : "sentinel_Instance0: ON\n");
             }
-            // '2' key toggles stomp_Lifetime proof
-            else if (wParam == '2')
+            // F2 key toggles stomp_Lifetime proof (moved from '2' to avoid camera preset collision)
+            else if (wParam == VK_F2)
             {
                 bool current = Renderer::ToggleSystem::IsStompLifetimeEnabled();
                 Renderer::ToggleSystem::SetStompLifetime(!current);

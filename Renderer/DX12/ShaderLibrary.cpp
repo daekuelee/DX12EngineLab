@@ -430,10 +430,16 @@ float4 PSMarker() : SV_Target
             return false;
 
         // Create floor PSO (same as main PSO but with floor pixel shader)
+        // Floor winding is CCW from above, but FrontCounterClockwise=FALSE means CCW=back-facing.
+        // Disable culling for floor quad to ensure visibility regardless of winding.
         psoDesc.PS = { m_floorPsBlob->GetBufferPointer(), m_floorPsBlob->GetBufferSize() };
+        psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
         hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_floorPso));
         if (FAILED(hr))
             return false;
+
+        // Restore CullMode for any subsequent PSO creation
+        psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
 
         // Create marker root signature (empty - no bindings needed)
         {
