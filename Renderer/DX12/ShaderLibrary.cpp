@@ -10,10 +10,14 @@ namespace Renderer
     static const char* kVertexShader = R"(
 cbuffer FrameCB : register(b0, space0)
 {
-    float4x4 ViewProj;
+    row_major float4x4 ViewProj;
 };
 
-StructuredBuffer<float4x4> Transforms : register(t0, space0);
+struct TransformData
+{
+    row_major float4x4 M;
+};
+StructuredBuffer<TransformData> Transforms : register(t0, space0);
 
 struct VSIn
 {
@@ -28,7 +32,7 @@ struct VSOut
 VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
 {
     VSOut o;
-    float4x4 M = Transforms[iid];
+    float4x4 M = Transforms[iid].M;
     float4 wpos = mul(float4(vin.Pos, 1.0), M);
     o.Pos = mul(wpos, ViewProj);
     return o;

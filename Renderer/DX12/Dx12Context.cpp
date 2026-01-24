@@ -344,16 +344,6 @@ namespace Renderer
         m_commandList->SetDescriptorHeaps(1, heaps);
 
         // 13. Bind root parameters
-        // S7 Proof: break_RPIndexSwap - swap root param indices (will cause wrong bindings)
-        uint32_t rpFrameCB = 0;
-        uint32_t rpTransforms = 1;
-        if (ToggleSystem::IsBreakRPIndexSwapEnabled())
-        {
-            rpFrameCB = 1;     // Wrong! Should be 0
-            rpTransforms = 0;  // Wrong! Should be 1
-            OutputDebugStringA("S7: break_RPIndexSwap ACTIVE - root params swapped!\n");
-        }
-
         // S7 Proof: stomp_Lifetime - use wrong frame index for SRV (will cause stomp/flicker)
         uint32_t srvFrameIndex = frameResourceIndex;
         if (ToggleSystem::IsStompLifetimeEnabled())
@@ -362,8 +352,8 @@ namespace Renderer
             OutputDebugStringA("S7: stomp_Lifetime ACTIVE - using wrong frame SRV!\n");
         }
 
-        m_commandList->SetGraphicsRootConstantBufferView(rpFrameCB, frameCtx.frameCBGpuVA); // b0: ViewProj
-        m_commandList->SetGraphicsRootDescriptorTable(rpTransforms, m_frameRing.GetSrvGpuHandle(srvFrameIndex)); // t0: Transforms SRV
+        m_commandList->SetGraphicsRootConstantBufferView(0, frameCtx.frameCBGpuVA); // b0: ViewProj
+        m_commandList->SetGraphicsRootDescriptorTable(1, m_frameRing.GetSrvGpuHandle(srvFrameIndex)); // t0: Transforms SRV
 
         // 14. Draw scene based on mode
         uint32_t drawCalls = 0;

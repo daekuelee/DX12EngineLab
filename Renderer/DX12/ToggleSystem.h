@@ -36,15 +36,11 @@ namespace Renderer
         static bool IsStompLifetimeEnabled() { return s_stompLifetime; }
         static void SetStompLifetime(bool enabled) { s_stompLifetime = enabled; }
 
-        static bool IsBreakRPIndexSwapEnabled() { return s_breakRPIndexSwap; }
-        static void SetBreakRPIndexSwap(bool enabled) { s_breakRPIndexSwap = enabled; }
-
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
 
         // Diagnostic flags (for S7 proof toggles)
         static inline bool s_sentinelInstance0 = false;
         static inline bool s_stompLifetime = false;
-        static inline bool s_breakRPIndexSwap = false;
     };
 }

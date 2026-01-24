@@ -205,13 +205,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 Renderer::ToggleSystem::SetStompLifetime(!current);
                 OutputDebugStringA(current ? "stomp_Lifetime: OFF\n" : "stomp_Lifetime: ON\n");
             }
-            // '3' key toggles break_RPIndexSwap proof
-            else if (wParam == '3')
-            {
-                bool current = Renderer::ToggleSystem::IsBreakRPIndexSwapEnabled();
-                Renderer::ToggleSystem::SetBreakRPIndexSwap(!current);
-                OutputDebugStringA(current ? "break_RPIndexSwap: OFF\n" : "break_RPIndexSwap: ON\n");
-            }
         }
         break;
     case WM_DESTROY:
