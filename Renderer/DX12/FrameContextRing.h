@@ -4,6 +4,7 @@
 #include <wrl/client.h>
 #include <cstdint>
 #include "FrameLinearAllocator.h"
+#include "DescriptorRingAllocator.h"
 
 namespace Renderer
 {
@@ -43,8 +44,8 @@ namespace Renderer
         FrameContextRing(const FrameContextRing&) = delete;
         FrameContextRing& operator=(const FrameContextRing&) = delete;
 
-        // Initialize ring with device and descriptor heap
-        bool Initialize(ID3D12Device* device, ID3D12DescriptorHeap* srvHeap, uint32_t srvHeapIncrementSize);
+        // Initialize ring with device and descriptor ring allocator
+        bool Initialize(ID3D12Device* device, DescriptorRingAllocator* descRing);
 
         // Shutdown and release resources
         void Shutdown();
@@ -78,7 +79,6 @@ namespace Renderer
         uint64_t m_fenceCounter = 0;
 
         ID3D12Device* m_device = nullptr; // Non-owning
-        ID3D12DescriptorHeap* m_srvHeap = nullptr; // Non-owning
-        uint32_t m_srvIncrementSize = 0;
+        DescriptorRingAllocator* m_descRing = nullptr; // Non-owning
     };
 }

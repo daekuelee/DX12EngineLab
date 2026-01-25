@@ -130,10 +130,13 @@
     <ClInclude Include="DX12EngineLab.h" />
     <ClInclude Include="Engine\App.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="Renderer\DX12\DescriptorRingAllocator.h" />
     <ClInclude Include="Renderer\DX12\Dx12Context.h" />
     <ClInclude Include="Renderer\DX12\Dx12Debug.h" />
     <ClInclude Include="Renderer\DX12\FrameContextRing.h" />
     <ClInclude Include="Renderer\DX12\FrameLinearAllocator.h" />
+    <ClInclude Include="Renderer\DX12\PSOCache.h" />
+    <ClInclude Include="Renderer\DX12\ResourceRegistry.h" />
     <ClInclude Include="Renderer\DX12\ShaderLibrary.h" />
     <ClInclude Include="Renderer\DX12\RenderScene.h" />
     <ClInclude Include="Renderer\DX12\ToggleSystem.h" />
@@ -143,10 +146,13 @@
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp" />
     <ClCompile Include="Engine\App.cpp" />
+    <ClCompile Include="Renderer\DX12\DescriptorRingAllocator.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Context.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Debug.cpp" />
     <ClCompile Include="Renderer\DX12\FrameContextRing.cpp" />
     <ClCompile Include="Renderer\DX12\FrameLinearAllocator.cpp" />
+    <ClCompile Include="Renderer\DX12\PSOCache.cpp" />
+    <ClCompile Include="Renderer\DX12\ResourceRegistry.cpp" />
     <ClCompile Include="Renderer\DX12\ShaderLibrary.cpp" />
     <ClCompile Include="Renderer\DX12\RenderScene.cpp" />
   </ItemGroup>

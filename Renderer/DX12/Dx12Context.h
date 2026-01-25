@@ -8,6 +8,8 @@
 #include "FrameContextRing.h"
 #include "ShaderLibrary.h"
 #include "RenderScene.h"
+#include "ResourceRegistry.h"
+#include "DescriptorRingAllocator.h"
 
 namespace Renderer
 {
@@ -51,13 +53,17 @@ namespace Renderer
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
         Microsoft::WRL::ComPtr<ID3D12Resource> m_depthBuffer;
 
-        // CBV/SRV/UAV heap (shader-visible) for transforms SRV
-        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_cbvSrvUavHeap;
-        uint32_t m_cbvSrvUavDescriptorSize = 0;
+        // CBV/SRV/UAV descriptor ring allocator (shader-visible)
+        // Reserved slots: 0,1,2 for per-frame transforms SRVs
+        // Dynamic ring: for transient allocations
+        DescriptorRingAllocator m_descRing;
 
         // Frame resource management (per-frame allocators, fence-gated reuse)
         FrameContextRing m_frameRing;
         uint64_t m_frameId = 0; // Monotonic counter for frame resource selection
+
+        // Resource registry (handle-based resource ownership)
+        ResourceRegistry m_resourceRegistry;
 
         // Shader library (root sig + PSO)
         ShaderLibrary m_shaderLibrary;

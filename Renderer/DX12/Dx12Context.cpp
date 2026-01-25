@@ -284,21 +284,16 @@ namespace Renderer
                 m_dsvHeap->GetCPUDescriptorHandleForHeapStart());
         }
 
-        // 10. Create CBV/SRV/UAV descriptor heap (shader-visible)
+        // 10. Initialize CBV/SRV/UAV descriptor ring allocator (shader-visible)
+        // Capacity: 1024 total, 3 reserved for per-frame transforms SRVs
+        if (!m_descRing.Initialize(m_device.Get(), 1024, FrameCount))
         {
-            D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-            heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            heapDesc.NumDescriptors = FrameCount; // One SRV slot per frame
-            heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-
-            ThrowIfFailed(m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_cbvSrvUavHeap)),
-                "Failed to create CBV/SRV/UAV heap\n");
-
-            m_cbvSrvUavDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            OutputDebugStringA("Failed to initialize descriptor ring allocator\n");
+            return false;
         }
 
         // 9. Initialize frame context ring (per-frame allocators + fence + buffers + SRVs)
-        if (!m_frameRing.Initialize(m_device.Get(), m_cbvSrvUavHeap.Get(), m_cbvSrvUavDescriptorSize))
+        if (!m_frameRing.Initialize(m_device.Get(), &m_descRing))
         {
             OutputDebugStringA("Failed to initialize frame context ring\n");
             return false;
@@ -308,6 +303,13 @@ namespace Renderer
         if (!m_shaderLibrary.Initialize(m_device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM))
         {
             OutputDebugStringA("Failed to initialize shader library\n");
+            return false;
+        }
+
+        // 10b. Initialize resource registry (handle-based resource ownership)
+        if (!m_resourceRegistry.Initialize(m_device.Get()))
+        {
+            OutputDebugStringA("Failed to initialize resource registry\n");
             return false;
         }
 
@@ -504,8 +506,8 @@ namespace Renderer
         m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
         m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-        // Set descriptor heaps
-        ID3D12DescriptorHeap* heaps[] = { m_cbvSrvUavHeap.Get() };
+        // Set descriptor heaps (use ring allocator's heap)
+        ID3D12DescriptorHeap* heaps[] = { m_descRing.GetHeap() };
         m_commandList->SetDescriptorHeaps(1, heaps);
 
         // Bind root parameters
@@ -520,10 +522,10 @@ namespace Renderer
             {
                 s_lastBindLogTime = now;
 
-                D3D12_GPU_DESCRIPTOR_HANDLE heapGpuStart = m_cbvSrvUavHeap->GetGPUDescriptorHandleForHeapStart();
+                D3D12_GPU_DESCRIPTOR_HANDLE heapGpuStart = m_descRing.GetHeap()->GetGPUDescriptorHandleForHeapStart();
                 D3D12_GPU_DESCRIPTOR_HANDLE boundHandle = m_frameRing.GetSrvGpuHandle(srvFrameIndex);
                 SIZE_T actualOffset = boundHandle.ptr - heapGpuStart.ptr;
-                SIZE_T expectedOffset = static_cast<SIZE_T>(frameResourceIndex) * m_cbvSrvUavDescriptorSize;
+                SIZE_T expectedOffset = static_cast<SIZE_T>(frameResourceIndex) * m_descRing.GetDescriptorSize();
                 bool match = (actualOffset == expectedOffset) || ToggleSystem::IsStompLifetimeEnabled();
 
                 char buf[256];
@@ -626,6 +628,9 @@ namespace Renderer
         // End frame - signal fence
         m_frameRing.EndFrame(m_commandQueue.Get(), ctx);
 
+        // Record descriptor ring frame end (attach fence to this frame's allocations)
+        m_descRing.EndFrame(m_frameRing.GetCurrentFenceValue());
+
         // Present
         HRESULT hr = m_swapChain->Present(1, 0); // VSync on
         if (FAILED(hr))
@@ -656,6 +661,10 @@ namespace Renderer
         // Begin frame: fence wait + allocator reset
         uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
         FrameContext& frameCtx = m_frameRing.BeginFrame(m_frameId);
+
+        // Retire completed descriptor ring frames
+        uint64_t completedFence = m_frameRing.GetFence()->GetCompletedValue();
+        m_descRing.BeginFrame(completedFence);
 
         // Phase 1: Upload (CPU writes to upload heap via linear allocator)
         Allocation frameCBAlloc = UpdateFrameConstants(frameCtx);
@@ -757,6 +766,9 @@ namespace Renderer
         // Shutdown shader library
         m_shaderLibrary.Shutdown();
 
+        // Shutdown resource registry
+        m_resourceRegistry.Shutdown();
+
         // Shutdown frame ring (releases fence, allocators)
         m_frameRing.Shutdown();
 
@@ -769,7 +781,7 @@ namespace Renderer
         m_rtvHeap.Reset();
         m_dsvHeap.Reset();
         m_depthBuffer.Reset();
-        m_cbvSrvUavHeap.Reset();
+        m_descRing.Shutdown();
         m_swapChain.Reset();
         m_commandQueue.Reset();
         m_device.Reset();

@@ -11,14 +11,13 @@ namespace Renderer
     // Transforms: 10k float4x4 = 10k * 64 bytes
     static constexpr uint64_t TRANSFORMS_SIZE = InstanceCount * sizeof(float) * 16;
 
-    bool FrameContextRing::Initialize(ID3D12Device* device, ID3D12DescriptorHeap* srvHeap, uint32_t srvHeapIncrementSize)
+    bool FrameContextRing::Initialize(ID3D12Device* device, DescriptorRingAllocator* descRing)
     {
-        if (!device || !srvHeap)
+        if (!device || !descRing)
             return false;
 
         m_device = device;
-        m_srvHeap = srvHeap;
-        m_srvIncrementSize = srvHeapIncrementSize;
+        m_descRing = descRing;
 
         // Create fence
         HRESULT hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence));
@@ -46,30 +45,28 @@ namespace Renderer
         }
 
         // B-1: One-time SRV heap diagnostic log
-        OutputDebugStringA("=== SRV HEAP INIT ===\n");
+        OutputDebugStringA("=== SRV HEAP INIT (DescRing) ===\n");
         {
             char buf[256];
-            D3D12_DESCRIPTOR_HEAP_DESC heapDesc = m_srvHeap->GetDesc();
-            sprintf_s(buf, "srvIncrementSize=%u heapNumDescriptors=%u\n",
-                      m_srvIncrementSize, heapDesc.NumDescriptors);
+            sprintf_s(buf, "descRing capacity=%u reserved=%u descSize=%u\n",
+                      m_descRing->GetCapacity(), m_descRing->GetReservedCount(),
+                      m_descRing->GetDescriptorSize());
             OutputDebugStringA(buf);
 
-            D3D12_GPU_DESCRIPTOR_HANDLE heapGpuStart = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+            D3D12_GPU_DESCRIPTOR_HANDLE heapGpuStart = m_descRing->GetHeap()->GetGPUDescriptorHandleForHeapStart();
             sprintf_s(buf, "heapGpuStart=0x%llX\n", heapGpuStart.ptr);
             OutputDebugStringA(buf);
 
             for (uint32_t i = 0; i < FrameCount; ++i)
             {
-                D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
-                cpu.ptr += static_cast<SIZE_T>(m_frames[i].srvSlot) * m_srvIncrementSize;
-                D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
-                gpu.ptr += static_cast<SIZE_T>(m_frames[i].srvSlot) * m_srvIncrementSize;
+                D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_descRing->GetReservedCpuHandle(m_frames[i].srvSlot);
+                D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_descRing->GetReservedGpuHandle(m_frames[i].srvSlot);
                 sprintf_s(buf, "frame[%u] srvSlot=%u CPU=0x%llX GPU=0x%llX\n",
                           i, m_frames[i].srvSlot, cpu.ptr, gpu.ptr);
                 OutputDebugStringA(buf);
             }
         }
-        OutputDebugStringA("=====================\n");
+        OutputDebugStringA("================================\n");
 
         return true;
     }
@@ -142,18 +139,15 @@ namespace Renderer
         srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
 #endif
 
-        // Get CPU handle at this frame's SRV slot
-        D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
-        cpuHandle.ptr += static_cast<SIZE_T>(ctx.srvSlot) * m_srvIncrementSize;
+        // Get CPU handle at this frame's reserved SRV slot
+        D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_descRing->GetReservedCpuHandle(ctx.srvSlot);
 
         device->CreateShaderResourceView(ctx.transformsDefault.Get(), &srvDesc, cpuHandle);
     }
 
     D3D12_GPU_DESCRIPTOR_HANDLE FrameContextRing::GetSrvGpuHandle(uint32_t frameIndex) const
     {
-        D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
-        gpuHandle.ptr += static_cast<SIZE_T>(m_frames[frameIndex].srvSlot) * m_srvIncrementSize;
-        return gpuHandle;
+        return m_descRing->GetReservedGpuHandle(m_frames[frameIndex].srvSlot);
     }
 
     void FrameContextRing::Shutdown()
@@ -178,7 +172,7 @@ namespace Renderer
 
         m_fence.Reset();
         m_device = nullptr;
-        m_srvHeap = nullptr;
+        m_descRing = nullptr;
     }
 
     FrameContext& FrameContextRing::BeginFrame(uint64_t frameId)

@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include "PSOCache.h"
 
 namespace Renderer
 {
@@ -34,10 +35,13 @@ namespace Renderer
 
         // Accessors
         ID3D12RootSignature* GetRootSignature() const { return m_rootSignature.Get(); }
-        ID3D12PipelineState* GetPSO() const { return m_pso.Get(); }
-        ID3D12PipelineState* GetFloorPSO() const { return m_floorPso.Get(); }
-        ID3D12PipelineState* GetMarkerPSO() const { return m_markerPso.Get(); }
+        ID3D12PipelineState* GetPSO() const { return m_pso; }
+        ID3D12PipelineState* GetFloorPSO() const { return m_floorPso; }
+        ID3D12PipelineState* GetMarkerPSO() const { return m_markerPso; }
         ID3D12RootSignature* GetMarkerRootSignature() const { return m_markerRootSignature.Get(); }
+
+        // Log PSO cache statistics
+        void LogPSOCacheStats() const { m_psoCache.LogStats(); }
 
     private:
         bool CreateRootSignature(ID3D12Device* device);
@@ -46,18 +50,23 @@ namespace Renderer
         bool CreatePSO(ID3D12Device* device, DXGI_FORMAT rtvFormat);
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> m_rootSignature;
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> m_pso;
 
+        // PSO cache (owns all PSOs - raw pointers below are non-owning)
+        mutable PSOCache m_psoCache;
+
+        // Non-owning PSO pointers (owned by m_psoCache)
+        ID3D12PipelineState* m_pso = nullptr;
+        ID3D12PipelineState* m_floorPso = nullptr;
+        ID3D12PipelineState* m_markerPso = nullptr;
+
+        // Shader bytecode blobs (needed for PSO cache key hashing)
         Microsoft::WRL::ComPtr<ID3DBlob> m_vsBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> m_psBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> m_floorVsBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> m_floorPsBlob;
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> m_floorPso;
-
-        // Marker shaders (pass-through VS, solid color PS)
         Microsoft::WRL::ComPtr<ID3DBlob> m_markerVsBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> m_markerPsBlob;
-        Microsoft::WRL::ComPtr<ID3D12PipelineState> m_markerPso;
+
         Microsoft::WRL::ComPtr<ID3D12RootSignature> m_markerRootSignature;
     };
 }
