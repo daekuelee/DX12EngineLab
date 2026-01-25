@@ -1,5 +1,6 @@
 #include "Dx12Context.h"
 #include "Dx12Debug.h"
+#include "ShaderLibrary.h"
 #include "ToggleSystem.h"
 #include <cstdio>
 #include <DirectXMath.h>
@@ -13,40 +14,6 @@ using Microsoft::WRL::ComPtr;
 
 namespace Renderer
 {
-    //-------------------------------------------------------------------------
-    // Camera Presets
-    //-------------------------------------------------------------------------
-    enum class CameraPreset : uint32_t
-    {
-        A = 0,  // Default - 3/4 isometric-ish
-        B = 1,  // Closer / more dramatic depth
-        C = 2,  // Higher / calmer / overview
-        Count
-    };
-
-    struct CameraPresetDesc
-    {
-        XMFLOAT3 eye;
-        XMFLOAT3 target;
-        XMFLOAT3 up;
-        float fovY;     // radians
-        float nearZ;
-        float farZ;
-    };
-
-    static const CameraPresetDesc kCameraPresets[] =
-    {
-        // Preset A (Default - 3/4 isometric-ish)
-        { {0.0f, 180.0f, -220.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, XM_PIDIV4, 1.0f, 1000.0f },
-        // Preset B (Closer / more dramatic depth)
-        { {0.0f, 120.0f, -160.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, XMConvertToRadians(55.0f), 0.5f, 800.0f },
-        // Preset C (Higher / calmer / overview)
-        { {0.0f, 260.0f, -320.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, XMConvertToRadians(40.0f), 2.0f, 1500.0f },
-    };
-
-    static CameraPreset s_currentCameraPreset = CameraPreset::A;
-    static bool s_camKeyWasDown[3] = { false, false, false }; // Debounce for keys 1, 2, 3
-
     //-------------------------------------------------------------------------
     // Free Camera State
     //-------------------------------------------------------------------------
@@ -66,55 +33,6 @@ namespace Renderer
     static LARGE_INTEGER s_lastTime = {};
     static LARGE_INTEGER s_frequency = {};
     static bool s_timerInitialized = false;
-
-    static const char* GetCameraPresetName(CameraPreset preset)
-    {
-        switch (preset)
-        {
-            case CameraPreset::A: return "A";
-            case CameraPreset::B: return "B";
-            case CameraPreset::C: return "C";
-            default: return "?";
-        }
-    }
-
-    static XMMATRIX BuildViewProj(const CameraPresetDesc& desc, float aspect)
-    {
-        XMVECTOR eye = XMLoadFloat3(&desc.eye);
-        XMVECTOR target = XMLoadFloat3(&desc.target);
-        XMVECTOR up = XMLoadFloat3(&desc.up);
-
-#if USE_RIGHT_HANDED
-        XMMATRIX view = XMMatrixLookAtRH(eye, target, up);
-        XMMATRIX proj = XMMatrixPerspectiveFovRH(desc.fovY, aspect, desc.nearZ, desc.farZ);
-#else
-        XMMATRIX view = XMMatrixLookAtLH(eye, target, up);
-        XMMATRIX proj = XMMatrixPerspectiveFovLH(desc.fovY, aspect, desc.nearZ, desc.farZ);
-#endif
-
-        return XMMatrixMultiply(view, proj);
-    }
-
-    //-------------------------------------------------------------------------
-    // Free Camera Functions
-    //-------------------------------------------------------------------------
-    static void ResetCameraToPreset(CameraPreset preset)
-    {
-        const CameraPresetDesc& desc = kCameraPresets[static_cast<uint32_t>(preset)];
-        s_camera.position = desc.eye;
-        s_camera.fovY = desc.fovY;
-        s_camera.nearZ = desc.nearZ;
-        s_camera.farZ = desc.farZ;
-
-        // Compute yaw/pitch from eye->target direction
-        XMFLOAT3 dir = {
-            desc.target.x - desc.eye.x,
-            desc.target.y - desc.eye.y,
-            desc.target.z - desc.eye.z
-        };
-        s_camera.yaw = atan2f(dir.x, dir.z);
-        s_camera.pitch = atan2f(dir.y, sqrtf(dir.x*dir.x + dir.z*dir.z));
-    }
 
     static void UpdateFreeCamera(float dt)
     {
@@ -424,11 +342,10 @@ namespace Renderer
         m_frameId = 0;
         m_initialized = true;
 
-        // 14. Initialize free camera timer and reset to preset A
+        // 14. Initialize free camera timer
         QueryPerformanceFrequency(&s_frequency);
         QueryPerformanceCounter(&s_lastTime);
         s_timerInitialized = true;
-        ResetCameraToPreset(CameraPreset::A);
 
         OutputDebugStringA("Dx12Context initialized successfully\n");
         return true;
@@ -454,30 +371,7 @@ namespace Renderer
             s_lastTime = currentTime;
         }
 
-        // 0a. Handle camera preset hotkeys (1, 2, 3) with debounce - resets free camera
-        {
-            const int keys[] = { '1', '2', '3' };
-            const CameraPreset presets[] = { CameraPreset::A, CameraPreset::B, CameraPreset::C };
-
-            for (int i = 0; i < 3; ++i)
-            {
-                bool isDown = (GetAsyncKeyState(keys[i]) & 0x8000) != 0;
-                if (isDown && !s_camKeyWasDown[i])
-                {
-                    s_currentCameraPreset = presets[i];
-                    ResetCameraToPreset(presets[i]);
-                    char buf[128];
-                    sprintf_s(buf, "CAM: reset to preset=%s pos=(%.0f,%.0f,%.0f) yaw=%.2f pitch=%.2f\n",
-                        GetCameraPresetName(s_currentCameraPreset),
-                        s_camera.position.x, s_camera.position.y, s_camera.position.z,
-                        s_camera.yaw, s_camera.pitch);
-                    OutputDebugStringA(buf);
-                }
-                s_camKeyWasDown[i] = isDown;
-            }
-        }
-
-        // 0b. Update free camera from input
+        // 0a. Update free camera from input
         UpdateFreeCamera(dt);
 
         // 1. Begin frame - get fence-gated frame context using monotonic frameId
@@ -661,6 +555,11 @@ namespace Renderer
         if (ToggleSystem::IsGridEnabled())
         {
             m_commandList->SetPipelineState(m_shaderLibrary.GetPSO());
+
+            // Set color mode constant (RP_DebugCB = b2)
+            uint32_t colorMode = static_cast<uint32_t>(ToggleSystem::GetColorMode());
+            m_commandList->SetGraphicsRoot32BitConstants(RP_DebugCB, 1, &colorMode, 0);
+
             if (ToggleSystem::GetDrawMode() == DrawMode::Instanced)
             {
                 uint32_t zero = 0;

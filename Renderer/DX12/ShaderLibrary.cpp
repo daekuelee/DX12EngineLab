@@ -154,6 +154,13 @@ namespace Renderer
         rootParams[RP_InstanceOffset].Constants.Num32BitValues = 1;
         rootParams[RP_InstanceOffset].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
+        // RP3: Debug constants (b2 space0) - ColorMode + padding (4 DWORDs)
+        rootParams[RP_DebugCB].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        rootParams[RP_DebugCB].Constants.ShaderRegister = 2;  // b2
+        rootParams[RP_DebugCB].Constants.RegisterSpace = 0;
+        rootParams[RP_DebugCB].Constants.Num32BitValues = 4;  // uint + 3 pad
+        rootParams[RP_DebugCB].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
         D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSigDesc = {};
         rootSigDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
         rootSigDesc.Desc_1_1.NumParameters = RP_Count;

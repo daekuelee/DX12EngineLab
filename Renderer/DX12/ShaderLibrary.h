@@ -7,12 +7,13 @@
 namespace Renderer
 {
     // Root parameter indices - this is the CPU/GPU ABI contract
-    // MUST match shader register assignments (b0, t0, b1)
+    // MUST match shader register assignments (b0, t0, b1, b2)
     enum RootParam : uint32_t
     {
         RP_FrameCB = 0,          // b0 space0 - Frame constants (ViewProj)
         RP_TransformsTable = 1,  // t0 space0 - Transforms SRV descriptor table
         RP_InstanceOffset = 2,   // b1 space0 - Instance offset (1 DWORD root constant)
+        RP_DebugCB = 3,          // b2 space0 - Debug constants (ColorMode, 4 DWORDs)
         RP_Count
     };
 
