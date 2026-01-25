@@ -20,7 +20,7 @@ namespace Renderer
     static uint32_t s_frameCount = 0;
     static bool s_fpsTimerInitialized = false;
 
-    bool ImGuiLayer::Initialize(HWND hwnd, ID3D12Device* device,
+    bool ImGuiLayer::Initialize(HWND hwnd, ID3D12Device* device, ID3D12CommandQueue* commandQueue,
                                  uint32_t numFramesInFlight, DXGI_FORMAT rtvFormat)
     {
         if (m_initialized)
@@ -40,6 +40,10 @@ namespace Renderer
             return false;
         }
 
+        char heapLogBuf[256];
+        sprintf_s(heapLogBuf, "[ImGui] Heap created: type=CBV_SRV_UAV flags=SHADER_VISIBLE numDesc=1\n");
+        OutputDebugStringA(heapLogBuf);
+
         // Setup ImGui context
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -48,11 +52,28 @@ namespace Renderer
 
         // Setup platform/renderer backends
         ImGui_ImplWin32_Init(hwnd);
-        ImGui_ImplDX12_Init(device, static_cast<int>(numFramesInFlight),
-                            rtvFormat,
-                            m_srvHeap.Get(),
-                            m_srvHeap->GetCPUDescriptorHandleForHeapStart(),
-                            m_srvHeap->GetGPUDescriptorHandleForHeapStart());
+
+        // Guard: commandQueue must not be null
+        if (!commandQueue)
+        {
+            OutputDebugStringA("[ImGui] FAIL: commandQueue=null\n");
+#if defined(_DEBUG)
+            __debugbreak();
+#endif
+            return false;
+        }
+
+        // Use InitInfo struct (required for v1.91+)
+        ImGui_ImplDX12_InitInfo init_info = {};
+        init_info.Device = device;
+        init_info.CommandQueue = commandQueue;  // FIX: was missing
+        init_info.NumFramesInFlight = static_cast<int>(numFramesInFlight);
+        init_info.RTVFormat = rtvFormat;
+        init_info.SrvDescriptorHeap = m_srvHeap.Get();
+        // Use legacy single-descriptor API (we have exactly 1 descriptor in our heap)
+        init_info.LegacySingleSrvCpuDescriptor = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        init_info.LegacySingleSrvGpuDescriptor = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+        ImGui_ImplDX12_Init(&init_info);
 
         // Setup style
         ImGui::StyleColorsDark();
@@ -69,7 +90,8 @@ namespace Renderer
         m_initialized = true;
 
         char logBuf[128];
-        sprintf_s(logBuf, "[ImGui] Init OK: heapDescriptors=1 frameCount=%u\n", numFramesInFlight);
+        sprintf_s(logBuf, "[ImGui] Init OK: heapDescriptors=1 frameCount=%u cmdQueue=%p\n",
+                  numFramesInFlight, commandQueue);
         OutputDebugStringA(logBuf);
 
         return true;

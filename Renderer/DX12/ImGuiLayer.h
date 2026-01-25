@@ -11,7 +11,7 @@ namespace Renderer
     class ImGuiLayer
     {
     public:
-        bool Initialize(HWND hwnd, ID3D12Device* device,
+        bool Initialize(HWND hwnd, ID3D12Device* device, ID3D12CommandQueue* commandQueue,
                         uint32_t numFramesInFlight, DXGI_FORMAT rtvFormat);
         void Shutdown();
         void BeginFrame();

@@ -324,7 +324,8 @@ namespace Renderer
         }
 
         // 11b. Initialize ImGui layer
-        if (!m_imguiLayer.Initialize(m_hwnd, m_device.Get(), FrameCount, m_backBufferFormat))
+        if (!m_imguiLayer.Initialize(m_hwnd, m_device.Get(), m_commandQueue.Get(),
+                                      FrameCount, m_backBufferFormat))
         {
             OutputDebugStringA("[ImGui] FAILED to initialize\n");
             return false;
