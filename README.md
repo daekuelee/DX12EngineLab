@@ -33,6 +33,24 @@ Engine-style DX12 sandbox built with **contracts + toggles + evidence** (not tut
 
 **Next**: Day1.5 - Upload arena, resource state tracker
 
+## Day1.5: Refactor & Infrastructure (2026-01-25)
+
+**Goal**: Add frame-level allocators, descriptor management, and debug HUD.
+
+**Key Changes**:
+- `b646118` - FrameLinearAllocator (per-frame bump allocation, 1MB/frame)
+- `d60981e` - DescriptorRingAllocator (1024-slot fence-protected ring)
+- `d60981e` - PSOCache (hash-based lazy PSO creation)
+- `e045a21` - ImGui HUD overlay (FPS, mode display, controls)
+- `faf4fab` - Fix ImGui crash (pass CommandQueue to v1.91+ backend)
+- `8943684` - DescriptorRingAllocator safety guards
+
+**Debug Narrative**: [docs/notes/day1.5/dailyNote.md](docs/notes/day1.5/dailyNote.md)
+
+**Evidence**: [docs/contracts/day1.5/](docs/contracts/day1.5/)
+
+**Next**: Day2 - Upload arena, GPU culling
+
 ## Build & Run
 - Open DX12EngineLab.sln in VS2022
 - Select **x64 / Debug**
