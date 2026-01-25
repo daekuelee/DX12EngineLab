@@ -114,5 +114,8 @@ namespace Renderer
         // Current frame accumulator
         uint32_t m_currentFrameStart = 0;  // Set in BeginFrame
         uint32_t m_currentFrameCount = 0;
+
+        // Private helper: allocate from current head (already validated)
+        DescriptorAllocation AllocateContiguous(uint32_t count, const char* tag);
     };
 }
