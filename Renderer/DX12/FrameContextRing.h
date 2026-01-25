@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include "FrameLinearAllocator.h"
 
 namespace Renderer
 {
@@ -11,17 +12,11 @@ namespace Renderer
     // Per-frame resources that must be fence-gated before reuse
     struct FrameContext
     {
-        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> cmdAllocator;
         uint64_t fenceValue = 0;
 
-        // Frame constant buffer (ViewProj) - upload heap, persistently mapped
-        Microsoft::WRL::ComPtr<ID3D12Resource> frameCB;
-        void* frameCBMapped = nullptr;
-        D3D12_GPU_VIRTUAL_ADDRESS frameCBGpuVA = 0;
-
-        // Transforms buffer - upload heap, persistently mapped
-        Microsoft::WRL::ComPtr<ID3D12Resource> transformsUpload;
-        void* transformsUploadMapped = nullptr;
+        // Per-frame linear allocator for upload heaps (frame CB + transforms)
+        FrameLinearAllocator uploadAllocator;
 
         // Transforms buffer - default heap (GPU reads as SRV)
         Microsoft::WRL::ComPtr<ID3D12Resource> transformsDefault;

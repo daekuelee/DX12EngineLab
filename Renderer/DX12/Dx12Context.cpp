@@ -326,7 +326,7 @@ namespace Renderer
             ThrowIfFailed(m_device->CreateCommandList(
                 0,
                 D3D12_COMMAND_LIST_TYPE_DIRECT,
-                firstFrame.allocator.Get(),
+                firstFrame.cmdAllocator.Get(),
                 nullptr, // No initial PSO
                 IID_PPV_ARGS(&m_commandList)),
                 "Failed to create command list\n");
@@ -351,122 +351,130 @@ namespace Renderer
         return true;
     }
 
-    void Dx12Context::Render()
+    // CBV requires 256-byte alignment
+    static constexpr uint64_t CBV_ALIGNMENT = 256;
+    static constexpr uint64_t CB_SIZE = (sizeof(float) * 16 + CBV_ALIGNMENT - 1) & ~(CBV_ALIGNMENT - 1);
+
+    // Transforms: 10k float4x4 = 10k * 64 bytes
+    static constexpr uint64_t TRANSFORMS_SIZE = InstanceCount * sizeof(float) * 16;
+
+    //-------------------------------------------------------------------------
+    // Phase Helpers
+    //-------------------------------------------------------------------------
+
+    float Dx12Context::UpdateDeltaTime()
     {
-        if (!m_initialized)
-            return;
-
-        // 0. Calculate delta time
         float dt = 0.0f;
+        LARGE_INTEGER currentTime;
+        QueryPerformanceCounter(&currentTime);
+        if (s_timerInitialized && s_frequency.QuadPart > 0)
         {
-            LARGE_INTEGER currentTime;
-            QueryPerformanceCounter(&currentTime);
-            if (s_timerInitialized && s_frequency.QuadPart > 0)
-            {
-                dt = static_cast<float>(currentTime.QuadPart - s_lastTime.QuadPart) /
-                     static_cast<float>(s_frequency.QuadPart);
-                // Clamp to avoid huge jumps (e.g., after breakpoint)
-                if (dt > 0.1f) dt = 0.1f;
-            }
-            s_lastTime = currentTime;
+            dt = static_cast<float>(currentTime.QuadPart - s_lastTime.QuadPart) /
+                 static_cast<float>(s_frequency.QuadPart);
+            // Clamp to avoid huge jumps (e.g., after breakpoint)
+            if (dt > 0.1f) dt = 0.1f;
         }
+        s_lastTime = currentTime;
+        return dt;
+    }
 
-        // 0a. Update free camera from input
-        UpdateFreeCamera(dt);
+    Allocation Dx12Context::UpdateFrameConstants(FrameContext& ctx)
+    {
+        // Allocate from per-frame linear allocator
+        Allocation frameCBAlloc = ctx.uploadAllocator.Allocate(CB_SIZE, CBV_ALIGNMENT);
 
-        // 1. Begin frame - get fence-gated frame context using monotonic frameId
-        uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
-        FrameContext& frameCtx = m_frameRing.BeginFrame(m_frameId);
+        float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
+        XMMATRIX viewProj = BuildFreeCameraViewProj(s_camera, aspect);
 
-        // 2. Get backbuffer index (separate from frame resource index!)
-        uint32_t backBufferIndex = GetBackBufferIndex();
+        // DirectXMath uses row-major, HLSL row_major matches - no transpose needed
+        XMFLOAT4X4 vpMatrix;
+        XMStoreFloat4x4(&vpMatrix, viewProj);
+        memcpy(frameCBAlloc.cpuPtr, &vpMatrix, sizeof(vpMatrix));
 
-        // 3. Update ViewProj constant buffer (free camera)
+        return frameCBAlloc;
+    }
+
+    Allocation Dx12Context::UpdateTransforms(FrameContext& ctx)
+    {
+        // Allocate from per-frame linear allocator
+        Allocation transformsAlloc = ctx.uploadAllocator.Allocate(TRANSFORMS_SIZE, 256);
+
+        float* transforms = static_cast<float*>(transformsAlloc.cpuPtr);
+        uint32_t idx = 0;
+        for (uint32_t z = 0; z < 100; ++z)
         {
-            float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
-
-            XMMATRIX viewProj = BuildFreeCameraViewProj(s_camera, aspect);
-
-            // DirectXMath uses row-major, HLSL row_major matches - no transpose needed
-            XMFLOAT4X4 vpMatrix;
-            XMStoreFloat4x4(&vpMatrix, viewProj);
-            memcpy(frameCtx.frameCBMapped, &vpMatrix, sizeof(vpMatrix));
-        }
-
-        // 4. Update transforms (100x100 grid = 10k instances)
-        {
-            float* transforms = static_cast<float*>(frameCtx.transformsUploadMapped);
-            uint32_t idx = 0;
-            for (uint32_t z = 0; z < 100; ++z)
+            for (uint32_t x = 0; x < 100; ++x)
             {
-                for (uint32_t x = 0; x < 100; ++x)
+                // Identity matrix with translation
+                float tx = static_cast<float>(x) * 2.0f - 99.0f; // Center grid
+                float ty = 0.0f;
+                float tz = static_cast<float>(z) * 2.0f - 99.0f;
+
+                // S7 Proof: sentinel_Instance0 - move instance 0 to distinct position
+                if (idx == 0 && ToggleSystem::IsSentinelInstance0Enabled())
                 {
-                    // Identity matrix with translation
-                    float tx = static_cast<float>(x) * 2.0f - 99.0f; // Center grid
-                    float ty = 0.0f;
-                    float tz = static_cast<float>(z) * 2.0f - 99.0f;
-
-                    // S7 Proof: sentinel_Instance0 - move instance 0 to distinct position
-                    if (idx == 0 && ToggleSystem::IsSentinelInstance0Enabled())
-                    {
-                        tx = 150.0f;  // Far right
-                        ty = 50.0f;   // Raised up
-                        tz = 150.0f;  // Far back
-                    }
-
-                    // Row-major 4x4 scale+translate matrix (scale creates gaps between cubes)
-                    // TEMP: Tall boxes to verify volumetric depth (side faces visible)
-                    const float scaleXZ = 0.9f;   // Wider for visibility
-                    const float scaleY = 3.0f;    // Tall boxes to show side faces
-                    transforms[idx * 16 + 0] = scaleXZ;  transforms[idx * 16 + 1] = 0.0f;  transforms[idx * 16 + 2] = 0.0f;  transforms[idx * 16 + 3] = 0.0f;
-                    transforms[idx * 16 + 4] = 0.0f;  transforms[idx * 16 + 5] = scaleY;  transforms[idx * 16 + 6] = 0.0f;  transforms[idx * 16 + 7] = 0.0f;
-                    transforms[idx * 16 + 8] = 0.0f;  transforms[idx * 16 + 9] = 0.0f;  transforms[idx * 16 + 10] = scaleXZ; transforms[idx * 16 + 11] = 0.0f;
-                    transforms[idx * 16 + 12] = tx;   transforms[idx * 16 + 13] = ty;   transforms[idx * 16 + 14] = tz;   transforms[idx * 16 + 15] = 1.0f;
-
-                    ++idx;
+                    tx = 150.0f;  // Far right
+                    ty = 50.0f;   // Raised up
+                    tz = 150.0f;  // Far back
                 }
+
+                // Row-major 4x4 scale+translate matrix (scale creates gaps between cubes)
+                // TEMP: Tall boxes to verify volumetric depth (side faces visible)
+                const float scaleXZ = 0.9f;   // Wider for visibility
+                const float scaleY = 3.0f;    // Tall boxes to show side faces
+                transforms[idx * 16 + 0] = scaleXZ;  transforms[idx * 16 + 1] = 0.0f;  transforms[idx * 16 + 2] = 0.0f;  transforms[idx * 16 + 3] = 0.0f;
+                transforms[idx * 16 + 4] = 0.0f;  transforms[idx * 16 + 5] = scaleY;  transforms[idx * 16 + 6] = 0.0f;  transforms[idx * 16 + 7] = 0.0f;
+                transforms[idx * 16 + 8] = 0.0f;  transforms[idx * 16 + 9] = 0.0f;  transforms[idx * 16 + 10] = scaleXZ; transforms[idx * 16 + 11] = 0.0f;
+                transforms[idx * 16 + 12] = tx;   transforms[idx * 16 + 13] = ty;   transforms[idx * 16 + 14] = tz;   transforms[idx * 16 + 15] = 1.0f;
+
+                ++idx;
             }
         }
 
-        // 5. Reset command list with this frame's allocator
-        // Start CPU timing for command recording
-        LARGE_INTEGER recordStart, recordEnd, perfFreq;
-        QueryPerformanceFrequency(&perfFreq);
-        QueryPerformanceCounter(&recordStart);
+        return transformsAlloc;
+    }
 
-        ThrowIfFailed(m_commandList->Reset(frameCtx.allocator.Get(), m_shaderLibrary.GetPSO()),
-            "Failed to reset command list\n");
-
-        // 6. Barrier: transforms default buffer -> COPY_DEST (per-frame state tracking, fixes #527)
+    void Dx12Context::RecordBarriersAndCopy(FrameContext& ctx, const Allocation& transformsAlloc)
+    {
+        // Barrier: transforms default buffer -> COPY_DEST (per-frame state tracking, fixes #527)
         // Each frame context tracks its own transformsState to handle triple-buffering correctly
-        if (frameCtx.transformsState != D3D12_RESOURCE_STATE_COPY_DEST)
+        if (ctx.transformsState != D3D12_RESOURCE_STATE_COPY_DEST)
         {
             D3D12_RESOURCE_BARRIER barrier = {};
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Transition.pResource = frameCtx.transformsDefault.Get();
+            barrier.Transition.pResource = ctx.transformsDefault.Get();
             barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            barrier.Transition.StateBefore = frameCtx.transformsState;
+            barrier.Transition.StateBefore = ctx.transformsState;
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
             m_commandList->ResourceBarrier(1, &barrier);
-            frameCtx.transformsState = D3D12_RESOURCE_STATE_COPY_DEST;
+            ctx.transformsState = D3D12_RESOURCE_STATE_COPY_DEST;
         }
 
-        // 7. Copy transforms from upload to default
-        m_commandList->CopyResource(frameCtx.transformsDefault.Get(), frameCtx.transformsUpload.Get());
+        // Copy transforms from upload allocator to default buffer using CopyBufferRegion
+        m_commandList->CopyBufferRegion(
+            ctx.transformsDefault.Get(), 0,                           // dest, destOffset
+            ctx.uploadAllocator.GetBuffer(), transformsAlloc.offset,  // src, srcOffset
+            TRANSFORMS_SIZE);                                         // numBytes
 
-        // 8. Barrier: transforms default buffer -> SRV
+        // Barrier: transforms default buffer -> SRV
         {
             D3D12_RESOURCE_BARRIER barrier = {};
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Transition.pResource = frameCtx.transformsDefault.Get();
+            barrier.Transition.pResource = ctx.transformsDefault.Get();
             barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             m_commandList->ResourceBarrier(1, &barrier);
-            frameCtx.transformsState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            ctx.transformsState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         }
+    }
 
-        // 9. Transition backbuffer: PRESENT -> RENDER_TARGET
+    void Dx12Context::RecordPasses(FrameContext& ctx, const Allocation& frameCBAlloc, uint32_t srvFrameIndex)
+    {
+        uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
+        uint32_t backBufferIndex = GetBackBufferIndex();
+
+        // Transition backbuffer: PRESENT -> RENDER_TARGET
         {
             D3D12_RESOURCE_BARRIER barrier = {};
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -477,7 +485,7 @@ namespace Renderer
             m_commandList->ResourceBarrier(1, &barrier);
         }
 
-        // 10. Clear render target
+        // Clear render target
         D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
         rtvHandle.ptr += static_cast<SIZE_T>(backBufferIndex) * m_rtvDescriptorSize;
         {
@@ -485,39 +493,23 @@ namespace Renderer
             m_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
         }
 
-        // 10b. Clear depth buffer
+        // Clear depth buffer
         D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
         m_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-        // 11. Set render state
+        // Set render state
         m_commandList->SetGraphicsRootSignature(m_shaderLibrary.GetRootSignature());
         m_commandList->RSSetViewports(1, &m_viewport);
         m_commandList->RSSetScissorRects(1, &m_scissorRect);
         m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
         m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-        // 12. Set descriptor heaps
+        // Set descriptor heaps
         ID3D12DescriptorHeap* heaps[] = { m_cbvSrvUavHeap.Get() };
         m_commandList->SetDescriptorHeaps(1, heaps);
 
-        // 13. Bind root parameters
-        // S7 Proof: stomp_Lifetime - use wrong frame index for SRV (will cause stomp/flicker)
-        uint32_t srvFrameIndex = frameResourceIndex;
-        if (ToggleSystem::IsStompLifetimeEnabled())
-        {
-            srvFrameIndex = (frameResourceIndex + 1) % FrameCount; // Wrong frame!
-
-            // Throttle warning to once per second
-            static DWORD s_lastStompLogTime = 0;
-            DWORD now = GetTickCount();
-            if (now - s_lastStompLogTime > 1000)
-            {
-                s_lastStompLogTime = now;
-                OutputDebugStringA("WARNING: stomp_Lifetime ACTIVE - press F2 to disable\n");
-            }
-        }
-
-        m_commandList->SetGraphicsRootConstantBufferView(0, frameCtx.frameCBGpuVA); // b0: ViewProj
+        // Bind root parameters
+        m_commandList->SetGraphicsRootConstantBufferView(0, frameCBAlloc.gpuVA); // b0: ViewProj
         m_commandList->SetGraphicsRootDescriptorTable(1, m_frameRing.GetSrvGpuHandle(srvFrameIndex)); // t0: Transforms SRV
 
         // PROOF: Once-per-second log showing frame indices and SRV offset match
@@ -546,11 +538,11 @@ namespace Renderer
             }
         }
 
-        // 14. Draw floor first (single draw call, floor VS does NOT read transforms)
+        // Draw floor first (single draw call, floor VS does NOT read transforms)
         m_commandList->SetPipelineState(m_shaderLibrary.GetFloorPSO());
         m_scene.RecordDrawFloor(m_commandList.Get());
 
-        // 15. Draw cubes based on mode (only if grid enabled)
+        // Draw cubes based on mode (only if grid enabled)
         uint32_t drawCalls = 1; // 1 floor (always drawn)
         if (ToggleSystem::IsGridEnabled())
         {
@@ -602,7 +594,7 @@ namespace Renderer
             }
         }
 
-        // 15b. Draw corner markers (visual diagnostic - pass-through VS, no transforms)
+        // Draw corner markers (visual diagnostic - pass-through VS, no transforms)
         if (ToggleSystem::IsMarkersEnabled())
         {
             m_commandList->SetGraphicsRootSignature(m_shaderLibrary.GetMarkerRootSignature());
@@ -611,7 +603,7 @@ namespace Renderer
             drawCalls += 1; // +1 for markers
         }
 
-        // 16. Transition backbuffer: RENDER_TARGET -> PRESENT
+        // Transition backbuffer: RENDER_TARGET -> PRESENT
         {
             D3D12_RESOURCE_BARRIER barrier = {};
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -621,9 +613,81 @@ namespace Renderer
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
             m_commandList->ResourceBarrier(1, &barrier);
         }
+    }
 
-        // 16. Close and execute command list
+    void Dx12Context::ExecuteAndPresent(FrameContext& ctx)
+    {
+        // Close and execute command list
         ThrowIfFailed(m_commandList->Close(), "Failed to close command list\n");
+
+        ID3D12CommandList* commandLists[] = { m_commandList.Get() };
+        m_commandQueue->ExecuteCommandLists(1, commandLists);
+
+        // End frame - signal fence
+        m_frameRing.EndFrame(m_commandQueue.Get(), ctx);
+
+        // Present
+        HRESULT hr = m_swapChain->Present(1, 0); // VSync on
+        if (FAILED(hr))
+        {
+            if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+            {
+                HRESULT reason = m_device->GetDeviceRemovedReason();
+                char errBuf[256];
+                sprintf_s(errBuf, "Device removed! Reason: 0x%08X\n", reason);
+                OutputDebugStringA(errBuf);
+            }
+        }
+    }
+
+    //-------------------------------------------------------------------------
+    // Main Render Loop
+    //-------------------------------------------------------------------------
+
+    void Dx12Context::Render()
+    {
+        if (!m_initialized)
+            return;
+
+        // Pre-frame: delta time and camera update
+        float dt = UpdateDeltaTime();
+        UpdateFreeCamera(dt);
+
+        // Begin frame: fence wait + allocator reset
+        uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
+        FrameContext& frameCtx = m_frameRing.BeginFrame(m_frameId);
+
+        // Phase 1: Upload (CPU writes to upload heap via linear allocator)
+        Allocation frameCBAlloc = UpdateFrameConstants(frameCtx);
+        Allocation transformsAlloc = UpdateTransforms(frameCtx);
+
+        // Phase 2: Record (command list recording)
+        // Start CPU timing for command recording
+        LARGE_INTEGER recordStart, recordEnd, perfFreq;
+        QueryPerformanceFrequency(&perfFreq);
+        QueryPerformanceCounter(&recordStart);
+
+        ThrowIfFailed(m_commandList->Reset(frameCtx.cmdAllocator.Get(), m_shaderLibrary.GetPSO()),
+            "Failed to reset command list\n");
+
+        // S7 Proof: stomp_Lifetime - use wrong frame index for SRV (will cause stomp/flicker)
+        uint32_t srvFrameIndex = frameResourceIndex;
+        if (ToggleSystem::IsStompLifetimeEnabled())
+        {
+            srvFrameIndex = (frameResourceIndex + 1) % FrameCount; // Wrong frame!
+
+            // Throttle warning to once per second
+            static DWORD s_lastStompLogTime = 0;
+            DWORD now = GetTickCount();
+            if (now - s_lastStompLogTime > 1000)
+            {
+                s_lastStompLogTime = now;
+                OutputDebugStringA("WARNING: stomp_Lifetime ACTIVE - press F2 to disable\n");
+            }
+        }
+
+        RecordBarriersAndCopy(frameCtx, transformsAlloc);
+        RecordPasses(frameCtx, frameCBAlloc, srvFrameIndex);
 
         // End CPU timing for command recording
         QueryPerformanceCounter(&recordEnd);
@@ -638,7 +702,9 @@ namespace Renderer
                 s_lastEvidenceLogTime = now;
                 char evidenceBuf[256];
                 sprintf_s(evidenceBuf, "mode=%s draws=%u cpu_record_ms=%.3f frameId=%u\n",
-                    ToggleSystem::GetDrawModeName(), drawCalls, cpuRecordMs, frameResourceIndex);
+                    ToggleSystem::GetDrawModeName(),
+                    ToggleSystem::IsGridEnabled() ? (ToggleSystem::GetDrawMode() == DrawMode::Instanced ? 2 : InstanceCount + 1) : 1,
+                    cpuRecordMs, frameResourceIndex);
                 OutputDebugStringA(evidenceBuf);
             }
         }
@@ -649,6 +715,10 @@ namespace Renderer
             bool shouldLog = (m_frameId == 0) || ToggleSystem::ShouldLogDiagnostics() || ((m_frameId - s_lastLogFrame) >= 60);
             if (shouldLog)
             {
+                uint32_t drawCalls = ToggleSystem::IsGridEnabled() ?
+                    (ToggleSystem::GetDrawMode() == DrawMode::Instanced ? 2 : InstanceCount + 1) : 1;
+                if (ToggleSystem::IsMarkersEnabled()) drawCalls += 1;
+
                 RECT clientRect;
                 GetClientRect(m_hwnd, &clientRect);
                 char diagBuf[512];
@@ -666,27 +736,11 @@ namespace Renderer
             }
         }
 
-        ID3D12CommandList* commandLists[] = { m_commandList.Get() };
-        m_commandQueue->ExecuteCommandLists(1, commandLists);
+        // Phase 3: Execute & Present
+        ExecuteAndPresent(frameCtx);
 
-        // 17. End frame - signal fence
-        m_frameRing.EndFrame(m_commandQueue.Get(), frameCtx);
-
-        // 18. Present
-        HRESULT hr = m_swapChain->Present(1, 0); // VSync on
-        if (FAILED(hr))
-        {
-            if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
-            {
-                HRESULT reason = m_device->GetDeviceRemovedReason();
-                char errBuf[256];
-                sprintf_s(errBuf, "Device removed! Reason: 0x%08X\n", reason);
-                OutputDebugStringA(errBuf);
-            }
-        }
-
-        // 19. Increment monotonic frame counter
-        m_frameId++;
+        // Increment monotonic frame counter
+        ++m_frameId;
     }
 
     void Dx12Context::Shutdown()

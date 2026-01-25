@@ -81,12 +81,15 @@ namespace Renderer
         // Command allocator
         HRESULT hr = device->CreateCommandAllocator(
             D3D12_COMMAND_LIST_TYPE_DIRECT,
-            IID_PPV_ARGS(&ctx.allocator));
+            IID_PPV_ARGS(&ctx.cmdAllocator));
         if (FAILED(hr))
             return false;
 
-        D3D12_HEAP_PROPERTIES uploadHeapProps = {};
-        uploadHeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+        // Per-frame linear allocator for upload heap (1MB capacity)
+        // CB_SIZE (256) + TRANSFORMS_SIZE (640KB) = ~640KB, 1MB gives headroom
+        static constexpr uint64_t ALLOCATOR_CAPACITY = 1 * 1024 * 1024; // 1MB
+        if (!ctx.uploadAllocator.Initialize(device, ALLOCATOR_CAPACITY))
+            return false;
 
         D3D12_HEAP_PROPERTIES defaultHeapProps = {};
         defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -98,46 +101,6 @@ namespace Renderer
         bufferDesc.MipLevels = 1;
         bufferDesc.SampleDesc.Count = 1;
         bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        // Frame CB (upload heap)
-        {
-            bufferDesc.Width = CB_SIZE;
-            hr = device->CreateCommittedResource(
-                &uploadHeapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &bufferDesc,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                nullptr,
-                IID_PPV_ARGS(&ctx.frameCB));
-            if (FAILED(hr))
-                return false;
-
-            D3D12_RANGE readRange = { 0, 0 };
-            hr = ctx.frameCB->Map(0, &readRange, &ctx.frameCBMapped);
-            if (FAILED(hr))
-                return false;
-
-            ctx.frameCBGpuVA = ctx.frameCB->GetGPUVirtualAddress();
-        }
-
-        // Transforms upload buffer
-        {
-            bufferDesc.Width = TRANSFORMS_SIZE;
-            hr = device->CreateCommittedResource(
-                &uploadHeapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &bufferDesc,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                nullptr,
-                IID_PPV_ARGS(&ctx.transformsUpload));
-            if (FAILED(hr))
-                return false;
-
-            D3D12_RANGE readRange = { 0, 0 };
-            hr = ctx.transformsUpload->Map(0, &readRange, &ctx.transformsUploadMapped);
-            if (FAILED(hr))
-                return false;
-        }
 
         // Transforms default buffer (starts in COPY_DEST for first frame)
         {
@@ -207,18 +170,10 @@ namespace Renderer
         {
             FrameContext& ctx = m_frames[i];
 
-            if (ctx.frameCB && ctx.frameCBMapped)
-                ctx.frameCB->Unmap(0, nullptr);
-            if (ctx.transformsUpload && ctx.transformsUploadMapped)
-                ctx.transformsUpload->Unmap(0, nullptr);
-
-            ctx.frameCB.Reset();
-            ctx.transformsUpload.Reset();
+            ctx.uploadAllocator.Shutdown();
             ctx.transformsDefault.Reset();
-            ctx.allocator.Reset();
+            ctx.cmdAllocator.Reset();
             ctx.fenceValue = 0;
-            ctx.frameCBMapped = nullptr;
-            ctx.transformsUploadMapped = nullptr;
         }
 
         m_fence.Reset();
@@ -238,8 +193,11 @@ namespace Renderer
             WaitForFence(ctx.fenceValue);
         }
 
-        // Reset allocator now that GPU is done with it
-        ctx.allocator->Reset();
+        // Reset command allocator now that GPU is done with it
+        ctx.cmdAllocator->Reset();
+
+        // Reset linear allocator for upload heap (logs offset for diagnostics)
+        ctx.uploadAllocator.Reset();
 
         return ctx;
     }

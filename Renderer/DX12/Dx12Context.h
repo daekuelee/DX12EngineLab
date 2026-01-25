@@ -73,5 +73,13 @@ namespace Renderer
         D3D12_RECT m_scissorRect = {};
 
         bool m_initialized = false;
+
+        // Phase helpers for Render()
+        float UpdateDeltaTime();
+        Allocation UpdateFrameConstants(FrameContext& ctx);
+        Allocation UpdateTransforms(FrameContext& ctx);
+        void RecordBarriersAndCopy(FrameContext& ctx, const Allocation& transformsAlloc);
+        void RecordPasses(FrameContext& ctx, const Allocation& frameCBAlloc, uint32_t srvFrameIndex);
+        void ExecuteAndPresent(FrameContext& ctx);
     };
 }

@@ -133,6 +133,7 @@
     <ClInclude Include="Renderer\DX12\Dx12Context.h" />
     <ClInclude Include="Renderer\DX12\Dx12Debug.h" />
     <ClInclude Include="Renderer\DX12\FrameContextRing.h" />
+    <ClInclude Include="Renderer\DX12\FrameLinearAllocator.h" />
     <ClInclude Include="Renderer\DX12\ShaderLibrary.h" />
     <ClInclude Include="Renderer\DX12\RenderScene.h" />
     <ClInclude Include="Renderer\DX12\ToggleSystem.h" />
@@ -145,6 +146,7 @@
     <ClCompile Include="Renderer\DX12\Dx12Context.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Debug.cpp" />
     <ClCompile Include="Renderer\DX12\FrameContextRing.cpp" />
+    <ClCompile Include="Renderer\DX12\FrameLinearAllocator.cpp" />
     <ClCompile Include="Renderer\DX12\ShaderLibrary.cpp" />
     <ClCompile Include="Renderer\DX12\RenderScene.cpp" />
   </ItemGroup>
