@@ -72,11 +72,29 @@ Curated external references for DX12 development. Re-fetch policy indicates expe
 - **Debug Layer Messages** `[STABLE]`
   https://learn.microsoft.com/en-us/windows/win32/direct3d12/d3d12-debug-layer-reference
 
+**What to Look For:**
+| Message Pattern | Meaning | Fix |
+|-----------------|---------|-----|
+| `COMMAND_LIST_DRAW_*` | Draw call validation error | Check PSO, root sig, descriptors |
+| `CREATERESOURCE_*` | Resource creation failed | Check heap type, alignment, size |
+| `RESOURCE_BARRIER_*` | Invalid barrier | Check before/after states match |
+| `CREATEGRAPHICSPIPELINESTATE_*` | PSO creation failed | Check shader bytecode, root sig match |
+
 ### GPU-Based Validation (GBV)
 - **GBV Documentation** `[STABLE]`
   https://learn.microsoft.com/en-us/windows/win32/direct3d12/gpu-based-validation
-  - Catches: descriptor heap out-of-bounds, uninitialized descriptors, resource state mismatches
   - Enable: `SetEnableGPUBasedValidation(TRUE)` on debug interface
+
+**What GBV Catches:**
+- Descriptor heap index out of range
+- Uninitialized descriptors in heap
+- Resource state mismatches (actual vs declared)
+- Out-of-bounds shader accesses
+
+**What GBV Misses:**
+- Logic errors in shader code
+- Race conditions between command lists
+- CPU-side fence timing issues
 
 ### DRED (Device Removed Extended Data)
 - **DRED Overview** `[STABLE]`
@@ -86,6 +104,12 @@ Curated external references for DX12 development. Re-fetch policy indicates expe
 - **D3D12_DRED_ENABLEMENT** `[STABLE]`
   https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_dred_enablement
 
+**How to Interpret DRED Output:**
+- Auto-breadcrumbs show last N GPU operations before TDR
+- Look for ops marked "in progress" vs "completed" at crash time
+- Page fault address: Compare against resource GPU VAs to identify culprit
+- Cross-reference with PIX capture timeline for full context
+
 ### PIX for Windows
 - **PIX Home** `[CHECK-MONTHLY]`
   https://devblogs.microsoft.com/pix/
@@ -93,6 +117,11 @@ Curated external references for DX12 development. Re-fetch policy indicates expe
   https://devblogs.microsoft.com/pix/download/
   - GPU captures, timing analysis, shader debugging
   - Use for: draw call inspection, descriptor validation, barrier visualization
+
+**Key Views for Descriptor Debugging:**
+- Pipeline State: Shows bound descriptors at each draw
+- Resource view: Verify descriptor points to expected data
+- Barrier view: Timeline of state transitions per resource
 
 ---
 
@@ -108,6 +137,13 @@ Curated external references for DX12 development. Re-fetch policy indicates expe
 - **Sample: D3D12VariableRateShading** `[CHECK-YEARLY]`
   https://github.com/microsoft/DirectX-Graphics-Samples/tree/master/Samples/Desktop/D3D12VariableRateShading
 
+**Quick Invariants:**
+- Query `D3D12_FEATURE_DATA_D3D12_OPTIONS6::VariableShadingRateTier` before use
+- Tier 2 image: format = `R8_UINT`, state = `D3D12_RESOURCE_STATE_SHADING_RATE_SOURCE`
+- Combiners select how per-draw, per-primitive, and image rates combine
+
+**Failure Mode:** Skipping feature query → crash on unsupported hardware
+
 ### Mesh Shaders
 - **Mesh Shader Overview** `[STABLE]`
   https://learn.microsoft.com/en-us/windows/win32/direct3d12/mesh-shaders
@@ -117,6 +153,13 @@ Curated external references for DX12 development. Re-fetch policy indicates expe
   - Replaces: IA + VS + (HS/DS/GS)
 - **Sample: D3D12MeshShaders** `[CHECK-YEARLY]`
   https://github.com/microsoft/DirectX-Graphics-Samples/tree/master/Samples/Desktop/D3D12MeshShaders
+
+**Quick Invariants:**
+- Query `D3D12_FEATURE_DATA_D3D12_OPTIONS7::MeshShaderTier` before use
+- Use `D3D12_MESH_SHADER_PIPELINE_STATE_DESC`, NOT graphics PSO desc
+- DispatchMesh(x,y,z) replaces Draw calls; no IA stage
+
+**Failure Mode:** Using graphics PSO desc → PSO creation fails silently or with confusing error
 
 ### Raytracing (DXR)
 - **DXR Overview** `[STABLE]`
@@ -131,6 +174,14 @@ Curated external references for DX12 development. Re-fetch policy indicates expe
   - Layout must match DispatchRays parameters
 - **Sample: D3D12Raytracing** `[CHECK-YEARLY]`
   https://github.com/microsoft/DirectX-Graphics-Samples/tree/master/Samples/Desktop/D3D12Raytracing
+
+**Quick Invariants:**
+- Query `D3D12_FEATURE_DATA_D3D12_OPTIONS5::RaytracingTier` before use
+- BLAS must be built before TLAS (TLAS references BLAS)
+- SBT record stride must be aligned to `D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT` (32)
+- AS resources: use `D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE` after build
+
+**Failure Mode:** SBT misalignment → GPU hang or garbage output
 
 ---
 

@@ -78,6 +78,25 @@ cmdList->RSSetShadingRate(D3D12_SHADING_RATE_2X2, combiners);
 cmdList->DrawIndexedInstanced(...);
 ```
 
+**Failure Modes:**
+
+| If You Forget | Symptom | Debug Layer Message |
+|---------------|---------|---------------------|
+| Feature support check | Crash on unsupported GPU | None (app crash) |
+| Tier 2 image barrier to SHADING_RATE_SOURCE | Corruption or TDR | `RESOURCE_BARRIER_INVALID_*` |
+| Setting combiners array | Undefined combiner behavior | None (uses defaults) |
+
+**Minimal Microtest:**
+```cpp
+// Verify VRS is working - set 4x4 rate and check pixel size visually
+cmdList->RSSetShadingRate(D3D12_SHADING_RATE_4X4, nullptr);
+// Render colored quad - pixels should be visibly blocky
+```
+
+**Common Mistakes:**
+- Sample uses fixed rate for whole frame; production should use per-region rates
+- Don't forget to reset shading rate between passes if different rates needed
+
 ---
 
 ## Mesh Shaders
@@ -127,6 +146,35 @@ device->CreatePipelineState(&streamDesc, IID_PPV_ARGS(&m_pso));
 - Meshlets: small batches of triangles (typically 64-128 verts, 126 tris)
 - Meshlet buffer: vertex indices + triangle indices + meshlet descriptors
 - Amplification shader can cull meshlets before mesh shader runs
+
+**Failure Modes:**
+
+| If You Forget | Symptom | Debug Layer Message |
+|---------------|---------|---------------------|
+| Use mesh shader PSO desc | PSO creation fails | `CREATEGRAPHICSPIPELINESTATE_*` or silent null |
+| Set visibility to `_MESH`/`_AMPLIFICATION` | Root params not visible | Draw produces garbage |
+| Use DispatchMesh instead of Draw | Nothing renders | `COMMAND_LIST_DRAW_*` |
+| Remove input layout from PSO | PSO creation fails | `CREATEGRAPHICSPIPELINESTATE_IA_*` |
+
+**Minimal Microtest:**
+```cpp
+// Minimal mesh shader - output one triangle
+// MS numthreads(1,1,1), OutputTriangles(1), OutputVertices(3)
+[numthreads(1,1,1)]
+void MSMain(out vertices VertOut verts[3], out indices uint3 tris[1]) {
+    SetMeshOutputCounts(3, 1);
+    verts[0].pos = float4(-0.5, -0.5, 0, 1);
+    verts[1].pos = float4( 0.5, -0.5, 0, 1);
+    verts[2].pos = float4( 0.0,  0.5, 0, 1);
+    tris[0] = uint3(0,1,2);
+}
+// Call: DispatchMesh(1,1,1) - should draw one triangle
+```
+
+**Common Mistakes:**
+- Sample uses fixed meshlet size; production should handle variable geometry
+- Don't copy sample's debug visualization code to production
+- Remember: no index buffer needed, mesh shader owns topology
 
 ---
 
@@ -210,6 +258,32 @@ inputs.NumDescs = 1;
 inputs.pGeometryDescs = &geometryDesc;
 inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
 ```
+
+**Failure Modes:**
+
+| If You Forget | Symptom | Debug Layer Message |
+|---------------|---------|---------------------|
+| Feature support check | DispatchRays crashes | None (app crash) |
+| Build BLAS before TLAS | TLAS build fails/garbage | `BUILDRAYTRACINGACCELERATIONSTRUCTURE_*` |
+| SBT record alignment (32 bytes) | GPU hang or wrong shader | None (silent corruption) |
+| AS barrier after build | Read stale AS data | `RESOURCE_BARRIER_*` |
+| TLAS SRV in shader-visible heap | TraceRay fails | `DESCRIPTOR_*` |
+
+**Minimal Microtest:**
+```cpp
+// Minimal DXR - single triangle BLAS, identity TLAS, solid color output
+// 1. Build BLAS with one triangle
+// 2. Build TLAS with one instance pointing to BLAS
+// 3. SBT: RayGen writes color, Miss writes background, HitGroup writes hit color
+// 4. DispatchRays(1, 1, 1) - single pixel
+// Verify: output UAV has expected color
+```
+
+**Common Mistakes:**
+- Sample uses simple SBT layout; production needs per-material hit groups
+- Don't copy sample's hardcoded shader record sizes
+- BLAS scratch buffer can be released after build completes
+- TLAS must persist for TraceRay calls
 
 ---
 

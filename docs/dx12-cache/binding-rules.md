@@ -166,3 +166,57 @@ OutputDebugStringA("Fence Value: ..., Current: ...");
 | `UAV` | `SetGraphicsRootUnorderedAccessView(index, gpuVA)` |
 | `DESCRIPTOR_TABLE` | `SetGraphicsRootDescriptorTable(index, gpuHandle)` |
 | `32BIT_CONSTANTS` | `SetGraphicsRoot32BitConstants(index, count, data, offset)` |
+
+---
+
+## Debug Layer Message Reference
+
+Common message IDs and what they mean. Full list in MS docs.
+
+| Message ID Pattern | Meaning | Fix |
+|--------------------|---------|-----|
+| `COMMAND_LIST_DRAW_ROOT_SIGNATURE_NOT_SET` | Draw without SetGraphicsRootSignature | Set root sig before draw |
+| `COMMAND_LIST_DRAW_VERTEX_BUFFER_NOT_SET` | Draw without vertex buffer bound | IASetVertexBuffers before draw |
+| `CLEARRENDERTARGETVIEW_MISMATCHINGCLEARVALUE` | Clear color differs from optimized clear | Use resource's optimized clear value |
+| `CREATEGRAPHICSPIPELINESTATE_RENDERTARGETVIEW_NOT_SET` | PSO RTV format mismatch | Match PSO RTVFormats to actual RTVs |
+| `RESOURCE_BARRIER_BEFORE_AFTER_MISMATCH` | StateBefore doesn't match actual state | Track states correctly or use enhanced barriers |
+| `RESOURCE_BARRIER_DUPLICATE_SUBRESOURCE_TRANSITIONS` | Same subresource transitioned twice | Remove duplicate barrier |
+| `GPU_BASED_VALIDATION_DESCRIPTOR_HEAP_INDEX_OUT_OF_BOUNDS` | Shader accessed invalid heap index | Check descriptor table offset |
+| `GPU_BASED_VALIDATION_DESCRIPTOR_UNINITIALIZED` | Shader accessed uninitialized descriptor | CreateSRV/CBV/UAV before use |
+| `GPU_BASED_VALIDATION_RESOURCE_STATE_IMPRECISE` | Resource in wrong state for access | Add barrier before access |
+
+---
+
+## Verification Microtests
+
+### Verify Descriptor is Valid
+```cpp
+// Create descriptor and immediately verify heap index is in range
+UINT descriptorIndex = ...; // your computed index
+UINT heapSize = m_srvHeap->GetDesc().NumDescriptors;
+assert(descriptorIndex < heapSize && "Descriptor index out of heap bounds");
+
+// Log for debugging
+OutputDebugStringA(std::format("Descriptor {} / {} in heap\n",
+    descriptorIndex, heapSize).c_str());
+```
+
+### Verify Barrier Was Applied
+```cpp
+// Before draw, log the expected state
+OutputDebugStringA(std::format("Resource {} expected in state {}\n",
+    resourceName, expectedStateString).c_str());
+
+// After barrier, enable GBV to catch mismatches at runtime
+// GBV will report GPU_BASED_VALIDATION_RESOURCE_STATE_IMPRECISE if wrong
+```
+
+### Verify Root Parameter Binding
+```cpp
+// Before SetGraphicsRootDescriptorTable, verify match
+// Root param at index N must be DESCRIPTOR_TABLE type
+// Log GPU handle being set
+D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = ...;
+OutputDebugStringA(std::format("SetGraphicsRootDescriptorTable({}, 0x{:X})\n",
+    paramIndex, gpuHandle.ptr).c_str());
+```
