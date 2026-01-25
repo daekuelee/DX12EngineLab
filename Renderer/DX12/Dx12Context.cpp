@@ -381,7 +381,7 @@ namespace Renderer
     Allocation Dx12Context::UpdateFrameConstants(FrameContext& ctx)
     {
         // Allocate from per-frame linear allocator
-        Allocation frameCBAlloc = ctx.uploadAllocator.Allocate(CB_SIZE, CBV_ALIGNMENT);
+        Allocation frameCBAlloc = ctx.uploadAllocator.Allocate(CB_SIZE, CBV_ALIGNMENT, "FrameCB");
 
         float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
         XMMATRIX viewProj = BuildFreeCameraViewProj(s_camera, aspect);
@@ -397,7 +397,7 @@ namespace Renderer
     Allocation Dx12Context::UpdateTransforms(FrameContext& ctx)
     {
         // Allocate from per-frame linear allocator
-        Allocation transformsAlloc = ctx.uploadAllocator.Allocate(TRANSFORMS_SIZE, 256);
+        Allocation transformsAlloc = ctx.uploadAllocator.Allocate(TRANSFORMS_SIZE, 256, "Transforms");
 
         float* transforms = static_cast<float*>(transformsAlloc.cpuPtr);
         uint32_t idx = 0;

@@ -1,8 +1,11 @@
 #include "FrameLinearAllocator.h"
 #include <cstdio>
+#include <cassert>
 
 namespace Renderer
 {
+    // Helper: check if value is power-of-two (and non-zero)
+    static inline bool IsPowerOfTwo(uint64_t x) { return x != 0 && (x & (x - 1)) == 0; }
     bool FrameLinearAllocator::Initialize(ID3D12Device* device, uint64_t capacity)
     {
         if (!device || capacity == 0)
@@ -55,15 +58,27 @@ namespace Renderer
         m_offset = 0;
     }
 
-    Allocation FrameLinearAllocator::Allocate(uint64_t size, uint64_t alignment)
+    Allocation FrameLinearAllocator::Allocate(uint64_t size, uint64_t alignment, const char* tag)
     {
+        // Alignment validation: must be non-zero and power-of-two
+        assert(IsPowerOfTwo(alignment) && "Alignment must be non-zero and power-of-two");
+
         // Align offset
         uint64_t alignedOffset = (m_offset + alignment - 1) & ~(alignment - 1);
 
-        // Check for overflow
+        // Check for overflow - HARD FAIL, do not silently continue
         if (alignedOffset + size > m_capacity)
         {
-            OutputDebugStringA("FrameLinearAllocator::Allocate - out of memory!\n");
+            char errBuf[256];
+            sprintf_s(errBuf, "FrameLinearAllocator::Allocate OOM! tag=%s offset=%llu size=%llu cap=%llu\n",
+                      tag ? tag : "?", alignedOffset, size, m_capacity);
+            OutputDebugStringA(errBuf);
+
+#if defined(_DEBUG)
+            __debugbreak();  // Hard fail in Debug - catch this immediately
+#endif
+            // In Release: return invalid allocation that will cause obvious failure
+            // (null cpuPtr will crash on write, which is better than silent corruption)
             return {};
         }
 
@@ -73,6 +88,14 @@ namespace Renderer
         alloc.offset = alignedOffset;
 
         m_offset = alignedOffset + size;
+
+        // Optional allocation logging for proof/debugging
+        if (tag)
+        {
+            char logBuf[128];
+            sprintf_s(logBuf, "ALLOC: %s offset=%llu size=%llu\n", tag, alignedOffset, size);
+            OutputDebugStringA(logBuf);
+        }
 
         return alloc;
     }

@@ -18,7 +18,8 @@ namespace Renderer
     public:
         bool Initialize(ID3D12Device* device, uint64_t capacity);
         void Reset();  // Called in BeginFrame - resets offset to 0
-        Allocation Allocate(uint64_t size, uint64_t alignment = 256);
+        // Allocate with optional debug tag. Hard-fails on OOM in Debug builds.
+        Allocation Allocate(uint64_t size, uint64_t alignment = 256, const char* tag = nullptr);
         void Shutdown();
 
         uint64_t GetOffset() const { return m_offset; }
