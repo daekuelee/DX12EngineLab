@@ -205,6 +205,9 @@ namespace Renderer
 
             ThrowIfFailed(swapChain1.As(&m_swapChain),
                 "Failed to get IDXGISwapChain3\n");
+
+            // Store backbuffer format for ImGui initialization
+            m_backBufferFormat = swapDesc.Format;
         }
 
         // 6. Create RTV descriptor heap
@@ -317,6 +320,14 @@ namespace Renderer
         if (!m_scene.Initialize(m_device.Get(), m_commandQueue.Get()))
         {
             OutputDebugStringA("Failed to initialize render scene\n");
+            return false;
+        }
+
+        // 11b. Initialize ImGui layer
+        if (!m_imguiLayer.Initialize(m_hwnd, m_device.Get(), m_commandQueue.Get(),
+                                      FrameCount, m_backBufferFormat))
+        {
+            OutputDebugStringA("[ImGui] FAILED to initialize\n");
             return false;
         }
 
@@ -605,6 +616,10 @@ namespace Renderer
             drawCalls += 1; // +1 for markers
         }
 
+        // Draw ImGui overlay (last draw before PRESENT barrier)
+        // Safety: ImGui draws after ALL scene draws
+        m_imguiLayer.RecordCommands(m_commandList.Get());
+
         // Transition backbuffer: RENDER_TARGET -> PRESENT
         {
             D3D12_RESOURCE_BARRIER barrier = {};
@@ -679,6 +694,9 @@ namespace Renderer
         ThrowIfFailed(m_commandList->Reset(frameCtx.cmdAllocator.Get(), m_shaderLibrary.GetPSO()),
             "Failed to reset command list\n");
 
+        // Start ImGui frame (NewFrame called here)
+        m_imguiLayer.BeginFrame();
+
         // S7 Proof: stomp_Lifetime - use wrong frame index for SRV (will cause stomp/flicker)
         uint32_t srvFrameIndex = frameResourceIndex;
         if (ToggleSystem::IsStompLifetimeEnabled())
@@ -696,6 +714,10 @@ namespace Renderer
         }
 
         RecordBarriersAndCopy(frameCtx, transformsAlloc);
+
+        // Build ImGui draw data (must be before RecordCommands)
+        m_imguiLayer.RenderHUD();
+
         RecordPasses(frameCtx, frameCBAlloc, srvFrameIndex);
 
         // End CPU timing for command recording
@@ -762,6 +784,9 @@ namespace Renderer
 
         // Shutdown scene
         m_scene.Shutdown();
+
+        // Shutdown ImGui layer
+        m_imguiLayer.Shutdown();
 
         // Shutdown shader library
         m_shaderLibrary.Shutdown();

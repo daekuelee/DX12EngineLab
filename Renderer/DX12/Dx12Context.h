@@ -10,6 +10,7 @@
 #include "RenderScene.h"
 #include "ResourceRegistry.h"
 #include "DescriptorRingAllocator.h"
+#include "ImGuiLayer.h"
 
 namespace Renderer
 {
@@ -70,6 +71,12 @@ namespace Renderer
 
         // Render scene (geometry + transforms)
         RenderScene m_scene;
+
+        // ImGui layer (HUD overlay)
+        ImGuiLayer m_imguiLayer;
+
+        // Backbuffer format (stored for ImGui initialization)
+        DXGI_FORMAT m_backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
         // Command list (shared, reset per-frame with per-frame allocator)
         Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_commandList;

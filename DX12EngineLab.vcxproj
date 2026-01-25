@@ -103,6 +103,7 @@
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -119,6 +120,7 @@
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -140,6 +142,7 @@
     <ClInclude Include="Renderer\DX12\ShaderLibrary.h" />
     <ClInclude Include="Renderer\DX12\RenderScene.h" />
     <ClInclude Include="Renderer\DX12\ToggleSystem.h" />
+    <ClInclude Include="Renderer\DX12\ImGuiLayer.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
@@ -155,6 +158,13 @@
     <ClCompile Include="Renderer\DX12\ResourceRegistry.cpp" />
     <ClCompile Include="Renderer\DX12\ShaderLibrary.cpp" />
     <ClCompile Include="Renderer\DX12\RenderScene.cpp" />
+    <ClCompile Include="Renderer\DX12\ImGuiLayer.cpp" />
+    <ClCompile Include="third_party\imgui\imgui.cpp" />
+    <ClCompile Include="third_party\imgui\imgui_draw.cpp" />
+    <ClCompile Include="third_party\imgui\imgui_tables.cpp" />
+    <ClCompile Include="third_party\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="third_party\imgui\backends\imgui_impl_win32.cpp" />
+    <ClCompile Include="third_party\imgui\backends\imgui_impl_dx12.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="DX12EngineLab.rc" />
