@@ -5,6 +5,7 @@
 #include "DX12EngineLab.h"
 #include "Engine/App.h"
 #include "Renderer/DX12/ToggleSystem.h"
+#include "Renderer/DX12/ImGuiLayer.h"
 #include <cstdio>
 
 #define MAX_LOADSTRING 100
@@ -157,6 +158,9 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 //
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    // Forward all messages to ImGui (ignore return value, do not early-return)
+    Renderer::ImGuiLayer::WndProcHandler(hWnd, message, wParam, lParam);
+
     switch (message)
     {
     case WM_COMMAND:
@@ -186,6 +190,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     case WM_KEYDOWN:
         {
+            // Skip engine key handling if ImGui wants keyboard
+            if (Renderer::ImGuiLayer::WantsKeyboard())
+            {
+                break;
+            }
+
             // 'T' key toggles draw mode (instanced <-> naive)
             if (wParam == 'T')
             {
