@@ -3,6 +3,8 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include "FrameLinearAllocator.h"
+#include "DescriptorRingAllocator.h"
 
 namespace Renderer
 {
@@ -11,17 +13,11 @@ namespace Renderer
     // Per-frame resources that must be fence-gated before reuse
     struct FrameContext
     {
-        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> cmdAllocator;
         uint64_t fenceValue = 0;
 
-        // Frame constant buffer (ViewProj) - upload heap, persistently mapped
-        Microsoft::WRL::ComPtr<ID3D12Resource> frameCB;
-        void* frameCBMapped = nullptr;
-        D3D12_GPU_VIRTUAL_ADDRESS frameCBGpuVA = 0;
-
-        // Transforms buffer - upload heap, persistently mapped
-        Microsoft::WRL::ComPtr<ID3D12Resource> transformsUpload;
-        void* transformsUploadMapped = nullptr;
+        // Per-frame linear allocator for upload heaps (frame CB + transforms)
+        FrameLinearAllocator uploadAllocator;
 
         // Transforms buffer - default heap (GPU reads as SRV)
         Microsoft::WRL::ComPtr<ID3D12Resource> transformsDefault;
@@ -48,8 +44,8 @@ namespace Renderer
         FrameContextRing(const FrameContextRing&) = delete;
         FrameContextRing& operator=(const FrameContextRing&) = delete;
 
-        // Initialize ring with device and descriptor heap
-        bool Initialize(ID3D12Device* device, ID3D12DescriptorHeap* srvHeap, uint32_t srvHeapIncrementSize);
+        // Initialize ring with device and descriptor ring allocator
+        bool Initialize(ID3D12Device* device, DescriptorRingAllocator* descRing);
 
         // Shutdown and release resources
         void Shutdown();
@@ -83,7 +79,6 @@ namespace Renderer
         uint64_t m_fenceCounter = 0;
 
         ID3D12Device* m_device = nullptr; // Non-owning
-        ID3D12DescriptorHeap* m_srvHeap = nullptr; // Non-owning
-        uint32_t m_srvIncrementSize = 0;
+        DescriptorRingAllocator* m_descRing = nullptr; // Non-owning
     };
 }

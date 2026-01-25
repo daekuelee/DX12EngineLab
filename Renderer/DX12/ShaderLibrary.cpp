@@ -21,6 +21,13 @@ namespace Renderer
         if (!device)
             return false;
 
+        // Initialize PSO cache
+        if (!m_psoCache.Initialize(device))
+        {
+            OutputDebugStringA("ShaderLibrary: Failed to initialize PSO cache\n");
+            return false;
+        }
+
         if (!LoadShaders())
         {
             OutputDebugStringA("ShaderLibrary: Failed to load shaders\n");
@@ -39,17 +46,28 @@ namespace Renderer
             return false;
         }
 
+        // Log cache stats after pre-warming
+        m_psoCache.LogStats();
+
         OutputDebugStringA("ShaderLibrary: PSO created successfully\n");
         return true;
     }
 
     void ShaderLibrary::Shutdown()
     {
-        m_pso.Reset();
-        m_floorPso.Reset();
-        m_markerPso.Reset();
+        // Clear non-owning PSO pointers first
+        m_pso = nullptr;
+        m_floorPso = nullptr;
+        m_markerPso = nullptr;
+
+        // Shutdown PSO cache (releases all PSOs)
+        m_psoCache.Shutdown();
+
+        // Release root signatures
         m_rootSignature.Reset();
         m_markerRootSignature.Reset();
+
+        // Release shader blobs
         m_vsBlob.Reset();
         m_psBlob.Reset();
         m_floorVsBlob.Reset();
@@ -194,6 +212,8 @@ namespace Renderer
 
     bool ShaderLibrary::CreatePSO(ID3D12Device* device, DXGI_FORMAT rtvFormat)
     {
+        (void)device; // Using PSOCache instead of direct device calls
+
         // Input layout - just position for now
         D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
@@ -232,7 +252,7 @@ namespace Renderer
         depthStencil.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
         depthStencil.StencilEnable = FALSE;
 
-        // PSO description
+        // PSO description for cube
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
         psoDesc.pRootSignature = m_rootSignature.Get();
         psoDesc.VS = { m_vsBlob->GetBufferPointer(), m_vsBlob->GetBufferSize() };
@@ -248,8 +268,9 @@ namespace Renderer
         psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         psoDesc.SampleDesc.Count = 1;
 
-        HRESULT hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_pso));
-        if (FAILED(hr))
+        // Pre-warm cube PSO via cache
+        m_pso = m_psoCache.GetOrCreate(psoDesc, "cube_main");
+        if (!m_pso)
             return false;
 
         // Create floor PSO with floor-specific VS (no transforms read) and floor PS
@@ -260,8 +281,10 @@ namespace Renderer
         psoDesc.VS = { m_floorVsBlob->GetBufferPointer(), m_floorVsBlob->GetBufferSize() };
         psoDesc.PS = { m_floorPsBlob->GetBufferPointer(), m_floorPsBlob->GetBufferSize() };
         psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-        hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_floorPso));
-        if (FAILED(hr))
+
+        // Pre-warm floor PSO via cache
+        m_floorPso = m_psoCache.GetOrCreate(psoDesc, "floor");
+        if (!m_floorPso)
             return false;
 
         // Restore CullMode for any subsequent PSO creation
@@ -280,7 +303,7 @@ namespace Renderer
             ComPtr<ID3DBlob> signatureBlob;
             ComPtr<ID3DBlob> errorBlob;
 
-            hr = D3D12SerializeVersionedRootSignature(&markerRootSigDesc, &signatureBlob, &errorBlob);
+            HRESULT hr = D3D12SerializeVersionedRootSignature(&markerRootSigDesc, &signatureBlob, &errorBlob);
             if (FAILED(hr))
             {
                 if (errorBlob)
@@ -326,8 +349,9 @@ namespace Renderer
             markerPsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
             markerPsoDesc.SampleDesc.Count = 1;
 
-            hr = device->CreateGraphicsPipelineState(&markerPsoDesc, IID_PPV_ARGS(&m_markerPso));
-            if (FAILED(hr))
+            // Pre-warm marker PSO via cache
+            m_markerPso = m_psoCache.GetOrCreate(markerPsoDesc, "marker");
+            if (!m_markerPso)
                 return false;
         }
 
