@@ -1,11 +1,21 @@
 #include "ShaderLibrary.h"
 #include <d3dcompiler.h>  // For D3DCreateBlob
 #include <fstream>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
 
 namespace Renderer
 {
+    static std::wstring GetExeDirectory()
+    {
+        wchar_t path[MAX_PATH];
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+        std::wstring exePath(path);
+        size_t lastSlash = exePath.find_last_of(L"\\/");
+        return (lastSlash != std::wstring::npos) ? exePath.substr(0, lastSlash + 1) : L"";
+    }
+
     bool ShaderLibrary::Initialize(ID3D12Device* device, DXGI_FORMAT rtvFormat)
     {
         if (!device)
@@ -84,23 +94,25 @@ namespace Renderer
     {
         // Load precompiled shaders from CSO files
         // These are compiled at build time by FXC via vcxproj FxCompile rules
+        // Resolve paths relative to executable directory to handle any working directory
+        std::wstring exeDir = GetExeDirectory();
 
-        if (!LoadCompiledShader(L"shaders/cube_vs.cso", m_vsBlob))
+        if (!LoadCompiledShader((exeDir + L"shaders/cube_vs.cso").c_str(), m_vsBlob))
             return false;
 
-        if (!LoadCompiledShader(L"shaders/cube_ps.cso", m_psBlob))
+        if (!LoadCompiledShader((exeDir + L"shaders/cube_ps.cso").c_str(), m_psBlob))
             return false;
 
-        if (!LoadCompiledShader(L"shaders/floor_vs.cso", m_floorVsBlob))
+        if (!LoadCompiledShader((exeDir + L"shaders/floor_vs.cso").c_str(), m_floorVsBlob))
             return false;
 
-        if (!LoadCompiledShader(L"shaders/floor_ps.cso", m_floorPsBlob))
+        if (!LoadCompiledShader((exeDir + L"shaders/floor_ps.cso").c_str(), m_floorPsBlob))
             return false;
 
-        if (!LoadCompiledShader(L"shaders/marker_vs.cso", m_markerVsBlob))
+        if (!LoadCompiledShader((exeDir + L"shaders/marker_vs.cso").c_str(), m_markerVsBlob))
             return false;
 
-        if (!LoadCompiledShader(L"shaders/marker_ps.cso", m_markerPsBlob))
+        if (!LoadCompiledShader((exeDir + L"shaders/marker_ps.cso").c_str(), m_markerPsBlob))
             return false;
 
         OutputDebugStringA("ShaderLibrary: All shaders loaded from CSO files\n");
