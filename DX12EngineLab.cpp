@@ -5,6 +5,7 @@
 #include "DX12EngineLab.h"
 #include "Engine/App.h"
 #include "Renderer/DX12/ToggleSystem.h"
+#include <cstdio>
 
 #define MAX_LOADSTRING 100
 
@@ -211,6 +212,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             {
                 Renderer::ToggleSystem::ToggleGrid();
                 OutputDebugStringA(Renderer::ToggleSystem::IsGridEnabled() ? "Grid: ON\n" : "Grid: OFF\n");
+            }
+            // 'C' key cycles color mode (FaceDebug -> InstanceID -> Lambert)
+            else if (wParam == 'C')
+            {
+                Renderer::ToggleSystem::CycleColorMode();
+                char buf[64];
+                sprintf_s(buf, "ColorMode = %s\n", Renderer::ToggleSystem::GetColorModeName());
+                OutputDebugStringA(buf);
             }
         }
         break;
