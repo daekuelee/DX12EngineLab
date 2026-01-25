@@ -47,6 +47,26 @@ namespace Renderer
     static CameraPreset s_currentCameraPreset = CameraPreset::A;
     static bool s_camKeyWasDown[3] = { false, false, false }; // Debounce for keys 1, 2, 3
 
+    //-------------------------------------------------------------------------
+    // Free Camera State
+    //-------------------------------------------------------------------------
+    struct FreeCamera
+    {
+        XMFLOAT3 position = {0.0f, 180.0f, -220.0f};  // Start at preset A
+        float yaw = 0.0f;      // Radians, 0 = looking along +Z
+        float pitch = -0.5f;   // Radians, negative = looking down
+        float fovY = XM_PIDIV4;
+        float nearZ = 1.0f;
+        float farZ = 1000.0f;
+        float moveSpeed = 100.0f;   // Units per second
+        float lookSpeed = 1.5f;     // Radians per second
+    };
+
+    static FreeCamera s_camera;
+    static LARGE_INTEGER s_lastTime = {};
+    static LARGE_INTEGER s_frequency = {};
+    static bool s_timerInitialized = false;
+
     static const char* GetCameraPresetName(CameraPreset preset)
     {
         switch (preset)
@@ -70,6 +90,84 @@ namespace Renderer
 #else
         XMMATRIX view = XMMatrixLookAtLH(eye, target, up);
         XMMATRIX proj = XMMatrixPerspectiveFovLH(desc.fovY, aspect, desc.nearZ, desc.farZ);
+#endif
+
+        return XMMatrixMultiply(view, proj);
+    }
+
+    //-------------------------------------------------------------------------
+    // Free Camera Functions
+    //-------------------------------------------------------------------------
+    static void ResetCameraToPreset(CameraPreset preset)
+    {
+        const CameraPresetDesc& desc = kCameraPresets[static_cast<uint32_t>(preset)];
+        s_camera.position = desc.eye;
+        s_camera.fovY = desc.fovY;
+        s_camera.nearZ = desc.nearZ;
+        s_camera.farZ = desc.farZ;
+
+        // Compute yaw/pitch from eye->target direction
+        XMFLOAT3 dir = {
+            desc.target.x - desc.eye.x,
+            desc.target.y - desc.eye.y,
+            desc.target.z - desc.eye.z
+        };
+        s_camera.yaw = atan2f(dir.x, dir.z);
+        s_camera.pitch = atan2f(dir.y, sqrtf(dir.x*dir.x + dir.z*dir.z));
+    }
+
+    static void UpdateFreeCamera(float dt)
+    {
+        // Movement input
+        float moveX = 0.0f, moveY = 0.0f, moveZ = 0.0f;
+        if (GetAsyncKeyState('W') & 0x8000 || GetAsyncKeyState(VK_UP) & 0x8000)    moveZ += 1.0f;
+        if (GetAsyncKeyState('S') & 0x8000 || GetAsyncKeyState(VK_DOWN) & 0x8000)  moveZ -= 1.0f;
+        if (GetAsyncKeyState('A') & 0x8000 || GetAsyncKeyState(VK_LEFT) & 0x8000)  moveX -= 1.0f;
+        if (GetAsyncKeyState('D') & 0x8000 || GetAsyncKeyState(VK_RIGHT) & 0x8000) moveX += 1.0f;
+        if (GetAsyncKeyState(VK_SPACE) & 0x8000)  moveY += 1.0f;
+        if (GetAsyncKeyState(VK_CONTROL) & 0x8000) moveY -= 1.0f;
+
+        // Look input
+        float yawDelta = 0.0f;
+        if (GetAsyncKeyState('Q') & 0x8000) yawDelta -= 1.0f;
+        if (GetAsyncKeyState('E') & 0x8000) yawDelta += 1.0f;
+
+        // Apply yaw
+        s_camera.yaw += yawDelta * s_camera.lookSpeed * dt;
+
+        // Build movement vectors in camera space
+        float cosY = cosf(s_camera.yaw);
+        float sinY = sinf(s_camera.yaw);
+        XMFLOAT3 forward = { sinY, 0, cosY };  // Horizontal forward
+        XMFLOAT3 right = { cosY, 0, -sinY };   // Horizontal right
+
+        float speed = s_camera.moveSpeed * dt;
+        s_camera.position.x += (forward.x * moveZ + right.x * moveX) * speed;
+        s_camera.position.z += (forward.z * moveZ + right.z * moveX) * speed;
+        s_camera.position.y += moveY * speed;
+    }
+
+    static XMMATRIX BuildFreeCameraViewProj(const FreeCamera& cam, float aspect)
+    {
+        // Forward vector from yaw/pitch (RH: -Z is forward at yaw=0)
+        float cosP = cosf(cam.pitch);
+        XMFLOAT3 forward = {
+            sinf(cam.yaw) * cosP,
+            sinf(cam.pitch),
+            cosf(cam.yaw) * cosP
+        };
+
+        XMVECTOR eye = XMLoadFloat3(&cam.position);
+        XMVECTOR fwd = XMLoadFloat3(&forward);
+        XMVECTOR target = XMVectorAdd(eye, fwd);
+        XMVECTOR up = XMVectorSet(0, 1, 0, 0);
+
+#if USE_RIGHT_HANDED
+        XMMATRIX view = XMMatrixLookAtRH(eye, target, up);
+        XMMATRIX proj = XMMatrixPerspectiveFovRH(cam.fovY, aspect, cam.nearZ, cam.farZ);
+#else
+        XMMATRIX view = XMMatrixLookAtLH(eye, target, up);
+        XMMATRIX proj = XMMatrixPerspectiveFovLH(cam.fovY, aspect, cam.nearZ, cam.farZ);
 #endif
 
         return XMMatrixMultiply(view, proj);
@@ -326,6 +424,12 @@ namespace Renderer
         m_frameId = 0;
         m_initialized = true;
 
+        // 14. Initialize free camera timer and reset to preset A
+        QueryPerformanceFrequency(&s_frequency);
+        QueryPerformanceCounter(&s_lastTime);
+        s_timerInitialized = true;
+        ResetCameraToPreset(CameraPreset::A);
+
         OutputDebugStringA("Dx12Context initialized successfully\n");
         return true;
     }
@@ -335,7 +439,22 @@ namespace Renderer
         if (!m_initialized)
             return;
 
-        // 0. Handle camera preset hotkeys (1, 2, 3) with debounce
+        // 0. Calculate delta time
+        float dt = 0.0f;
+        {
+            LARGE_INTEGER currentTime;
+            QueryPerformanceCounter(&currentTime);
+            if (s_timerInitialized && s_frequency.QuadPart > 0)
+            {
+                dt = static_cast<float>(currentTime.QuadPart - s_lastTime.QuadPart) /
+                     static_cast<float>(s_frequency.QuadPart);
+                // Clamp to avoid huge jumps (e.g., after breakpoint)
+                if (dt > 0.1f) dt = 0.1f;
+            }
+            s_lastTime = currentTime;
+        }
+
+        // 0a. Handle camera preset hotkeys (1, 2, 3) with debounce - resets free camera
         {
             const int keys[] = { '1', '2', '3' };
             const CameraPreset presets[] = { CameraPreset::A, CameraPreset::B, CameraPreset::C };
@@ -346,17 +465,20 @@ namespace Renderer
                 if (isDown && !s_camKeyWasDown[i])
                 {
                     s_currentCameraPreset = presets[i];
-                    const CameraPresetDesc& desc = kCameraPresets[static_cast<uint32_t>(s_currentCameraPreset)];
+                    ResetCameraToPreset(presets[i]);
                     char buf[128];
-                    sprintf_s(buf, "CAM: preset=%s eye=(%.0f,%.0f,%.0f) fov=%.0fdeg\n",
+                    sprintf_s(buf, "CAM: reset to preset=%s pos=(%.0f,%.0f,%.0f) yaw=%.2f pitch=%.2f\n",
                         GetCameraPresetName(s_currentCameraPreset),
-                        desc.eye.x, desc.eye.y, desc.eye.z,
-                        XMConvertToDegrees(desc.fovY));
+                        s_camera.position.x, s_camera.position.y, s_camera.position.z,
+                        s_camera.yaw, s_camera.pitch);
                     OutputDebugStringA(buf);
                 }
                 s_camKeyWasDown[i] = isDown;
             }
         }
+
+        // 0b. Update free camera from input
+        UpdateFreeCamera(dt);
 
         // 1. Begin frame - get fence-gated frame context using monotonic frameId
         uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
@@ -365,12 +487,11 @@ namespace Renderer
         // 2. Get backbuffer index (separate from frame resource index!)
         uint32_t backBufferIndex = GetBackBufferIndex();
 
-        // 3. Update ViewProj constant buffer (camera preset + DirectXMath)
+        // 3. Update ViewProj constant buffer (free camera)
         {
             float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
-            const CameraPresetDesc& camDesc = kCameraPresets[static_cast<uint32_t>(s_currentCameraPreset)];
 
-            XMMATRIX viewProj = BuildViewProj(camDesc, aspect);
+            XMMATRIX viewProj = BuildFreeCameraViewProj(s_camera, aspect);
 
             // DirectXMath uses row-major, HLSL row_major matches - no transpose needed
             XMFLOAT4X4 vpMatrix;
