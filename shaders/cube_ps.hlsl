@@ -20,5 +20,15 @@ float4 PSMain(PSInput pin, uint primID : SV_PrimitiveID) : SV_Target
     };
 
     uint faceIndex = (primID % 12) / 2;  // 12 triangles per cube instance
-    return float4(faceDebugColors[faceIndex], 1.0);
+    float3 baseColor = faceDebugColors[faceIndex];
+
+    // Anti-alias edges using world position derivatives
+    float3 worldFrac = frac(pin.WorldPos);
+    float3 edgeDist = min(worldFrac, 1.0 - worldFrac);
+    float3 fw = fwidth(pin.WorldPos);
+    float edgeFactor = smoothstep(0.0, fw.x * 2.0, min(edgeDist.x, edgeDist.z));
+
+    // Darken edges slightly to break up aliasing
+    float3 finalColor = baseColor * lerp(0.7, 1.0, edgeFactor);
+    return float4(finalColor, 1.0);
 }

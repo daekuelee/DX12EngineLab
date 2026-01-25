@@ -46,9 +46,15 @@ namespace Renderer
         static void SetGridEnabled(bool enabled) { s_gridEnabled = enabled; }
         static void ToggleGrid() { s_gridEnabled = !s_gridEnabled; }
 
+        // Marker visibility toggle (corner markers for debug)
+        static bool IsMarkersEnabled() { return s_markersEnabled; }
+        static void SetMarkersEnabled(bool enabled) { s_markersEnabled = enabled; }
+        static void ToggleMarkers() { s_markersEnabled = !s_markersEnabled; }
+
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
         static inline bool s_gridEnabled = true;
+        static inline bool s_markersEnabled = false;  // OFF by default
 
         // Diagnostic flags (for S7 proof toggles)
         static inline bool s_sentinelInstance0 = false;

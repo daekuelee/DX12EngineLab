@@ -704,10 +704,13 @@ namespace Renderer
         }
 
         // 15b. Draw corner markers (visual diagnostic - pass-through VS, no transforms)
-        m_commandList->SetGraphicsRootSignature(m_shaderLibrary.GetMarkerRootSignature());
-        m_commandList->SetPipelineState(m_shaderLibrary.GetMarkerPSO());
-        m_scene.RecordDrawMarkers(m_commandList.Get());
-        drawCalls += 1; // +1 for markers
+        if (ToggleSystem::IsMarkersEnabled())
+        {
+            m_commandList->SetGraphicsRootSignature(m_shaderLibrary.GetMarkerRootSignature());
+            m_commandList->SetPipelineState(m_shaderLibrary.GetMarkerPSO());
+            m_scene.RecordDrawMarkers(m_commandList.Get());
+            drawCalls += 1; // +1 for markers
+        }
 
         // 16. Transition backbuffer: RENDER_TARGET -> PRESENT
         {
