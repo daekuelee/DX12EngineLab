@@ -1,196 +1,29 @@
 #include "ShaderLibrary.h"
-#include "RenderConfig.h"
-#include <d3dcompiler.h>
-#include <cstring>
+#include <d3dcompiler.h>  // For D3DCreateBlob
+#include <fstream>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
 
 namespace Renderer
 {
-#if MICROTEST_MODE
-    // ========================================================================
-    // MICROTEST MODE: ByteAddressBuffer + color sentinel (diagnostic)
-    // ========================================================================
-    static const char* kVertexShader = R"(
-cbuffer FrameCB : register(b0, space0)
-{
-    row_major float4x4 ViewProj;
-};
-
-ByteAddressBuffer TransformsRaw : register(t0, space0);
-
-struct VSIn { float3 Pos : POSITION; };
-struct VSOut
-{
-    float4 Pos : SV_Position;
-    nointerpolation float4 Color : COLOR;
-};
-
-VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
-{
-    VSOut o;
-
-    // Microtest A: compute grid from SV_InstanceID (known-good)
-    uint gx = iid % 100;
-    uint gz = iid / 100;
-    float tx = float(gx) * 2.0f - 99.0f;
-    float tz = float(gz) * 2.0f - 99.0f;
-    float3 worldPos = vin.Pos + float3(tx, 0.0f, tz);
-    o.Pos = mul(float4(worldPos, 1.0), ViewProj);
-
-    // B-2: Read matrix from raw SRV and check translation
-    uint byteOffset = iid * 64;
-    float4 row3 = asfloat(TransformsRaw.Load4(byteOffset + 48));
-
-    float epsilon = 0.5f;
-    bool match = (abs(row3.x - tx) < epsilon) && (abs(row3.z - tz) < epsilon);
-
-    o.Color = match ? float4(0.0, 1.0, 0.0, 1.0) : float4(1.0, 0.0, 0.0, 1.0);
-    return o;
-}
-)";
-
-    static const char* kPixelShader = R"(
-struct PSIn
-{
-    float4 Pos : SV_Position;
-    nointerpolation float4 Color : COLOR;
-};
-
-float4 PSMain(PSIn pin) : SV_Target
-{
-    return pin.Color;
-}
-)";
-
-#else
-    // ========================================================================
-    // PRODUCTION MODE: StructuredBuffer with row_major transforms
-    // ========================================================================
-    static const char* kVertexShader = R"(
-cbuffer FrameCB : register(b0, space0)
-{
-    row_major float4x4 ViewProj;
-};
-
-cbuffer InstanceCB : register(b1, space0)
-{
-    uint InstanceOffset;
-};
-
-struct TransformData
-{
-    row_major float4x4 M;
-};
-StructuredBuffer<TransformData> Transforms : register(t0, space0);
-
-struct VSIn { float3 Pos : POSITION; };
-struct VSOut
-{
-    float4 Pos : SV_Position;
-    float3 WorldPos : TEXCOORD0;
-};
-
-VSOut VSMain(VSIn vin, uint iid : SV_InstanceID)
-{
-    VSOut o;
-    float4x4 world = Transforms[iid + InstanceOffset].M;
-    float3 worldPos = mul(float4(vin.Pos, 1.0), world).xyz;
-    o.Pos = mul(float4(worldPos, 1.0), ViewProj);
-    o.WorldPos = worldPos;
-    return o;
-}
-)";
-
-    static const char* kPixelShader = R"(
-struct PSIn
-{
-    float4 Pos : SV_Position;
-    float3 WorldPos : TEXCOORD0;
-};
-
-float4 PSMain(PSIn pin, uint primID : SV_PrimitiveID) : SV_Target
-{
-    // DEBUG MODE: Face-based colors for visual verification
-    // Order matches index buffer: -Z, +Z, -X, +X, +Y, -Y
-    static const float3 faceDebugColors[6] = {
-        float3(0, 1, 0),      // 0: -Z (front): Green
-        float3(1, 1, 0),      // 1: +Z (back): Yellow
-        float3(0, 0, 1),      // 2: -X (left): Blue
-        float3(1, 0.5, 0),    // 3: +X (right): Orange
-        float3(1, 0, 0),      // 4: +Y (top): Red
-        float3(0, 1, 1),      // 5: -Y (bottom): Cyan
-    };
-
-    uint faceIndex = (primID % 12) / 2;  // 12 triangles per cube instance
-    return float4(faceDebugColors[faceIndex], 1.0);
-}
-)";
-#endif
-
-    static const char* kFloorPixelShader = R"(
-float4 PSFloor() : SV_Target
-{
-    // Cool gray floor contrasts with warm red/orange cubes
-    return float4(0.35, 0.40, 0.45, 1.0);
-}
-)";
-
-    // Floor vertex shader - does NOT read transforms, just applies ViewProj directly
-    // This fixes z-fighting: floor no longer shares cube VS that reads Transforms[iid]
-    static const char* kFloorVertexShader = R"(
-cbuffer FrameCB : register(b0, space0)
-{
-    row_major float4x4 ViewProj;
-};
-
-struct VSIn { float3 Pos : POSITION; };
-struct VSOut { float4 Pos : SV_Position; };
-
-VSOut VSFloor(VSIn vin)
-{
-    VSOut o;
-    o.Pos = mul(float4(vin.Pos, 1.0), ViewProj);
-    return o;
-}
-)";
-
-    // Marker shaders - pass-through VS (vertices already in NDC), solid color PS
-    static const char* kMarkerVertexShader = R"(
-struct VSIn
-{
-    float3 Pos : POSITION;
-};
-
-struct VSOut
-{
-    float4 Pos : SV_Position;
-};
-
-VSOut VSMarker(VSIn vin)
-{
-    VSOut o;
-    // Pass-through: vertices are already in clip space (NDC)
-    o.Pos = float4(vin.Pos, 1.0);
-    return o;
-}
-)";
-
-    static const char* kMarkerPixelShader = R"(
-float4 PSMarker() : SV_Target
-{
-    return float4(1.0, 0.0, 1.0, 1.0); // Magenta for visibility
-}
-)";
+    static std::wstring GetExeDirectory()
+    {
+        wchar_t path[MAX_PATH];
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+        std::wstring exePath(path);
+        size_t lastSlash = exePath.find_last_of(L"\\/");
+        return (lastSlash != std::wstring::npos) ? exePath.substr(0, lastSlash + 1) : L"";
+    }
 
     bool ShaderLibrary::Initialize(ID3D12Device* device, DXGI_FORMAT rtvFormat)
     {
         if (!device)
             return false;
 
-        if (!CompileShaders())
+        if (!LoadShaders())
         {
-            OutputDebugStringA("ShaderLibrary: Failed to compile shaders\n");
+            OutputDebugStringA("ShaderLibrary: Failed to load shaders\n");
             return false;
         }
 
@@ -225,159 +58,64 @@ float4 PSMarker() : SV_Target
         m_markerPsBlob.Reset();
     }
 
-    bool ShaderLibrary::CompileShaders()
+    bool ShaderLibrary::LoadCompiledShader(const wchar_t* path, ComPtr<ID3DBlob>& outBlob)
     {
-        UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-        compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-
-        ComPtr<ID3DBlob> errorBlob;
-
-        // Compile vertex shader
-        HRESULT hr = D3DCompile(
-            kVertexShader,
-            strlen(kVertexShader),
-            "VSMain",
-            nullptr,
-            nullptr,
-            "VSMain",
-            "vs_5_1",
-            compileFlags,
-            0,
-            &m_vsBlob,
-            &errorBlob);
-
-        if (FAILED(hr))
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file.is_open())
         {
-            if (errorBlob)
-            {
-                OutputDebugStringA("VS compile error: ");
-                OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
-            }
+            OutputDebugStringA("Failed to open shader file: ");
+            OutputDebugStringW(path);
+            OutputDebugStringA("\n");
             return false;
         }
 
-        // Compile pixel shader
-        hr = D3DCompile(
-            kPixelShader,
-            strlen(kPixelShader),
-            "PSMain",
-            nullptr,
-            nullptr,
-            "PSMain",
-            "ps_5_1",
-            compileFlags,
-            0,
-            &m_psBlob,
-            &errorBlob);
+        std::streamsize size = file.tellg();
+        file.seekg(0, std::ios::beg);
 
+        // Create a blob to hold the shader bytecode
+        HRESULT hr = D3DCreateBlob(static_cast<SIZE_T>(size), &outBlob);
         if (FAILED(hr))
         {
-            if (errorBlob)
-            {
-                OutputDebugStringA("PS compile error: ");
-                OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
-            }
+            OutputDebugStringA("Failed to create blob for shader\n");
             return false;
         }
 
-        // Compile floor pixel shader
-        hr = D3DCompile(
-            kFloorPixelShader,
-            strlen(kFloorPixelShader),
-            "PSFloor",
-            nullptr,
-            nullptr,
-            "PSFloor",
-            "ps_5_1",
-            compileFlags,
-            0,
-            &m_floorPsBlob,
-            &errorBlob);
-
-        if (FAILED(hr))
+        if (!file.read(static_cast<char*>(outBlob->GetBufferPointer()), size))
         {
-            if (errorBlob)
-            {
-                OutputDebugStringA("Floor PS compile error: ");
-                OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
-            }
+            OutputDebugStringA("Failed to read shader file\n");
+            outBlob.Reset();
             return false;
         }
 
-        // Compile floor vertex shader (no transforms, just ViewProj)
-        hr = D3DCompile(
-            kFloorVertexShader,
-            strlen(kFloorVertexShader),
-            "VSFloor",
-            nullptr,
-            nullptr,
-            "VSFloor",
-            "vs_5_1",
-            compileFlags,
-            0,
-            &m_floorVsBlob,
-            &errorBlob);
+        return true;
+    }
 
-        if (FAILED(hr))
-        {
-            if (errorBlob)
-            {
-                OutputDebugStringA("Floor VS compile error: ");
-                OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
-            }
+    bool ShaderLibrary::LoadShaders()
+    {
+        // Load precompiled shaders from CSO files
+        // These are compiled at build time by FXC via vcxproj FxCompile rules
+        // Resolve paths relative to executable directory to handle any working directory
+        std::wstring exeDir = GetExeDirectory();
+
+        if (!LoadCompiledShader((exeDir + L"shaders/cube_vs.cso").c_str(), m_vsBlob))
             return false;
-        }
 
-        // Compile marker vertex shader
-        hr = D3DCompile(
-            kMarkerVertexShader,
-            strlen(kMarkerVertexShader),
-            "VSMarker",
-            nullptr,
-            nullptr,
-            "VSMarker",
-            "vs_5_1",
-            compileFlags,
-            0,
-            &m_markerVsBlob,
-            &errorBlob);
-
-        if (FAILED(hr))
-        {
-            if (errorBlob)
-            {
-                OutputDebugStringA("Marker VS compile error: ");
-                OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
-            }
+        if (!LoadCompiledShader((exeDir + L"shaders/cube_ps.cso").c_str(), m_psBlob))
             return false;
-        }
 
-        // Compile marker pixel shader
-        hr = D3DCompile(
-            kMarkerPixelShader,
-            strlen(kMarkerPixelShader),
-            "PSMarker",
-            nullptr,
-            nullptr,
-            "PSMarker",
-            "ps_5_1",
-            compileFlags,
-            0,
-            &m_markerPsBlob,
-            &errorBlob);
-
-        if (FAILED(hr))
-        {
-            if (errorBlob)
-            {
-                OutputDebugStringA("Marker PS compile error: ");
-                OutputDebugStringA(static_cast<const char*>(errorBlob->GetBufferPointer()));
-            }
+        if (!LoadCompiledShader((exeDir + L"shaders/floor_vs.cso").c_str(), m_floorVsBlob))
             return false;
-        }
 
+        if (!LoadCompiledShader((exeDir + L"shaders/floor_ps.cso").c_str(), m_floorPsBlob))
+            return false;
+
+        if (!LoadCompiledShader((exeDir + L"shaders/marker_vs.cso").c_str(), m_markerVsBlob))
+            return false;
+
+        if (!LoadCompiledShader((exeDir + L"shaders/marker_ps.cso").c_str(), m_markerPsBlob))
+            return false;
+
+        OutputDebugStringA("ShaderLibrary: All shaders loaded from CSO files\n");
         return true;
     }
 
@@ -415,6 +153,13 @@ float4 PSMarker() : SV_Target
         rootParams[RP_InstanceOffset].Constants.RegisterSpace = 0;
         rootParams[RP_InstanceOffset].Constants.Num32BitValues = 1;
         rootParams[RP_InstanceOffset].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+        // RP3: Debug constants (b2 space0) - ColorMode + padding (4 DWORDs)
+        rootParams[RP_DebugCB].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        rootParams[RP_DebugCB].Constants.ShaderRegister = 2;  // b2
+        rootParams[RP_DebugCB].Constants.RegisterSpace = 0;
+        rootParams[RP_DebugCB].Constants.Num32BitValues = 4;  // uint + 3 pad
+        rootParams[RP_DebugCB].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSigDesc = {};
         rootSigDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;

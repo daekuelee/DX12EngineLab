@@ -1,5 +1,6 @@
 #include "Dx12Context.h"
 #include "Dx12Debug.h"
+#include "ShaderLibrary.h"
 #include "ToggleSystem.h"
 #include <cstdio>
 #include <DirectXMath.h>
@@ -14,62 +15,77 @@ using Microsoft::WRL::ComPtr;
 namespace Renderer
 {
     //-------------------------------------------------------------------------
-    // Camera Presets
+    // Free Camera State
     //-------------------------------------------------------------------------
-    enum class CameraPreset : uint32_t
+    struct FreeCamera
     {
-        A = 0,  // Default - 3/4 isometric-ish
-        B = 1,  // Closer / more dramatic depth
-        C = 2,  // Higher / calmer / overview
-        Count
+        XMFLOAT3 position = {0.0f, 180.0f, -220.0f};  // Start at preset A
+        float yaw = 0.0f;      // Radians, 0 = looking along +Z
+        float pitch = -0.5f;   // Radians, negative = looking down
+        float fovY = XM_PIDIV4;
+        float nearZ = 1.0f;
+        float farZ = 1000.0f;
+        float moveSpeed = 100.0f;   // Units per second
+        float lookSpeed = 1.5f;     // Radians per second
     };
 
-    struct CameraPresetDesc
-    {
-        XMFLOAT3 eye;
-        XMFLOAT3 target;
-        XMFLOAT3 up;
-        float fovY;     // radians
-        float nearZ;
-        float farZ;
-    };
+    static FreeCamera s_camera;
+    static LARGE_INTEGER s_lastTime = {};
+    static LARGE_INTEGER s_frequency = {};
+    static bool s_timerInitialized = false;
 
-    static const CameraPresetDesc kCameraPresets[] =
+    static void UpdateFreeCamera(float dt)
     {
-        // Preset A (Default - 3/4 isometric-ish)
-        { {0.0f, 180.0f, -220.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, XM_PIDIV4, 1.0f, 1000.0f },
-        // Preset B (Closer / more dramatic depth)
-        { {0.0f, 120.0f, -160.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, XMConvertToRadians(55.0f), 0.5f, 800.0f },
-        // Preset C (Higher / calmer / overview)
-        { {0.0f, 260.0f, -320.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, XMConvertToRadians(40.0f), 2.0f, 1500.0f },
-    };
+        // Movement input
+        float moveX = 0.0f, moveY = 0.0f, moveZ = 0.0f;
+        if (GetAsyncKeyState('W') & 0x8000 || GetAsyncKeyState(VK_UP) & 0x8000)    moveZ += 1.0f;
+        if (GetAsyncKeyState('S') & 0x8000 || GetAsyncKeyState(VK_DOWN) & 0x8000)  moveZ -= 1.0f;
+        if (GetAsyncKeyState('A') & 0x8000 || GetAsyncKeyState(VK_LEFT) & 0x8000)  moveX -= 1.0f;
+        if (GetAsyncKeyState('D') & 0x8000 || GetAsyncKeyState(VK_RIGHT) & 0x8000) moveX += 1.0f;
+        if (GetAsyncKeyState(VK_SPACE) & 0x8000)  moveY += 1.0f;
+        if (GetAsyncKeyState(VK_CONTROL) & 0x8000) moveY -= 1.0f;
 
-    static CameraPreset s_currentCameraPreset = CameraPreset::A;
-    static bool s_camKeyWasDown[3] = { false, false, false }; // Debounce for keys 1, 2, 3
+        // Look input
+        float yawDelta = 0.0f;
+        if (GetAsyncKeyState('Q') & 0x8000) yawDelta -= 1.0f;
+        if (GetAsyncKeyState('E') & 0x8000) yawDelta += 1.0f;
 
-    static const char* GetCameraPresetName(CameraPreset preset)
-    {
-        switch (preset)
-        {
-            case CameraPreset::A: return "A";
-            case CameraPreset::B: return "B";
-            case CameraPreset::C: return "C";
-            default: return "?";
-        }
+        // Apply yaw
+        s_camera.yaw += yawDelta * s_camera.lookSpeed * dt;
+
+        // Build movement vectors in camera space
+        float cosY = cosf(s_camera.yaw);
+        float sinY = sinf(s_camera.yaw);
+        XMFLOAT3 forward = { sinY, 0, cosY };  // Horizontal forward
+        XMFLOAT3 right = { cosY, 0, -sinY };   // Horizontal right
+
+        float speed = s_camera.moveSpeed * dt;
+        s_camera.position.x += (forward.x * moveZ + right.x * moveX) * speed;
+        s_camera.position.z += (forward.z * moveZ + right.z * moveX) * speed;
+        s_camera.position.y += moveY * speed;
     }
 
-    static XMMATRIX BuildViewProj(const CameraPresetDesc& desc, float aspect)
+    static XMMATRIX BuildFreeCameraViewProj(const FreeCamera& cam, float aspect)
     {
-        XMVECTOR eye = XMLoadFloat3(&desc.eye);
-        XMVECTOR target = XMLoadFloat3(&desc.target);
-        XMVECTOR up = XMLoadFloat3(&desc.up);
+        // Forward vector from yaw/pitch (RH: -Z is forward at yaw=0)
+        float cosP = cosf(cam.pitch);
+        XMFLOAT3 forward = {
+            sinf(cam.yaw) * cosP,
+            sinf(cam.pitch),
+            cosf(cam.yaw) * cosP
+        };
+
+        XMVECTOR eye = XMLoadFloat3(&cam.position);
+        XMVECTOR fwd = XMLoadFloat3(&forward);
+        XMVECTOR target = XMVectorAdd(eye, fwd);
+        XMVECTOR up = XMVectorSet(0, 1, 0, 0);
 
 #if USE_RIGHT_HANDED
         XMMATRIX view = XMMatrixLookAtRH(eye, target, up);
-        XMMATRIX proj = XMMatrixPerspectiveFovRH(desc.fovY, aspect, desc.nearZ, desc.farZ);
+        XMMATRIX proj = XMMatrixPerspectiveFovRH(cam.fovY, aspect, cam.nearZ, cam.farZ);
 #else
         XMMATRIX view = XMMatrixLookAtLH(eye, target, up);
-        XMMATRIX proj = XMMatrixPerspectiveFovLH(desc.fovY, aspect, desc.nearZ, desc.farZ);
+        XMMATRIX proj = XMMatrixPerspectiveFovLH(cam.fovY, aspect, cam.nearZ, cam.farZ);
 #endif
 
         return XMMatrixMultiply(view, proj);
@@ -326,6 +342,11 @@ namespace Renderer
         m_frameId = 0;
         m_initialized = true;
 
+        // 14. Initialize free camera timer
+        QueryPerformanceFrequency(&s_frequency);
+        QueryPerformanceCounter(&s_lastTime);
+        s_timerInitialized = true;
+
         OutputDebugStringA("Dx12Context initialized successfully\n");
         return true;
     }
@@ -335,28 +356,23 @@ namespace Renderer
         if (!m_initialized)
             return;
 
-        // 0. Handle camera preset hotkeys (1, 2, 3) with debounce
+        // 0. Calculate delta time
+        float dt = 0.0f;
         {
-            const int keys[] = { '1', '2', '3' };
-            const CameraPreset presets[] = { CameraPreset::A, CameraPreset::B, CameraPreset::C };
-
-            for (int i = 0; i < 3; ++i)
+            LARGE_INTEGER currentTime;
+            QueryPerformanceCounter(&currentTime);
+            if (s_timerInitialized && s_frequency.QuadPart > 0)
             {
-                bool isDown = (GetAsyncKeyState(keys[i]) & 0x8000) != 0;
-                if (isDown && !s_camKeyWasDown[i])
-                {
-                    s_currentCameraPreset = presets[i];
-                    const CameraPresetDesc& desc = kCameraPresets[static_cast<uint32_t>(s_currentCameraPreset)];
-                    char buf[128];
-                    sprintf_s(buf, "CAM: preset=%s eye=(%.0f,%.0f,%.0f) fov=%.0fdeg\n",
-                        GetCameraPresetName(s_currentCameraPreset),
-                        desc.eye.x, desc.eye.y, desc.eye.z,
-                        XMConvertToDegrees(desc.fovY));
-                    OutputDebugStringA(buf);
-                }
-                s_camKeyWasDown[i] = isDown;
+                dt = static_cast<float>(currentTime.QuadPart - s_lastTime.QuadPart) /
+                     static_cast<float>(s_frequency.QuadPart);
+                // Clamp to avoid huge jumps (e.g., after breakpoint)
+                if (dt > 0.1f) dt = 0.1f;
             }
+            s_lastTime = currentTime;
         }
+
+        // 0a. Update free camera from input
+        UpdateFreeCamera(dt);
 
         // 1. Begin frame - get fence-gated frame context using monotonic frameId
         uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
@@ -365,12 +381,11 @@ namespace Renderer
         // 2. Get backbuffer index (separate from frame resource index!)
         uint32_t backBufferIndex = GetBackBufferIndex();
 
-        // 3. Update ViewProj constant buffer (camera preset + DirectXMath)
+        // 3. Update ViewProj constant buffer (free camera)
         {
             float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
-            const CameraPresetDesc& camDesc = kCameraPresets[static_cast<uint32_t>(s_currentCameraPreset)];
 
-            XMMATRIX viewProj = BuildViewProj(camDesc, aspect);
+            XMMATRIX viewProj = BuildFreeCameraViewProj(s_camera, aspect);
 
             // DirectXMath uses row-major, HLSL row_major matches - no transpose needed
             XMFLOAT4X4 vpMatrix;
@@ -540,6 +555,11 @@ namespace Renderer
         if (ToggleSystem::IsGridEnabled())
         {
             m_commandList->SetPipelineState(m_shaderLibrary.GetPSO());
+
+            // Set color mode constant (RP_DebugCB = b2)
+            uint32_t colorMode = static_cast<uint32_t>(ToggleSystem::GetColorMode());
+            m_commandList->SetGraphicsRoot32BitConstants(RP_DebugCB, 1, &colorMode, 0);
+
             if (ToggleSystem::GetDrawMode() == DrawMode::Instanced)
             {
                 uint32_t zero = 0;
@@ -583,10 +603,13 @@ namespace Renderer
         }
 
         // 15b. Draw corner markers (visual diagnostic - pass-through VS, no transforms)
-        m_commandList->SetGraphicsRootSignature(m_shaderLibrary.GetMarkerRootSignature());
-        m_commandList->SetPipelineState(m_shaderLibrary.GetMarkerPSO());
-        m_scene.RecordDrawMarkers(m_commandList.Get());
-        drawCalls += 1; // +1 for markers
+        if (ToggleSystem::IsMarkersEnabled())
+        {
+            m_commandList->SetGraphicsRootSignature(m_shaderLibrary.GetMarkerRootSignature());
+            m_commandList->SetPipelineState(m_shaderLibrary.GetMarkerPSO());
+            m_scene.RecordDrawMarkers(m_commandList.Get());
+            drawCalls += 1; // +1 for markers
+        }
 
         // 16. Transition backbuffer: RENDER_TARGET -> PRESENT
         {

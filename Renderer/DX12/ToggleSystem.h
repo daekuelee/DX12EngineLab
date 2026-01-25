@@ -11,6 +11,14 @@ namespace Renderer
         Naive       // 10k draw calls with 1 instance each
     };
 
+    // Color modes (must match shader COLOR_MODE_* constants)
+    enum class ColorMode : uint32_t
+    {
+        FaceDebug = 0,   // Face colors by SV_PrimitiveID
+        InstanceID = 1,  // Stable hue per instance (golden ratio hash)
+        Lambert = 2      // Simple directional lighting (gray diffuse)
+    };
+
     // Global toggle system for runtime mode switching and diagnostics
     class ToggleSystem
     {
@@ -27,6 +35,26 @@ namespace Renderer
         static const char* GetDrawModeName()
         {
             return (s_drawMode == DrawMode::Instanced) ? "instanced" : "naive";
+        }
+
+        // Current color mode
+        static ColorMode GetColorMode() { return s_colorMode; }
+        static void SetColorMode(ColorMode mode) { s_colorMode = mode; }
+        static void CycleColorMode()
+        {
+            s_colorMode = static_cast<ColorMode>((static_cast<uint32_t>(s_colorMode) + 1) % 3);
+        }
+
+        // Get color mode name for logging
+        static const char* GetColorModeName()
+        {
+            switch (s_colorMode)
+            {
+                case ColorMode::FaceDebug: return "face";
+                case ColorMode::InstanceID: return "instance";
+                case ColorMode::Lambert: return "lambert";
+                default: return "unknown";
+            }
         }
 
         // Diagnostic toggles (S7)
@@ -46,9 +74,16 @@ namespace Renderer
         static void SetGridEnabled(bool enabled) { s_gridEnabled = enabled; }
         static void ToggleGrid() { s_gridEnabled = !s_gridEnabled; }
 
+        // Marker visibility toggle (corner markers for debug)
+        static bool IsMarkersEnabled() { return s_markersEnabled; }
+        static void SetMarkersEnabled(bool enabled) { s_markersEnabled = enabled; }
+        static void ToggleMarkers() { s_markersEnabled = !s_markersEnabled; }
+
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
+        static inline ColorMode s_colorMode = ColorMode::FaceDebug;
         static inline bool s_gridEnabled = true;
+        static inline bool s_markersEnabled = false;  // OFF by default
 
         // Diagnostic flags (for S7 proof toggles)
         static inline bool s_sentinelInstance0 = false;
