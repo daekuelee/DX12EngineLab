@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "FrameLinearAllocator.h"
 #include "DescriptorRingAllocator.h"
+#include "ResourceRegistry.h"
 
 namespace Renderer
 {
@@ -20,11 +21,10 @@ namespace Renderer
         FrameLinearAllocator uploadAllocator;
 
         // Transforms buffer - default heap (GPU reads as SRV)
-        Microsoft::WRL::ComPtr<ID3D12Resource> transformsDefault;
+        // Stored as ResourceHandle for handle-based ownership
+        ResourceHandle transformsHandle;
 
-        // Per-frame resource state tracking (fixes #527 barrier mismatch)
-        // Initialized to COPY_DEST since that's the creation state
-        D3D12_RESOURCE_STATES transformsState = D3D12_RESOURCE_STATE_COPY_DEST;
+        // Note: transformsState removed - ResourceStateTracker is now SOLE authority
 
         // SRV slot index in the shader-visible heap (per-frame to avoid stomp)
         uint32_t srvSlot = 0;
@@ -44,8 +44,8 @@ namespace Renderer
         FrameContextRing(const FrameContextRing&) = delete;
         FrameContextRing& operator=(const FrameContextRing&) = delete;
 
-        // Initialize ring with device and descriptor ring allocator
-        bool Initialize(ID3D12Device* device, DescriptorRingAllocator* descRing);
+        // Initialize ring with device, descriptor ring allocator, and resource registry
+        bool Initialize(ID3D12Device* device, DescriptorRingAllocator* descRing, ResourceRegistry* registry);
 
         // Shutdown and release resources
         void Shutdown();
@@ -80,5 +80,6 @@ namespace Renderer
 
         ID3D12Device* m_device = nullptr; // Non-owning
         DescriptorRingAllocator* m_descRing = nullptr; // Non-owning
+        ResourceRegistry* m_registry = nullptr; // Non-owning
     };
 }

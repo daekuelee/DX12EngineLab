@@ -2,6 +2,14 @@
 #include "Dx12Debug.h"
 #include "ShaderLibrary.h"
 #include "ToggleSystem.h"
+#include "RenderContext.h"
+#include "ClearPass.h"
+#include "GeometryPass.h"
+#include "ImGuiPass.h"
+#include "BarrierScope.h"
+#include "DiagnosticLogger.h"
+#include "ResourceStateTracker.h"
+#include "PassOrchestrator.h"
 #include <cstdio>
 #include <DirectXMath.h>
 
@@ -15,26 +23,10 @@ using Microsoft::WRL::ComPtr;
 namespace Renderer
 {
     //-------------------------------------------------------------------------
-    // Free Camera State
+    // Camera Helpers
     //-------------------------------------------------------------------------
-    struct FreeCamera
-    {
-        XMFLOAT3 position = {0.0f, 180.0f, -220.0f};  // Start at preset A
-        float yaw = 0.0f;      // Radians, 0 = looking along +Z
-        float pitch = -0.5f;   // Radians, negative = looking down
-        float fovY = XM_PIDIV4;
-        float nearZ = 1.0f;
-        float farZ = 1000.0f;
-        float moveSpeed = 100.0f;   // Units per second
-        float lookSpeed = 1.5f;     // Radians per second
-    };
 
-    static FreeCamera s_camera;
-    static LARGE_INTEGER s_lastTime = {};
-    static LARGE_INTEGER s_frequency = {};
-    static bool s_timerInitialized = false;
-
-    static void UpdateFreeCamera(float dt)
+    void Dx12Context::UpdateCamera(float dt)
     {
         // Movement input
         float moveX = 0.0f, moveY = 0.0f, moveZ = 0.0f;
@@ -51,21 +43,21 @@ namespace Renderer
         if (GetAsyncKeyState('E') & 0x8000) yawDelta += 1.0f;
 
         // Apply yaw
-        s_camera.yaw += yawDelta * s_camera.lookSpeed * dt;
+        m_camera.yaw += yawDelta * m_camera.lookSpeed * dt;
 
         // Build movement vectors in camera space
-        float cosY = cosf(s_camera.yaw);
-        float sinY = sinf(s_camera.yaw);
+        float cosY = cosf(m_camera.yaw);
+        float sinY = sinf(m_camera.yaw);
         XMFLOAT3 forward = { sinY, 0, cosY };  // Horizontal forward
         XMFLOAT3 right = { cosY, 0, -sinY };   // Horizontal right
 
-        float speed = s_camera.moveSpeed * dt;
-        s_camera.position.x += (forward.x * moveZ + right.x * moveX) * speed;
-        s_camera.position.z += (forward.z * moveZ + right.z * moveX) * speed;
-        s_camera.position.y += moveY * speed;
+        float speed = m_camera.moveSpeed * dt;
+        m_camera.position[0] += (forward.x * moveZ + right.x * moveX) * speed;
+        m_camera.position[2] += (forward.z * moveZ + right.z * moveX) * speed;
+        m_camera.position[1] += moveY * speed;
     }
 
-    static XMMATRIX BuildFreeCameraViewProj(const FreeCamera& cam, float aspect)
+    static XMMATRIX BuildFreeCameraViewProj(const Dx12Context::FreeCamera& cam, float aspect)
     {
         // Forward vector from yaw/pitch (RH: -Z is forward at yaw=0)
         float cosP = cosf(cam.pitch);
@@ -75,7 +67,8 @@ namespace Renderer
             cosf(cam.yaw) * cosP
         };
 
-        XMVECTOR eye = XMLoadFloat3(&cam.position);
+        XMFLOAT3 pos = { cam.position[0], cam.position[1], cam.position[2] };
+        XMVECTOR eye = XMLoadFloat3(&pos);
         XMVECTOR fwd = XMLoadFloat3(&forward);
         XMVECTOR target = XMVectorAdd(eye, fwd);
         XMVECTOR up = XMVectorSet(0, 1, 0, 0);
@@ -101,26 +94,13 @@ namespace Renderer
         }
     }
 
-    bool Dx12Context::Initialize(HWND hwnd)
+    //-------------------------------------------------------------------------
+    // Initialize() Helpers - Device and SwapChain
+    //-------------------------------------------------------------------------
+
+    void Dx12Context::InitDevice()
     {
-        if (m_initialized)
-            return false;
-
-        m_hwnd = hwnd;
-
-        // Get window dimensions
-        RECT rect = {};
-        GetClientRect(hwnd, &rect);
-        m_width = static_cast<uint32_t>(rect.right - rect.left);
-        m_height = static_cast<uint32_t>(rect.bottom - rect.top);
-
-        if (m_width == 0 || m_height == 0)
-        {
-            m_width = 1280;
-            m_height = 720;
-        }
-
-        // 1. Enable debug layer in debug builds
+        // Enable debug layer in debug builds
 #if defined(_DEBUG)
         {
             ComPtr<ID3D12Debug> debugController;
@@ -132,7 +112,7 @@ namespace Renderer
         }
 #endif
 
-        // 2. Create DXGI factory
+        // Create DXGI factory
         UINT factoryFlags = 0;
 #if defined(_DEBUG)
         factoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
@@ -140,7 +120,7 @@ namespace Renderer
         ThrowIfFailed(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&m_factory)),
             "Failed to create DXGI factory\n");
 
-        // 3. Find best adapter and create device
+        // Find best adapter and create device
         {
             ComPtr<IDXGIAdapter1> bestAdapter;
             SIZE_T bestVram = 0;
@@ -172,7 +152,7 @@ namespace Renderer
                 "Failed to create D3D12 device\n");
         }
 
-        // 4. Create command queue
+        // Create command queue
         {
             D3D12_COMMAND_QUEUE_DESC queueDesc = {};
             queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -181,113 +161,121 @@ namespace Renderer
             ThrowIfFailed(m_device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&m_commandQueue)),
                 "Failed to create command queue\n");
         }
+    }
 
-        // 5. Create swap chain
+    void Dx12Context::InitSwapChain()
+    {
+        DXGI_SWAP_CHAIN_DESC1 swapDesc = {};
+        swapDesc.Width = m_width;
+        swapDesc.Height = m_height;
+        swapDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        swapDesc.BufferCount = FrameCount;
+        swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        swapDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        swapDesc.SampleDesc.Count = 1;
+
+        ComPtr<IDXGISwapChain1> swapChain1;
+        ThrowIfFailed(m_factory->CreateSwapChainForHwnd(
+            m_commandQueue.Get(),
+            m_hwnd,
+            &swapDesc,
+            nullptr,
+            nullptr,
+            &swapChain1),
+            "Failed to create swap chain\n");
+
+        ThrowIfFailed(swapChain1.As(&m_swapChain),
+            "Failed to get IDXGISwapChain3\n");
+
+        // Store backbuffer format for ImGui initialization
+        m_backBufferFormat = swapDesc.Format;
+    }
+
+    void Dx12Context::InitRenderTargets()
+    {
+        // Create RTV descriptor heap
+        D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
+        rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        rtvHeapDesc.NumDescriptors = FrameCount;
+        rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+
+        ThrowIfFailed(m_device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&m_rtvHeap)),
+            "Failed to create RTV heap\n");
+
+        m_rtvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+        // Create RTVs for back buffers
+        D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+
+        for (UINT i = 0; i < FrameCount; ++i)
         {
-            DXGI_SWAP_CHAIN_DESC1 swapDesc = {};
-            swapDesc.Width = m_width;
-            swapDesc.Height = m_height;
-            swapDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-            swapDesc.BufferCount = FrameCount;
-            swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-            swapDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-            swapDesc.SampleDesc.Count = 1;
+            ThrowIfFailed(m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_backBuffers[i])),
+                "Failed to get swap chain buffer\n");
 
-            ComPtr<IDXGISwapChain1> swapChain1;
-            ThrowIfFailed(m_factory->CreateSwapChainForHwnd(
-                m_commandQueue.Get(),
-                m_hwnd,
-                &swapDesc,
-                nullptr,
-                nullptr,
-                &swapChain1),
-                "Failed to create swap chain\n");
+            m_device->CreateRenderTargetView(m_backBuffers[i].Get(), nullptr, rtvHandle);
+            rtvHandle.ptr += m_rtvDescriptorSize;
 
-            ThrowIfFailed(swapChain1.As(&m_swapChain),
-                "Failed to get IDXGISwapChain3\n");
-
-            // Store backbuffer format for ImGui initialization
-            m_backBufferFormat = swapDesc.Format;
+            // Register backbuffers with state tracker (initial state is PRESENT after swap chain creation)
+            m_stateTracker.AssumeState(m_backBuffers[i].Get(), D3D12_RESOURCE_STATE_PRESENT);
         }
+    }
 
-        // 6. Create RTV descriptor heap
-        {
-            D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
-            rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-            rtvHeapDesc.NumDescriptors = FrameCount;
-            rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    void Dx12Context::InitDepthBuffer()
+    {
+        // Create DSV descriptor heap
+        D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+        dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        dsvHeapDesc.NumDescriptors = 1;
+        dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 
-            ThrowIfFailed(m_device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&m_rtvHeap)),
-                "Failed to create RTV heap\n");
+        ThrowIfFailed(m_device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&m_dsvHeap)),
+            "Failed to create DSV heap\n");
 
-            m_rtvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        }
+        // Create depth buffer
+        D3D12_HEAP_PROPERTIES heapProps = {};
+        heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
-        // 7. Create RTVs for back buffers
-        {
-            D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        D3D12_RESOURCE_DESC depthDesc = {};
+        depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        depthDesc.Width = m_width;
+        depthDesc.Height = m_height;
+        depthDesc.DepthOrArraySize = 1;
+        depthDesc.MipLevels = 1;
+        depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        depthDesc.SampleDesc.Count = 1;
+        depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
-            for (UINT i = 0; i < FrameCount; ++i)
-            {
-                ThrowIfFailed(m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_backBuffers[i])),
-                    "Failed to get swap chain buffer\n");
+        D3D12_CLEAR_VALUE clearValue = {};
+        clearValue.Format = DXGI_FORMAT_D32_FLOAT;
+        clearValue.DepthStencil.Depth = 1.0f;
+        clearValue.DepthStencil.Stencil = 0;
 
-                m_device->CreateRenderTargetView(m_backBuffers[i].Get(), nullptr, rtvHandle);
-                rtvHandle.ptr += m_rtvDescriptorSize;
-            }
-        }
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &depthDesc,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            &clearValue,
+            IID_PPV_ARGS(&m_depthBuffer)),
+            "Failed to create depth buffer\n");
 
-        // 8. Create DSV descriptor heap
-        {
-            D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
-            dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-            dsvHeapDesc.NumDescriptors = 1;
-            dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        // Create DSV
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+        dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dsvDesc.Texture2D.MipSlice = 0;
 
-            ThrowIfFailed(m_device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&m_dsvHeap)),
-                "Failed to create DSV heap\n");
-        }
+        m_device->CreateDepthStencilView(m_depthBuffer.Get(), &dsvDesc,
+            m_dsvHeap->GetCPUDescriptorHandleForHeapStart());
+    }
 
-        // 9. Create depth buffer
-        {
-            D3D12_HEAP_PROPERTIES heapProps = {};
-            heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    //-------------------------------------------------------------------------
+    // Initialize() Helpers - Subsystems
+    //-------------------------------------------------------------------------
 
-            D3D12_RESOURCE_DESC depthDesc = {};
-            depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-            depthDesc.Width = m_width;
-            depthDesc.Height = m_height;
-            depthDesc.DepthOrArraySize = 1;
-            depthDesc.MipLevels = 1;
-            depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
-            depthDesc.SampleDesc.Count = 1;
-            depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-            D3D12_CLEAR_VALUE clearValue = {};
-            clearValue.Format = DXGI_FORMAT_D32_FLOAT;
-            clearValue.DepthStencil.Depth = 1.0f;
-            clearValue.DepthStencil.Stencil = 0;
-
-            ThrowIfFailed(m_device->CreateCommittedResource(
-                &heapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &depthDesc,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                &clearValue,
-                IID_PPV_ARGS(&m_depthBuffer)),
-                "Failed to create depth buffer\n");
-
-            // Create DSV
-            D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
-            dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
-            dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-            dsvDesc.Texture2D.MipSlice = 0;
-
-            m_device->CreateDepthStencilView(m_depthBuffer.Get(), &dsvDesc,
-                m_dsvHeap->GetCPUDescriptorHandleForHeapStart());
-        }
-
-        // 10. Initialize CBV/SRV/UAV descriptor ring allocator (shader-visible)
+    bool Dx12Context::InitFrameResources()
+    {
+        // Initialize CBV/SRV/UAV descriptor ring allocator (shader-visible)
         // Capacity: 1024 total, 3 reserved for per-frame transforms SRVs
         if (!m_descRing.Initialize(m_device.Get(), 1024, FrameCount))
         {
@@ -295,70 +283,136 @@ namespace Renderer
             return false;
         }
 
-        // 9. Initialize frame context ring (per-frame allocators + fence + buffers + SRVs)
-        if (!m_frameRing.Initialize(m_device.Get(), &m_descRing))
-        {
-            OutputDebugStringA("Failed to initialize frame context ring\n");
-            return false;
-        }
-
-        // 10. Initialize shader library (root sig + PSO)
-        if (!m_shaderLibrary.Initialize(m_device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM))
-        {
-            OutputDebugStringA("Failed to initialize shader library\n");
-            return false;
-        }
-
-        // 10b. Initialize resource registry (handle-based resource ownership)
+        // Initialize resource registry (needed by frame ring for transforms)
         if (!m_resourceRegistry.Initialize(m_device.Get()))
         {
             OutputDebugStringA("Failed to initialize resource registry\n");
             return false;
         }
 
-        // 11. Initialize render scene (geometry)
-        if (!m_scene.Initialize(m_device.Get(), m_commandQueue.Get()))
+        // Initialize frame context ring (per-frame allocators + fence + buffers + SRVs)
+        if (!m_frameRing.Initialize(m_device.Get(), &m_descRing, &m_resourceRegistry))
+        {
+            OutputDebugStringA("Failed to initialize frame context ring\n");
+            return false;
+        }
+
+        // Register transforms buffers with state tracker (initial state is COPY_DEST)
+        for (uint32_t i = 0; i < FrameCount; ++i)
+        {
+            FrameContext& ctx = m_frameRing.BeginFrame(i);
+            ID3D12Resource* transformsResource = m_resourceRegistry.Get(ctx.transformsHandle);
+            char debugName[32];
+            sprintf_s(debugName, "Transforms[%u]", i);
+            m_stateTracker.Register(transformsResource, D3D12_RESOURCE_STATE_COPY_DEST, debugName);
+        }
+
+        // Create command list (closed initially, will be reset per-frame)
+        FrameContext& firstFrame = m_frameRing.BeginFrame(0);
+
+        ThrowIfFailed(m_device->CreateCommandList(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            firstFrame.cmdAllocator.Get(),
+            nullptr, // No initial PSO
+            IID_PPV_ARGS(&m_commandList)),
+            "Failed to create command list\n");
+
+        // Close it - will be reset at start of each frame
+        m_commandList->Close();
+
+        return true;
+    }
+
+    bool Dx12Context::InitShaders()
+    {
+        // Initialize shader library (root sig + PSO)
+        if (!m_shaderLibrary.Initialize(m_device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM))
+        {
+            OutputDebugStringA("Failed to initialize shader library\n");
+            return false;
+        }
+
+        // Note: Resource registry is initialized in InitFrameResources()
+
+        return true;
+    }
+
+    bool Dx12Context::InitScene()
+    {
+        // Initialize geometry factory first
+        if (!m_geometryFactory.Initialize(m_device.Get(), m_commandQueue.Get()))
+        {
+            OutputDebugStringA("Failed to initialize geometry factory\n");
+            return false;
+        }
+
+        // Initialize scene using factory
+        if (!m_scene.Initialize(&m_geometryFactory))
         {
             OutputDebugStringA("Failed to initialize render scene\n");
             return false;
         }
+        return true;
+    }
 
-        // 11b. Initialize ImGui layer
+    bool Dx12Context::InitImGui()
+    {
         if (!m_imguiLayer.Initialize(m_hwnd, m_device.Get(), m_commandQueue.Get(),
                                       FrameCount, m_backBufferFormat))
         {
             OutputDebugStringA("[ImGui] FAILED to initialize\n");
             return false;
         }
+        return true;
+    }
 
-        // 12. Create command list (closed initially, will be reset per-frame)
+    //-------------------------------------------------------------------------
+    // Initialize
+    //-------------------------------------------------------------------------
+
+    bool Dx12Context::Initialize(HWND hwnd)
+    {
+        if (m_initialized)
+            return false;
+
+        m_hwnd = hwnd;
+
+        // Get window dimensions
+        RECT rect = {};
+        GetClientRect(hwnd, &rect);
+        m_width = static_cast<uint32_t>(rect.right - rect.left);
+        m_height = static_cast<uint32_t>(rect.bottom - rect.top);
+
+        if (m_width == 0 || m_height == 0)
         {
-            // Get first frame's allocator to create the list
-            FrameContext& firstFrame = m_frameRing.BeginFrame(0);
-
-            ThrowIfFailed(m_device->CreateCommandList(
-                0,
-                D3D12_COMMAND_LIST_TYPE_DIRECT,
-                firstFrame.cmdAllocator.Get(),
-                nullptr, // No initial PSO
-                IID_PPV_ARGS(&m_commandList)),
-                "Failed to create command list\n");
-
-            // Close it - will be reset at start of each frame
-            m_commandList->Close();
+            m_width = 1280;
+            m_height = 720;
         }
 
-        // 13. Setup viewport and scissor
+        // Initialize device and core objects
+        InitDevice();
+        InitSwapChain();
+        InitRenderTargets();
+        InitDepthBuffer();
+
+        // Initialize subsystems
+        if (!InitFrameResources()) return false;
+        if (!InitShaders()) return false;
+        if (!InitScene()) return false;
+        if (!InitImGui()) return false;
+
+        // Setup viewport and scissor
         m_viewport = { 0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height), 0.0f, 1.0f };
         m_scissorRect = { 0, 0, static_cast<LONG>(m_width), static_cast<LONG>(m_height) };
 
         m_frameId = 0;
         m_initialized = true;
 
-        // 14. Initialize free camera timer
-        QueryPerformanceFrequency(&s_frequency);
-        QueryPerformanceCounter(&s_lastTime);
-        s_timerInitialized = true;
+        // Initialize free camera timer
+        QueryPerformanceFrequency(&m_frequency);
+        QueryPerformanceCounter(&m_lastTime);
+        m_timerInitialized = true;
 
         OutputDebugStringA("Dx12Context initialized successfully\n");
         return true;
@@ -380,14 +434,14 @@ namespace Renderer
         float dt = 0.0f;
         LARGE_INTEGER currentTime;
         QueryPerformanceCounter(&currentTime);
-        if (s_timerInitialized && s_frequency.QuadPart > 0)
+        if (m_timerInitialized && m_frequency.QuadPart > 0)
         {
-            dt = static_cast<float>(currentTime.QuadPart - s_lastTime.QuadPart) /
-                 static_cast<float>(s_frequency.QuadPart);
+            dt = static_cast<float>(currentTime.QuadPart - m_lastTime.QuadPart) /
+                 static_cast<float>(m_frequency.QuadPart);
             // Clamp to avoid huge jumps (e.g., after breakpoint)
             if (dt > 0.1f) dt = 0.1f;
         }
-        s_lastTime = currentTime;
+        m_lastTime = currentTime;
         return dt;
     }
 
@@ -397,7 +451,7 @@ namespace Renderer
         Allocation frameCBAlloc = ctx.uploadAllocator.Allocate(CB_SIZE, CBV_ALIGNMENT, "FrameCB");
 
         float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
-        XMMATRIX viewProj = BuildFreeCameraViewProj(s_camera, aspect);
+        XMMATRIX viewProj = BuildFreeCameraViewProj(m_camera, aspect);
 
         // DirectXMath uses row-major, HLSL row_major matches - no transpose needed
         XMFLOAT4X4 vpMatrix;
@@ -449,37 +503,22 @@ namespace Renderer
 
     void Dx12Context::RecordBarriersAndCopy(FrameContext& ctx, const Allocation& transformsAlloc)
     {
-        // Barrier: transforms default buffer -> COPY_DEST (per-frame state tracking, fixes #527)
-        // Each frame context tracks its own transformsState to handle triple-buffering correctly
-        if (ctx.transformsState != D3D12_RESOURCE_STATE_COPY_DEST)
-        {
-            D3D12_RESOURCE_BARRIER barrier = {};
-            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Transition.pResource = ctx.transformsDefault.Get();
-            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            barrier.Transition.StateBefore = ctx.transformsState;
-            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-            m_commandList->ResourceBarrier(1, &barrier);
-            ctx.transformsState = D3D12_RESOURCE_STATE_COPY_DEST;
-        }
+        // Get transforms buffer from registry
+        ID3D12Resource* transformsResource = m_resourceRegistry.Get(ctx.transformsHandle);
+
+        // Transition transforms buffer to COPY_DEST via state tracker
+        m_stateTracker.Transition(transformsResource, D3D12_RESOURCE_STATE_COPY_DEST);
+        m_stateTracker.FlushBarriers(m_commandList.Get());
 
         // Copy transforms from upload allocator to default buffer using CopyBufferRegion
         m_commandList->CopyBufferRegion(
-            ctx.transformsDefault.Get(), 0,                           // dest, destOffset
+            transformsResource, 0,                                    // dest, destOffset
             ctx.uploadAllocator.GetBuffer(), transformsAlloc.offset,  // src, srcOffset
             TRANSFORMS_SIZE);                                         // numBytes
 
-        // Barrier: transforms default buffer -> SRV
-        {
-            D3D12_RESOURCE_BARRIER barrier = {};
-            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Transition.pResource = ctx.transformsDefault.Get();
-            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            m_commandList->ResourceBarrier(1, &barrier);
-            ctx.transformsState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        }
+        // Transition transforms buffer to SRV state
+        m_stateTracker.Transition(transformsResource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        m_stateTracker.FlushBarriers(m_commandList.Get());
     }
 
     void Dx12Context::RecordPasses(FrameContext& ctx, const Allocation& frameCBAlloc, uint32_t srvFrameIndex)
@@ -487,149 +526,61 @@ namespace Renderer
         uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
         uint32_t backBufferIndex = GetBackBufferIndex();
 
-        // Transition backbuffer: PRESENT -> RENDER_TARGET
-        {
-            D3D12_RESOURCE_BARRIER barrier = {};
-            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Transition.pResource = m_backBuffers[backBufferIndex].Get();
-            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            m_commandList->ResourceBarrier(1, &barrier);
-        }
-
-        // Clear render target
+        // Build RTV handle for current backbuffer
         D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
         rtvHandle.ptr += static_cast<SIZE_T>(backBufferIndex) * m_rtvDescriptorSize;
-        {
-            const float clearColor[] = { 0.53f, 0.81f, 0.92f, 1.0f }; // Sky blue
-            m_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-        }
-
-        // Clear depth buffer
         D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-        m_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-        // Set render state
-        m_commandList->SetGraphicsRootSignature(m_shaderLibrary.GetRootSignature());
-        m_commandList->RSSetViewports(1, &m_viewport);
-        m_commandList->RSSetScissorRects(1, &m_scissorRect);
-        m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
-        m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        // Build orchestrator inputs
+        PassOrchestratorInputs inputs = {};
+        inputs.cmd = m_commandList.Get();
+        inputs.frame = &ctx;
+        inputs.descRing = &m_descRing;
+        inputs.shaders = &m_shaderLibrary;
+        inputs.scene = &m_scene;
+        inputs.imguiLayer = &m_imguiLayer;
+        inputs.backBuffer = m_backBuffers[backBufferIndex].Get();
+        inputs.rtvHandle = rtvHandle;
+        inputs.dsvHandle = dsvHandle;
+        inputs.viewport = m_viewport;
+        inputs.scissor = m_scissorRect;
+        inputs.frameCBAddress = frameCBAlloc.gpuVA;
+        inputs.srvTableHandle = m_frameRing.GetSrvGpuHandle(srvFrameIndex);
 
-        // Set descriptor heaps (use ring allocator's heap)
-        ID3D12DescriptorHeap* heaps[] = { m_descRing.GetHeap() };
-        m_commandList->SetDescriptorHeaps(1, heaps);
+        // Geometry pass inputs
+        inputs.geoInputs.drawMode = ToggleSystem::GetDrawMode();
+        inputs.geoInputs.colorMode = ToggleSystem::GetColorMode();
+        inputs.geoInputs.gridEnabled = ToggleSystem::IsGridEnabled();
+        inputs.geoInputs.markersEnabled = ToggleSystem::IsMarkersEnabled();
+        inputs.geoInputs.instanceCount = InstanceCount;
 
-        // Bind root parameters
-        m_commandList->SetGraphicsRootConstantBufferView(0, frameCBAlloc.gpuVA); // b0: ViewProj
-        m_commandList->SetGraphicsRootDescriptorTable(1, m_frameRing.GetSrvGpuHandle(srvFrameIndex)); // t0: Transforms SRV
+        // Execute all passes via orchestrator
+        uint32_t drawCalls = PassOrchestrator::Execute(inputs);
 
         // PROOF: Once-per-second log showing frame indices and SRV offset match
+        if (DiagnosticLogger::ShouldLog("PROOF_BIND"))
         {
-            static DWORD s_lastBindLogTime = 0;
-            DWORD now = GetTickCount();
-            if (now - s_lastBindLogTime > 1000)
-            {
-                s_lastBindLogTime = now;
+            D3D12_GPU_DESCRIPTOR_HANDLE heapGpuStart = m_descRing.GetHeap()->GetGPUDescriptorHandleForHeapStart();
+            D3D12_GPU_DESCRIPTOR_HANDLE boundHandle = m_frameRing.GetSrvGpuHandle(srvFrameIndex);
+            SIZE_T actualOffset = boundHandle.ptr - heapGpuStart.ptr;
+            SIZE_T expectedOffset = static_cast<SIZE_T>(frameResourceIndex) * m_descRing.GetDescriptorSize();
+            bool match = (actualOffset == expectedOffset) || ToggleSystem::IsStompLifetimeEnabled();
 
-                D3D12_GPU_DESCRIPTOR_HANDLE heapGpuStart = m_descRing.GetHeap()->GetGPUDescriptorHandleForHeapStart();
-                D3D12_GPU_DESCRIPTOR_HANDLE boundHandle = m_frameRing.GetSrvGpuHandle(srvFrameIndex);
-                SIZE_T actualOffset = boundHandle.ptr - heapGpuStart.ptr;
-                SIZE_T expectedOffset = static_cast<SIZE_T>(frameResourceIndex) * m_descRing.GetDescriptorSize();
-                bool match = (actualOffset == expectedOffset) || ToggleSystem::IsStompLifetimeEnabled();
-
-                char buf[256];
-                sprintf_s(buf,
-                    "PROOF: frameId=%llu resIdx=%u backBuf=%u srvIdx=%u actual=%llu exp=%llu %s mode=%s\n",
-                    m_frameId, frameResourceIndex, backBufferIndex, srvFrameIndex,
-                    static_cast<unsigned long long>(actualOffset),
-                    static_cast<unsigned long long>(expectedOffset),
-                    match ? "OK" : "MISMATCH",
-                    ToggleSystem::GetDrawModeName());
-                OutputDebugStringA(buf);
-            }
-        }
-
-        // Draw floor first (single draw call, floor VS does NOT read transforms)
-        m_commandList->SetPipelineState(m_shaderLibrary.GetFloorPSO());
-        m_scene.RecordDrawFloor(m_commandList.Get());
-
-        // Draw cubes based on mode (only if grid enabled)
-        uint32_t drawCalls = 1; // 1 floor (always drawn)
-        if (ToggleSystem::IsGridEnabled())
-        {
-            m_commandList->SetPipelineState(m_shaderLibrary.GetPSO());
-
-            // Set color mode constant (RP_DebugCB = b2)
-            uint32_t colorMode = static_cast<uint32_t>(ToggleSystem::GetColorMode());
-            m_commandList->SetGraphicsRoot32BitConstants(RP_DebugCB, 1, &colorMode, 0);
-
-            if (ToggleSystem::GetDrawMode() == DrawMode::Instanced)
-            {
-                uint32_t zero = 0;
-                m_commandList->SetGraphicsRoot32BitConstants(2, 1, &zero, 0);  // RP_InstanceOffset = 0
-                m_scene.RecordDraw(m_commandList.Get(), InstanceCount);
-                drawCalls += 1; // +1 instanced cube draw
-            }
-            else
-            {
-                m_scene.RecordDrawNaive(m_commandList.Get(), InstanceCount);
-                drawCalls += InstanceCount; // +10000 naive cube draws
-
-                // B-1: Once-per-second naive path verification
-                static DWORD s_lastNaiveLogTime = 0;
-                DWORD naiveNow = GetTickCount();
-                if (naiveNow - s_lastNaiveLogTime > 1000)
-                {
-                    s_lastNaiveLogTime = naiveNow;
-                    char buf[128];
-                    sprintf_s(buf, "B1-NAIVE: StartInstance first=0 last=%u (expected 0 and %u)\n",
-                              InstanceCount - 1, InstanceCount - 1);
-                    OutputDebugStringA(buf);
-                }
-            }
+            DiagnosticLogger::Log(
+                "PROOF: frameId=%llu resIdx=%u backBuf=%u srvIdx=%u actual=%llu exp=%llu %s mode=%s\n",
+                m_frameId, frameResourceIndex, backBufferIndex, srvFrameIndex,
+                static_cast<unsigned long long>(actualOffset),
+                static_cast<unsigned long long>(expectedOffset),
+                match ? "OK" : "MISMATCH",
+                ToggleSystem::GetDrawModeName());
         }
 
         // PASS proof log (throttled 1/sec): shows PSO pointers, SRV index, grid state, mode
-        {
-            static DWORD s_lastPassLogTime = 0;
-            DWORD now = GetTickCount();
-            if (now - s_lastPassLogTime > 1000)
-            {
-                s_lastPassLogTime = now;
-                char buf[256];
-                sprintf_s(buf, "PASS: floor_pso=%p cubes_pso=%p cubes_srvIdx=%u grid=%d mode=%s\n",
-                    m_shaderLibrary.GetFloorPSO(), m_shaderLibrary.GetPSO(),
-                    srvFrameIndex, ToggleSystem::IsGridEnabled() ? 1 : 0,
-                    ToggleSystem::GetDrawModeName());
-                OutputDebugStringA(buf);
-            }
-        }
-
-        // Draw corner markers (visual diagnostic - pass-through VS, no transforms)
-        if (ToggleSystem::IsMarkersEnabled())
-        {
-            m_commandList->SetGraphicsRootSignature(m_shaderLibrary.GetMarkerRootSignature());
-            m_commandList->SetPipelineState(m_shaderLibrary.GetMarkerPSO());
-            m_scene.RecordDrawMarkers(m_commandList.Get());
-            drawCalls += 1; // +1 for markers
-        }
-
-        // Draw ImGui overlay (last draw before PRESENT barrier)
-        // Safety: ImGui draws after ALL scene draws
-        m_imguiLayer.RecordCommands(m_commandList.Get());
-
-        // Transition backbuffer: RENDER_TARGET -> PRESENT
-        {
-            D3D12_RESOURCE_BARRIER barrier = {};
-            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Transition.pResource = m_backBuffers[backBufferIndex].Get();
-            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-            m_commandList->ResourceBarrier(1, &barrier);
-        }
+        DiagnosticLogger::LogThrottled("PASS",
+            "PASS: floor_pso=%p cubes_pso=%p cubes_srvIdx=%u grid=%d mode=%s draws=%u\n",
+            m_shaderLibrary.GetFloorPSO(), m_shaderLibrary.GetPSO(),
+            srvFrameIndex, ToggleSystem::IsGridEnabled() ? 1 : 0,
+            ToggleSystem::GetDrawModeName(), drawCalls);
     }
 
     void Dx12Context::ExecuteAndPresent(FrameContext& ctx)
@@ -671,7 +622,7 @@ namespace Renderer
 
         // Pre-frame: delta time and camera update
         float dt = UpdateDeltaTime();
-        UpdateFreeCamera(dt);
+        UpdateCamera(dt);
 
         // Begin frame: fence wait + allocator reset
         uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
@@ -702,15 +653,7 @@ namespace Renderer
         if (ToggleSystem::IsStompLifetimeEnabled())
         {
             srvFrameIndex = (frameResourceIndex + 1) % FrameCount; // Wrong frame!
-
-            // Throttle warning to once per second
-            static DWORD s_lastStompLogTime = 0;
-            DWORD now = GetTickCount();
-            if (now - s_lastStompLogTime > 1000)
-            {
-                s_lastStompLogTime = now;
-                OutputDebugStringA("WARNING: stomp_Lifetime ACTIVE - press F2 to disable\n");
-            }
+            DiagnosticLogger::LogThrottled("STOMP", "WARNING: stomp_Lifetime ACTIVE - press F2 to disable\n");
         }
 
         RecordBarriersAndCopy(frameCtx, transformsAlloc);
@@ -725,20 +668,10 @@ namespace Renderer
         double cpuRecordMs = static_cast<double>(recordEnd.QuadPart - recordStart.QuadPart) * 1000.0 / static_cast<double>(perfFreq.QuadPart);
 
         // Log evidence: mode, draws, cpu_record_ms, frameId (throttled to once per second)
-        {
-            static DWORD s_lastEvidenceLogTime = 0;
-            DWORD now = GetTickCount();
-            if (now - s_lastEvidenceLogTime > 1000)
-            {
-                s_lastEvidenceLogTime = now;
-                char evidenceBuf[256];
-                sprintf_s(evidenceBuf, "mode=%s draws=%u cpu_record_ms=%.3f frameId=%u\n",
-                    ToggleSystem::GetDrawModeName(),
-                    ToggleSystem::IsGridEnabled() ? (ToggleSystem::GetDrawMode() == DrawMode::Instanced ? 2 : InstanceCount + 1) : 1,
-                    cpuRecordMs, frameResourceIndex);
-                OutputDebugStringA(evidenceBuf);
-            }
-        }
+        DiagnosticLogger::LogThrottled("EVIDENCE", "mode=%s draws=%u cpu_record_ms=%.3f frameId=%u\n",
+            ToggleSystem::GetDrawModeName(),
+            ToggleSystem::IsGridEnabled() ? (ToggleSystem::GetDrawMode() == DrawMode::Instanced ? 2 : InstanceCount + 1) : 1,
+            cpuRecordMs, frameResourceIndex);
 
         // Diagnostic: log viewport/scissor/client mismatch
         {
@@ -784,6 +717,9 @@ namespace Renderer
 
         // Shutdown scene
         m_scene.Shutdown();
+
+        // Shutdown geometry factory
+        m_geometryFactory.Shutdown();
 
         // Shutdown ImGui layer
         m_imguiLayer.Shutdown();

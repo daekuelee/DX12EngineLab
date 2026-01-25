@@ -11,13 +11,14 @@ namespace Renderer
     // Transforms: 10k float4x4 = 10k * 64 bytes
     static constexpr uint64_t TRANSFORMS_SIZE = InstanceCount * sizeof(float) * 16;
 
-    bool FrameContextRing::Initialize(ID3D12Device* device, DescriptorRingAllocator* descRing)
+    bool FrameContextRing::Initialize(ID3D12Device* device, DescriptorRingAllocator* descRing, ResourceRegistry* registry)
     {
-        if (!device || !descRing)
+        if (!device || !descRing || !registry)
             return false;
 
         m_device = device;
         m_descRing = descRing;
+        m_registry = registry;
 
         // Create fence
         HRESULT hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence));
@@ -88,30 +89,17 @@ namespace Renderer
         if (!ctx.uploadAllocator.Initialize(device, ALLOCATOR_CAPACITY))
             return false;
 
-        D3D12_HEAP_PROPERTIES defaultHeapProps = {};
-        defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-        D3D12_RESOURCE_DESC bufferDesc = {};
-        bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        bufferDesc.Height = 1;
-        bufferDesc.DepthOrArraySize = 1;
-        bufferDesc.MipLevels = 1;
-        bufferDesc.SampleDesc.Count = 1;
-        bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        // Transforms default buffer (starts in COPY_DEST for first frame)
-        {
-            bufferDesc.Width = TRANSFORMS_SIZE;
-            hr = device->CreateCommittedResource(
-                &defaultHeapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &bufferDesc,
-                D3D12_RESOURCE_STATE_COPY_DEST, // D3: Start in COPY_DEST, skip first barrier
-                nullptr,
-                IID_PPV_ARGS(&ctx.transformsDefault));
-            if (FAILED(hr))
-                return false;
-        }
+        // Transforms default buffer via ResourceRegistry (starts in COPY_DEST)
+        char debugName[32];
+        sprintf_s(debugName, "TransformsDefault[%u]", frameIndex);
+        ResourceDesc transformsDesc = ResourceDesc::Buffer(
+            TRANSFORMS_SIZE,
+            D3D12_HEAP_TYPE_DEFAULT,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            debugName);
+        ctx.transformsHandle = m_registry->Create(transformsDesc);
+        if (!ctx.transformsHandle.IsValid())
+            return false;
 
         return true;
     }
@@ -142,7 +130,9 @@ namespace Renderer
         // Get CPU handle at this frame's reserved SRV slot
         D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_descRing->GetReservedCpuHandle(ctx.srvSlot);
 
-        device->CreateShaderResourceView(ctx.transformsDefault.Get(), &srvDesc, cpuHandle);
+        // Get raw resource from registry
+        ID3D12Resource* transformsResource = m_registry->Get(ctx.transformsHandle);
+        device->CreateShaderResourceView(transformsResource, &srvDesc, cpuHandle);
     }
 
     D3D12_GPU_DESCRIPTOR_HANDLE FrameContextRing::GetSrvGpuHandle(uint32_t frameIndex) const
@@ -165,7 +155,12 @@ namespace Renderer
             FrameContext& ctx = m_frames[i];
 
             ctx.uploadAllocator.Shutdown();
-            ctx.transformsDefault.Reset();
+            // Destroy transforms via registry
+            if (m_registry && ctx.transformsHandle.IsValid())
+            {
+                m_registry->Destroy(ctx.transformsHandle);
+                ctx.transformsHandle = ResourceHandle{};
+            }
             ctx.cmdAllocator.Reset();
             ctx.fenceValue = 0;
         }
@@ -173,6 +168,7 @@ namespace Renderer
         m_fence.Reset();
         m_device = nullptr;
         m_descRing = nullptr;
+        m_registry = nullptr;
     }
 
     FrameContext& FrameContextRing::BeginFrame(uint64_t frameId)

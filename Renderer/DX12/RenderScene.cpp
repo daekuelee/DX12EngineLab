@@ -1,38 +1,29 @@
 #include "RenderScene.h"
+#include "GeometryFactory.h"
+#include <utility>
 
 using Microsoft::WRL::ComPtr;
 
 namespace Renderer
 {
-    bool RenderScene::Initialize(ID3D12Device* device, ID3D12CommandQueue* queue)
+    bool RenderScene::Initialize(GeometryFactory* factory)
     {
-        if (!device || !queue)
+        if (!factory)
             return false;
 
-        // Create fence for upload synchronization
-        HRESULT hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_uploadFence));
-        if (FAILED(hr))
-            return false;
-
-        m_uploadFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        if (!m_uploadFenceEvent)
-            return false;
-
-        m_uploadFenceValue = 0;
-
-        if (!CreateCubeGeometry(device, queue))
+        if (!CreateCubeGeometry(factory))
         {
             OutputDebugStringA("RenderScene: Failed to create cube geometry\n");
             return false;
         }
 
-        if (!CreateFloorGeometry(device, queue))
+        if (!CreateFloorGeometry(factory))
         {
             OutputDebugStringA("RenderScene: Failed to create floor geometry\n");
             return false;
         }
 
-        if (!CreateMarkerGeometry(device, queue))
+        if (!CreateMarkerGeometry(factory))
         {
             OutputDebugStringA("RenderScene: Failed to create marker geometry\n");
             return false;
@@ -44,13 +35,6 @@ namespace Renderer
 
     void RenderScene::Shutdown()
     {
-        if (m_uploadFenceEvent)
-        {
-            CloseHandle(m_uploadFenceEvent);
-            m_uploadFenceEvent = nullptr;
-        }
-
-        m_uploadFence.Reset();
         m_vertexBuffer.Reset();
         m_indexBuffer.Reset();
         m_vbv = {};
@@ -109,7 +93,7 @@ namespace Renderer
         cmdList->DrawInstanced(m_markerVertexCount, 1, 0, 0);
     }
 
-    bool RenderScene::CreateCubeGeometry(ID3D12Device* device, ID3D12CommandQueue* queue)
+    bool RenderScene::CreateCubeGeometry(GeometryFactory* factory)
     {
         // Simple cube: 8 vertices, 36 indices (12 triangles)
         struct Vertex { float x, y, z; };
@@ -138,81 +122,26 @@ namespace Renderer
 
         m_indexCount = _countof(indices);
 
-        const uint64_t vbBytes = sizeof(vertices);
-        const uint64_t ibBytes = sizeof(indices);
+        // Create vertex buffer via factory
+        auto vbResult = factory->CreateVertexBuffer(vertices, sizeof(vertices), sizeof(Vertex));
+        if (!vbResult.resource)
+            return false;
 
-        // Create vertex buffer in DEFAULT heap
-        {
-            D3D12_HEAP_PROPERTIES heapProps = {};
-            heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+        m_vertexBuffer = std::move(vbResult.resource);
+        m_vbv = vbResult.view;
 
-            D3D12_RESOURCE_DESC desc = {};
-            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            desc.Width = vbBytes;
-            desc.Height = 1;
-            desc.DepthOrArraySize = 1;
-            desc.MipLevels = 1;
-            desc.SampleDesc.Count = 1;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        // Create index buffer via factory
+        auto ibResult = factory->CreateIndexBuffer(indices, sizeof(indices), DXGI_FORMAT_R16_UINT);
+        if (!ibResult.resource)
+            return false;
 
-            HRESULT hr = device->CreateCommittedResource(
-                &heapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &desc,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                nullptr,
-                IID_PPV_ARGS(&m_vertexBuffer));
-
-            if (FAILED(hr))
-                return false;
-
-            if (!UploadBuffer(device, queue, m_vertexBuffer.Get(), vertices, vbBytes,
-                             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER))
-                return false;
-
-            m_vbv.BufferLocation = m_vertexBuffer->GetGPUVirtualAddress();
-            m_vbv.SizeInBytes = static_cast<UINT>(vbBytes);
-            m_vbv.StrideInBytes = sizeof(Vertex);
-        }
-
-        // Create index buffer in DEFAULT heap
-        {
-            D3D12_HEAP_PROPERTIES heapProps = {};
-            heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-            D3D12_RESOURCE_DESC desc = {};
-            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            desc.Width = ibBytes;
-            desc.Height = 1;
-            desc.DepthOrArraySize = 1;
-            desc.MipLevels = 1;
-            desc.SampleDesc.Count = 1;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-            HRESULT hr = device->CreateCommittedResource(
-                &heapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &desc,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                nullptr,
-                IID_PPV_ARGS(&m_indexBuffer));
-
-            if (FAILED(hr))
-                return false;
-
-            if (!UploadBuffer(device, queue, m_indexBuffer.Get(), indices, ibBytes,
-                             D3D12_RESOURCE_STATE_INDEX_BUFFER))
-                return false;
-
-            m_ibv.BufferLocation = m_indexBuffer->GetGPUVirtualAddress();
-            m_ibv.SizeInBytes = static_cast<UINT>(ibBytes);
-            m_ibv.Format = DXGI_FORMAT_R16_UINT;
-        }
+        m_indexBuffer = std::move(ibResult.resource);
+        m_ibv = ibResult.view;
 
         return true;
     }
 
-    bool RenderScene::CreateFloorGeometry(ID3D12Device* device, ID3D12CommandQueue* queue)
+    bool RenderScene::CreateFloorGeometry(GeometryFactory* factory)
     {
         // Large floor quad at y=-0.01 (slightly below cubes at y=0)
         struct Vertex { float x, y, z; };
@@ -231,81 +160,26 @@ namespace Renderer
 
         m_floorIndexCount = _countof(indices);
 
-        const uint64_t vbBytes = sizeof(vertices);
-        const uint64_t ibBytes = sizeof(indices);
+        // Create floor vertex buffer via factory
+        auto vbResult = factory->CreateVertexBuffer(vertices, sizeof(vertices), sizeof(Vertex));
+        if (!vbResult.resource)
+            return false;
 
-        // Create floor vertex buffer in DEFAULT heap
-        {
-            D3D12_HEAP_PROPERTIES heapProps = {};
-            heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+        m_floorVertexBuffer = std::move(vbResult.resource);
+        m_floorVbv = vbResult.view;
 
-            D3D12_RESOURCE_DESC desc = {};
-            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            desc.Width = vbBytes;
-            desc.Height = 1;
-            desc.DepthOrArraySize = 1;
-            desc.MipLevels = 1;
-            desc.SampleDesc.Count = 1;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        // Create floor index buffer via factory
+        auto ibResult = factory->CreateIndexBuffer(indices, sizeof(indices), DXGI_FORMAT_R16_UINT);
+        if (!ibResult.resource)
+            return false;
 
-            HRESULT hr = device->CreateCommittedResource(
-                &heapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &desc,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                nullptr,
-                IID_PPV_ARGS(&m_floorVertexBuffer));
-
-            if (FAILED(hr))
-                return false;
-
-            if (!UploadBuffer(device, queue, m_floorVertexBuffer.Get(), vertices, vbBytes,
-                             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER))
-                return false;
-
-            m_floorVbv.BufferLocation = m_floorVertexBuffer->GetGPUVirtualAddress();
-            m_floorVbv.SizeInBytes = static_cast<UINT>(vbBytes);
-            m_floorVbv.StrideInBytes = sizeof(Vertex);
-        }
-
-        // Create floor index buffer in DEFAULT heap
-        {
-            D3D12_HEAP_PROPERTIES heapProps = {};
-            heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-            D3D12_RESOURCE_DESC desc = {};
-            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            desc.Width = ibBytes;
-            desc.Height = 1;
-            desc.DepthOrArraySize = 1;
-            desc.MipLevels = 1;
-            desc.SampleDesc.Count = 1;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-            HRESULT hr = device->CreateCommittedResource(
-                &heapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &desc,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                nullptr,
-                IID_PPV_ARGS(&m_floorIndexBuffer));
-
-            if (FAILED(hr))
-                return false;
-
-            if (!UploadBuffer(device, queue, m_floorIndexBuffer.Get(), indices, ibBytes,
-                             D3D12_RESOURCE_STATE_INDEX_BUFFER))
-                return false;
-
-            m_floorIbv.BufferLocation = m_floorIndexBuffer->GetGPUVirtualAddress();
-            m_floorIbv.SizeInBytes = static_cast<UINT>(ibBytes);
-            m_floorIbv.Format = DXGI_FORMAT_R16_UINT;
-        }
+        m_floorIndexBuffer = std::move(ibResult.resource);
+        m_floorIbv = ibResult.view;
 
         return true;
     }
 
-    bool RenderScene::CreateMarkerGeometry(ID3D12Device* device, ID3D12CommandQueue* queue)
+    bool RenderScene::CreateMarkerGeometry(GeometryFactory* factory)
     {
         // 4 small triangles at NDC corners to visually prove drawable region
         // Each triangle is 3 vertices, total 12 vertices
@@ -336,130 +210,14 @@ namespace Renderer
         };
 
         m_markerVertexCount = _countof(vertices);
-        const uint64_t vbBytes = sizeof(vertices);
 
-        // Create marker vertex buffer in DEFAULT heap
-        {
-            D3D12_HEAP_PROPERTIES heapProps = {};
-            heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-            D3D12_RESOURCE_DESC desc = {};
-            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            desc.Width = vbBytes;
-            desc.Height = 1;
-            desc.DepthOrArraySize = 1;
-            desc.MipLevels = 1;
-            desc.SampleDesc.Count = 1;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-            HRESULT hr = device->CreateCommittedResource(
-                &heapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &desc,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                nullptr,
-                IID_PPV_ARGS(&m_markerVertexBuffer));
-
-            if (FAILED(hr))
-                return false;
-
-            if (!UploadBuffer(device, queue, m_markerVertexBuffer.Get(), vertices, vbBytes,
-                             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER))
-                return false;
-
-            m_markerVbv.BufferLocation = m_markerVertexBuffer->GetGPUVirtualAddress();
-            m_markerVbv.SizeInBytes = static_cast<UINT>(vbBytes);
-            m_markerVbv.StrideInBytes = sizeof(Vertex);
-        }
-
-        return true;
-    }
-
-    bool RenderScene::UploadBuffer(ID3D12Device* device, ID3D12CommandQueue* queue,
-                                   ID3D12Resource* dstDefault, const void* srcData, uint64_t numBytes,
-                                   D3D12_RESOURCE_STATES afterState)
-    {
-        // Create upload buffer
-        ComPtr<ID3D12Resource> uploadBuffer;
-        {
-            D3D12_HEAP_PROPERTIES heapProps = {};
-            heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-            D3D12_RESOURCE_DESC desc = {};
-            desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-            desc.Width = numBytes;
-            desc.Height = 1;
-            desc.DepthOrArraySize = 1;
-            desc.MipLevels = 1;
-            desc.SampleDesc.Count = 1;
-            desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-            HRESULT hr = device->CreateCommittedResource(
-                &heapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &desc,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                nullptr,
-                IID_PPV_ARGS(&uploadBuffer));
-
-            if (FAILED(hr))
-                return false;
-        }
-
-        // Map and copy data
-        {
-            void* mapped = nullptr;
-            D3D12_RANGE readRange = { 0, 0 };
-            HRESULT hr = uploadBuffer->Map(0, &readRange, &mapped);
-            if (FAILED(hr))
-                return false;
-
-            memcpy(mapped, srcData, static_cast<size_t>(numBytes));
-            uploadBuffer->Unmap(0, nullptr);
-        }
-
-        // Create command allocator and list for upload
-        ComPtr<ID3D12CommandAllocator> cmdAlloc;
-        ComPtr<ID3D12GraphicsCommandList> cmdList;
-
-        HRESULT hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdAlloc));
-        if (FAILED(hr))
+        // Create marker vertex buffer via factory
+        auto vbResult = factory->CreateVertexBuffer(vertices, sizeof(vertices), sizeof(Vertex));
+        if (!vbResult.resource)
             return false;
 
-        hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdAlloc.Get(), nullptr, IID_PPV_ARGS(&cmdList));
-        if (FAILED(hr))
-            return false;
-
-        // Record copy command
-        cmdList->CopyBufferRegion(dstDefault, 0, uploadBuffer.Get(), 0, numBytes);
-
-        // Transition to final state
-        D3D12_RESOURCE_BARRIER barrier = {};
-        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Transition.pResource = dstDefault;
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-        barrier.Transition.StateAfter = afterState;
-        cmdList->ResourceBarrier(1, &barrier);
-
-        hr = cmdList->Close();
-        if (FAILED(hr))
-            return false;
-
-        // Execute and wait
-        ID3D12CommandList* cmdLists[] = { cmdList.Get() };
-        queue->ExecuteCommandLists(1, cmdLists);
-
-        m_uploadFenceValue++;
-        hr = queue->Signal(m_uploadFence.Get(), m_uploadFenceValue);
-        if (FAILED(hr))
-            return false;
-
-        if (m_uploadFence->GetCompletedValue() < m_uploadFenceValue)
-        {
-            m_uploadFence->SetEventOnCompletion(m_uploadFenceValue, m_uploadFenceEvent);
-            WaitForSingleObject(m_uploadFenceEvent, INFINITE);
-        }
+        m_markerVertexBuffer = std::move(vbResult.resource);
+        m_markerVbv = vbResult.view;
 
         return true;
     }
