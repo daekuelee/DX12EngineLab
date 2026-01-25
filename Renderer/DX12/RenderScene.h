@@ -6,6 +6,8 @@
 
 namespace Renderer
 {
+    class GeometryFactory;
+
     class RenderScene
     {
     public:
@@ -15,8 +17,8 @@ namespace Renderer
         RenderScene(const RenderScene&) = delete;
         RenderScene& operator=(const RenderScene&) = delete;
 
-        // Initialize geometry (VB/IB in DEFAULT heap)
-        bool Initialize(ID3D12Device* device, ID3D12CommandQueue* queue);
+        // Initialize geometry (VB/IB in DEFAULT heap via factory)
+        bool Initialize(GeometryFactory* factory);
 
         // Shutdown and release resources
         void Shutdown();
@@ -39,12 +41,9 @@ namespace Renderer
         D3D12_INDEX_BUFFER_VIEW GetIBView() const { return m_ibv; }
 
     private:
-        bool CreateCubeGeometry(ID3D12Device* device, ID3D12CommandQueue* queue);
-        bool CreateFloorGeometry(ID3D12Device* device, ID3D12CommandQueue* queue);
-        bool CreateMarkerGeometry(ID3D12Device* device, ID3D12CommandQueue* queue);
-        bool UploadBuffer(ID3D12Device* device, ID3D12CommandQueue* queue,
-                         ID3D12Resource* dstDefault, const void* srcData, uint64_t numBytes,
-                         D3D12_RESOURCE_STATES afterState);
+        bool CreateCubeGeometry(GeometryFactory* factory);
+        bool CreateFloorGeometry(GeometryFactory* factory);
+        bool CreateMarkerGeometry(GeometryFactory* factory);
 
         // Cube geometry in DEFAULT heap
         Microsoft::WRL::ComPtr<ID3D12Resource> m_vertexBuffer;
@@ -64,10 +63,5 @@ namespace Renderer
         Microsoft::WRL::ComPtr<ID3D12Resource> m_markerVertexBuffer;
         D3D12_VERTEX_BUFFER_VIEW m_markerVbv = {};
         uint32_t m_markerVertexCount = 0;
-
-        // Temporary resources for upload (fence for synchronization)
-        Microsoft::WRL::ComPtr<ID3D12Fence> m_uploadFence;
-        HANDLE m_uploadFenceEvent = nullptr;
-        uint64_t m_uploadFenceValue = 0;
     };
 }

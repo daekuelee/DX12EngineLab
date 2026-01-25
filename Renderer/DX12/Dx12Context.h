@@ -9,7 +9,9 @@
 #include "ShaderLibrary.h"
 #include "RenderScene.h"
 #include "ResourceRegistry.h"
+#include "ResourceStateTracker.h"
 #include "DescriptorRingAllocator.h"
+#include "GeometryFactory.h"
 #include "ImGuiLayer.h"
 
 namespace Renderer
@@ -66,8 +68,14 @@ namespace Renderer
         // Resource registry (handle-based resource ownership)
         ResourceRegistry m_resourceRegistry;
 
+        // Resource state tracker (SOLE authority for state tracking)
+        ResourceStateTracker m_stateTracker;
+
         // Shader library (root sig + PSO)
         ShaderLibrary m_shaderLibrary;
+
+        // Geometry factory (buffer creation with upload sync)
+        GeometryFactory m_geometryFactory;
 
         // Render scene (geometry + transforms)
         RenderScene m_scene;
@@ -85,7 +93,43 @@ namespace Renderer
         D3D12_VIEWPORT m_viewport = {};
         D3D12_RECT m_scissorRect = {};
 
+        // Free camera state (public struct for helper function access)
+        public:
+        struct FreeCamera
+        {
+            float position[3] = {0.0f, 180.0f, -220.0f};  // Start at preset A
+            float yaw = 0.0f;      // Radians, 0 = looking along +Z
+            float pitch = -0.5f;   // Radians, negative = looking down
+            float fovY = 0.785398163f; // XM_PIDIV4
+            float nearZ = 1.0f;
+            float farZ = 1000.0f;
+            float moveSpeed = 100.0f;   // Units per second
+            float lookSpeed = 1.5f;     // Radians per second
+        };
+        private:
+        FreeCamera m_camera;
+
+        // Timer state for delta time calculation
+        LARGE_INTEGER m_lastTime = {};
+        LARGE_INTEGER m_frequency = {};
+        bool m_timerInitialized = false;
+
         bool m_initialized = false;
+
+        // Initialize() helpers - device and swap chain
+        void InitDevice();
+        void InitSwapChain();
+        void InitRenderTargets();
+        void InitDepthBuffer();
+
+        // Initialize() helpers - subsystems
+        bool InitFrameResources();
+        bool InitShaders();
+        bool InitScene();
+        bool InitImGui();
+
+        // Camera helpers
+        void UpdateCamera(float dt);
 
         // Phase helpers for Render()
         float UpdateDeltaTime();
