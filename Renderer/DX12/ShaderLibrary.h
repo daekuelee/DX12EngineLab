@@ -40,7 +40,8 @@ namespace Renderer
 
     private:
         bool CreateRootSignature(ID3D12Device* device);
-        bool CompileShaders();
+        bool LoadShaders();
+        bool LoadCompiledShader(const wchar_t* path, Microsoft::WRL::ComPtr<ID3DBlob>& outBlob);
         bool CreatePSO(ID3D12Device* device, DXGI_FORMAT rtvFormat);
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> m_rootSignature;

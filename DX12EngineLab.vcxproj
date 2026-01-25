@@ -155,6 +155,50 @@
     <Image Include="DX12EngineLab.ico" />
     <Image Include="small.ico" />
   </ItemGroup>
+  <!-- Shader compilation: VS and PS from each .hlsl file -->
+  <ItemGroup>
+    <!-- Cube shaders -->
+    <FxCompile Include="shaders\cube_vs.hlsl">
+      <ShaderType>Vertex</ShaderType>
+      <ShaderModel>5.1</ShaderModel>
+      <EntryPointName>VSMain</EntryPointName>
+      <ObjectFileOutput>$(OutDir)shaders\cube_vs.cso</ObjectFileOutput>
+      <AdditionalIncludeDirectories>shaders</AdditionalIncludeDirectories>
+    </FxCompile>
+    <FxCompile Include="shaders\cube_ps.hlsl">
+      <ShaderType>Pixel</ShaderType>
+      <ShaderModel>5.1</ShaderModel>
+      <EntryPointName>PSMain</EntryPointName>
+      <ObjectFileOutput>$(OutDir)shaders\cube_ps.cso</ObjectFileOutput>
+    </FxCompile>
+    <!-- Floor shaders -->
+    <FxCompile Include="shaders\floor_vs.hlsl">
+      <ShaderType>Vertex</ShaderType>
+      <ShaderModel>5.1</ShaderModel>
+      <EntryPointName>VSFloor</EntryPointName>
+      <ObjectFileOutput>$(OutDir)shaders\floor_vs.cso</ObjectFileOutput>
+      <AdditionalIncludeDirectories>shaders</AdditionalIncludeDirectories>
+    </FxCompile>
+    <FxCompile Include="shaders\floor_ps.hlsl">
+      <ShaderType>Pixel</ShaderType>
+      <ShaderModel>5.1</ShaderModel>
+      <EntryPointName>PSFloor</EntryPointName>
+      <ObjectFileOutput>$(OutDir)shaders\floor_ps.cso</ObjectFileOutput>
+    </FxCompile>
+    <!-- Marker shaders -->
+    <FxCompile Include="shaders\marker_vs.hlsl">
+      <ShaderType>Vertex</ShaderType>
+      <ShaderModel>5.1</ShaderModel>
+      <EntryPointName>VSMarker</EntryPointName>
+      <ObjectFileOutput>$(OutDir)shaders\marker_vs.cso</ObjectFileOutput>
+    </FxCompile>
+    <FxCompile Include="shaders\marker_ps.hlsl">
+      <ShaderType>Pixel</ShaderType>
+      <ShaderModel>5.1</ShaderModel>
+      <EntryPointName>PSMarker</EntryPointName>
+      <ObjectFileOutput>$(OutDir)shaders\marker_ps.cso</ObjectFileOutput>
+    </FxCompile>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
