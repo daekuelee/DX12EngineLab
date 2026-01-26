@@ -60,6 +60,14 @@ namespace Renderer
             uint32_t characterPartCount = 0;
             bool gridPassActive = true;
             bool characterPassActive = false;
+            // Part 1: Respawn tracking
+            uint32_t respawnCount = 0;
+            const char* lastRespawnReason = nullptr;
+            // Part 2: Collision stats
+            uint32_t candidatesChecked = 0;
+            uint32_t penetrationsResolved = 0;
+            int32_t lastHitCubeId = -1;
+            uint8_t lastAxisResolved = 1;  // 0=X, 1=Y, 2=Z
         } m_worldState;
         bool m_hasWorldState = false;
     };

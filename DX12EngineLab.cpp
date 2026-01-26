@@ -247,6 +247,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 sprintf_s(buf, "CameraMode: %s\n", Renderer::ToggleSystem::GetCameraModeName());
                 OutputDebugStringA(buf);
             }
+            // F9 key toggles debug single instance mode (MT2)
+            else if (wParam == VK_F9)
+            {
+                Renderer::ToggleSystem::ToggleDebugSingleInstance();
+                char buf[64];
+                sprintf_s(buf, "DebugSingleInstance: %s (idx=%u)\n",
+                    Renderer::ToggleSystem::IsDebugSingleInstanceEnabled() ? "ON" : "OFF",
+                    Renderer::ToggleSystem::GetDebugInstanceIndex());
+                OutputDebugStringA(buf);
+            }
         }
         break;
     case WM_MOUSEMOVE:

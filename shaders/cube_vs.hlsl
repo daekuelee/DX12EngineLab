@@ -17,6 +17,23 @@ VSOutput VSMain(VSInput vin, uint iid : SV_InstanceID)
 {
     VSOutput o;
     float4x4 world = Transforms[iid + InstanceOffset].M;
+
+    // MT3: Validate transform matrix for NaN/Inf/extreme values
+    // Check first and last rows for common invalid patterns
+    bool invalid = any(isnan(world[0])) || any(isinf(world[0])) ||
+                   any(isnan(world[3])) || any(isinf(world[3])) ||
+                   abs(world[3].x) > 10000.0f || abs(world[3].y) > 10000.0f || abs(world[3].z) > 10000.0f;
+
+    if (invalid)
+    {
+        // Force to origin with magenta flag for visibility
+        o.Pos = float4(0, 0, 0.5, 1);  // At screen center
+        o.WorldPos = float3(0, 0, 0);
+        o.Normal = float3(0, 1, 0);
+        o.InstanceID = 0xFFFFFFFF;  // Marker for "invalid" in pixel shader
+        return o;
+    }
+
     float3 worldPos = mul(float4(vin.Pos, 1.0), world).xyz;
     o.Pos = mul(float4(worldPos, 1.0), ViewProj);
     o.WorldPos = worldPos;

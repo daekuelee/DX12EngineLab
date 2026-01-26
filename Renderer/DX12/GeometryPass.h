@@ -17,6 +17,12 @@ namespace Renderer
         bool gridEnabled;
         bool markersEnabled;
         uint32_t instanceCount;
+        // MT1: Generated transform count for validation
+        uint32_t generatedTransformCount;
+        uint64_t frameId;  // For throttled logging
+        // MT2: Debug single instance mode
+        bool debugSingleInstance;
+        uint32_t debugInstanceIndex;
     };
 
     // GeometryPass: Renders floor, cubes, and markers
@@ -38,6 +44,26 @@ namespace Renderer
             // Draw cubes based on mode (only if grid enabled)
             if (inputs.gridEnabled)
             {
+                // MT1: Validate transform count matches draw count BEFORE drawing
+                uint32_t actualDrawCount = inputs.instanceCount;
+                bool mismatch = (inputs.generatedTransformCount != actualDrawCount);
+
+                char mt1Buf[128];
+                sprintf_s(mt1Buf, "[MT1] frame=%llu gen=%u draw=%u mismatch=%d\n",
+                    inputs.frameId, inputs.generatedTransformCount, actualDrawCount, mismatch ? 1 : 0);
+
+                if (mismatch)
+                {
+                    OutputDebugStringA(mt1Buf);
+#if defined(_DEBUG)
+                    __debugbreak();  // Hard fail in Debug
+#endif
+                }
+                else if (inputs.frameId % 300 == 0)
+                {
+                    OutputDebugStringA(mt1Buf);  // OK line every 300 frames
+                }
+
                 ctx.cmd->SetPipelineState(ctx.shaders->GetPSO());
 
                 // Set color mode constant (RP_DebugCB = b2)
@@ -46,10 +72,21 @@ namespace Renderer
 
                 if (inputs.drawMode == DrawMode::Instanced)
                 {
-                    uint32_t zero = 0;
-                    ctx.cmd->SetGraphicsRoot32BitConstants(RP_InstanceOffset, 1, &zero, 0);
-                    ctx.scene->RecordDraw(ctx.cmd, inputs.instanceCount);
-                    drawCalls += 1;
+                    // MT2: Debug single instance mode - draw only one cube
+                    if (inputs.debugSingleInstance)
+                    {
+                        uint32_t debugIdx = inputs.debugInstanceIndex;
+                        ctx.cmd->SetGraphicsRoot32BitConstants(RP_InstanceOffset, 1, &debugIdx, 0);
+                        ctx.scene->RecordDraw(ctx.cmd, 1);  // Draw 1 instance starting at debugIdx
+                        drawCalls += 1;
+                    }
+                    else
+                    {
+                        uint32_t zero = 0;
+                        ctx.cmd->SetGraphicsRoot32BitConstants(RP_InstanceOffset, 1, &zero, 0);
+                        ctx.scene->RecordDraw(ctx.cmd, inputs.instanceCount);
+                        drawCalls += 1;
+                    }
                 }
                 else
                 {

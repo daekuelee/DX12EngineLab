@@ -31,6 +31,16 @@ namespace Renderer
         float yawDeg = 0.0f, pitchDeg = 0.0f;   // Degrees (converted from radians)
         float fovDeg = 45.0f;             // Degrees (HUD display only)
         bool jumpQueued = false;          // Evidence: true for 1 frame after jump
+
+        // Part 1: Respawn tracking
+        uint32_t respawnCount = 0;
+        const char* lastRespawnReason = nullptr;
+
+        // Part 2: Collision stats
+        uint32_t candidatesChecked = 0;
+        uint32_t penetrationsResolved = 0;
+        int32_t lastHitCubeId = -1;
+        uint8_t lastAxisResolved = 1;  // 0=X, 1=Y, 2=Z
     };
     class Dx12Context
     {
@@ -65,6 +75,9 @@ namespace Renderer
 
         // Set pawn transform for character rendering (Day3)
         void SetPawnTransform(float posX, float posY, float posZ, float yaw);
+
+        // MT1: Generated transform count for validation
+        uint32_t GetGeneratedTransformCount() const { return m_generatedTransformCount; }
 
     private:
         HWND m_hwnd = nullptr;
@@ -151,6 +164,9 @@ namespace Renderer
         LARGE_INTEGER m_frequency = {};
         bool m_timerInitialized = false;
         float m_lastDeltaTime = 0.0f;
+
+        // MT1: Transform generation count for validation
+        uint32_t m_generatedTransformCount = 0;
 
         // Injected camera (frame-scoped)
         DirectX::XMFLOAT4X4 m_injectedViewProj = {};

@@ -1,6 +1,8 @@
 #include "WorldState.h"
 #include "../Renderer/DX12/Dx12Context.h"  // For HUDSnapshot
 #include <cmath>
+#include <cstdio>
+#include <Windows.h>  // For OutputDebugStringA
 
 using namespace DirectX;
 
@@ -10,12 +12,12 @@ namespace Engine
     {
         // Reset pawn to spawn position
         m_pawn = PawnState{};
-        m_pawn.posX = 0.0f;
-        m_pawn.posY = 0.0f;
-        m_pawn.posZ = 0.0f;
+        m_pawn.posX = m_config.spawnX;
+        m_pawn.posY = m_config.spawnY;
+        m_pawn.posZ = m_config.spawnZ;
         m_pawn.yaw = 0.0f;
         m_pawn.pitch = 0.0f;
-        m_pawn.onGround = true;
+        m_pawn.onGround = false;  // Start in air, floor resolve will set true
 
         // Initialize camera at offset from pawn
         m_camera.eyeX = m_pawn.posX;
@@ -26,6 +28,13 @@ namespace Engine
         m_sprintAlpha = 0.0f;
         m_jumpConsumedThisFrame = false;
         m_jumpQueued = false;
+
+        // Reset respawn tracking
+        m_respawnCount = 0;
+        m_lastRespawnReason = nullptr;
+
+        // Part 2: Build spatial grid for cube collision
+        BuildSpatialGrid();
     }
 
     void WorldState::BeginFrame()
@@ -51,6 +60,9 @@ namespace Engine
 
     void WorldState::TickFixed(const InputState& input, float fixedDt)
     {
+        // Reset collision stats for this tick
+        m_collisionStats = CollisionStats{};
+
         // 1. Apply yaw rotation (axis-based)
         m_pawn.yaw += input.yawAxis * m_config.lookSpeed * fixedDt;
 
@@ -105,17 +117,262 @@ namespace Engine
             m_jumpConsumedThisFrame = true;
         }
 
-        // 8. Integrate position
-        m_pawn.posX += m_pawn.velX * fixedDt;
-        m_pawn.posY += m_pawn.velY * fixedDt;
-        m_pawn.posZ += m_pawn.velZ * fixedDt;
+        // Part 2: Axis-separated collision resolution
+        // Reset onGround - will be set by cube collision or floor collision
+        m_pawn.onGround = false;
 
-        // 9. Ground collision
-        if (m_pawn.posY < m_map.groundY)
+        // 8a. X axis movement + collision
+        float newX = m_pawn.posX + m_pawn.velX * fixedDt;
+        ResolveAxis(newX, newX, m_pawn.posY, m_pawn.posZ, Axis::X);
+        m_pawn.posX = newX;
+
+        // 8b. Z axis movement + collision
+        float newZ = m_pawn.posZ + m_pawn.velZ * fixedDt;
+        ResolveAxis(newZ, m_pawn.posX, m_pawn.posY, newZ, Axis::Z);
+        m_pawn.posZ = newZ;
+
+        // 8c. Y axis movement + collision
+        float newY = m_pawn.posY + m_pawn.velY * fixedDt;
+        ResolveAxis(newY, m_pawn.posX, newY, m_pawn.posZ, Axis::Y);
+        m_pawn.posY = newY;
+
+        // 9. Floor collision (bounded - only within grid extents)
+        // This runs AFTER cube collision
+        ResolveFloorCollision();
+
+        // 10. KillZ check (respawn if below threshold)
+        CheckKillZ();
+    }
+
+    void WorldState::ResolveFloorCollision()
+    {
+        // Floor collision only applies within map bounds (cube grid extents)
+        bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
+                              m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
+
+        if (inFloorBounds && m_pawn.posY < m_config.floorY)
         {
-            m_pawn.posY = m_map.groundY;
+            m_pawn.posY = m_config.floorY;
             m_pawn.velY = 0.0f;
             m_pawn.onGround = true;
+        }
+        // Outside bounds: no floor, pawn falls (onGround remains unchanged from physics)
+    }
+
+    void WorldState::CheckKillZ()
+    {
+        if (m_pawn.posY < m_config.killZ)
+        {
+            // Respawn at spawn point
+            m_pawn.posX = m_config.spawnX;
+            m_pawn.posY = m_config.spawnY;
+            m_pawn.posZ = m_config.spawnZ;
+            m_pawn.velX = m_pawn.velY = m_pawn.velZ = 0.0f;
+            m_pawn.onGround = false;  // NOT true! Floor resolve will set it next tick
+            m_respawnCount++;
+            m_lastRespawnReason = "KillZ";
+
+            char buf[128];
+            sprintf_s(buf, "[KillZ] Respawn: count=%u onGround=false\n", m_respawnCount);
+            OutputDebugStringA(buf);
+        }
+    }
+
+    // ========================================================================
+    // Part 2: Spatial Hash and Cube Collision
+    // ========================================================================
+
+    void WorldState::BuildSpatialGrid()
+    {
+        if (m_spatialGridBuilt) return;
+
+        // Clear grid
+        for (int gz = 0; gz < GRID_SIZE; ++gz)
+            for (int gx = 0; gx < GRID_SIZE; ++gx)
+                m_spatialGrid[gz][gx].clear();
+
+        // Each cube at grid (gx, gz) maps to cell (gx, gz)
+        // since cube centers align with cell centers
+        for (int gz = 0; gz < GRID_SIZE; ++gz)
+        {
+            for (int gx = 0; gx < GRID_SIZE; ++gx)
+            {
+                uint16_t cubeIdx = static_cast<uint16_t>(gz * GRID_SIZE + gx);
+                m_spatialGrid[gz][gx].push_back(cubeIdx);
+            }
+        }
+
+        m_spatialGridBuilt = true;
+        OutputDebugStringA("[Collision] Built spatial hash: 10000 cubes in 100x100 grid\n");
+    }
+
+    int WorldState::WorldToCellX(float x) const
+    {
+        // Cell size = 2.0 (cube spacing), grid origin = (-100, -100)
+        int cell = static_cast<int>(floorf((x + 100.0f) / 2.0f));
+        if (cell < 0) cell = 0;
+        if (cell > GRID_SIZE - 1) cell = GRID_SIZE - 1;
+        return cell;
+    }
+
+    int WorldState::WorldToCellZ(float z) const
+    {
+        int cell = static_cast<int>(floorf((z + 100.0f) / 2.0f));
+        if (cell < 0) cell = 0;
+        if (cell > GRID_SIZE - 1) cell = GRID_SIZE - 1;
+        return cell;
+    }
+
+    AABB WorldState::BuildPawnAABB(float px, float py, float pz) const
+    {
+        // Pawn AABB: feet at posY, head at posY+height
+        AABB aabb;
+        aabb.minX = px - m_config.pawnHalfWidth;
+        aabb.maxX = px + m_config.pawnHalfWidth;
+        aabb.minY = py;
+        aabb.maxY = py + m_config.pawnHeight;
+        aabb.minZ = pz - m_config.pawnHalfWidth;
+        aabb.maxZ = pz + m_config.pawnHalfWidth;
+        return aabb;
+    }
+
+    AABB WorldState::GetCubeAABB(uint16_t cubeIdx) const
+    {
+        // Cube at grid (gx, gz):
+        int gx = cubeIdx % GRID_SIZE;
+        int gz = cubeIdx / GRID_SIZE;
+        float cx = 2.0f * gx - 99.0f;  // Center X (matches transform generation)
+        float cz = 2.0f * gz - 99.0f;  // Center Z
+
+        AABB aabb;
+        aabb.minX = cx - m_config.cubeHalfXZ;
+        aabb.maxX = cx + m_config.cubeHalfXZ;
+        aabb.minY = m_config.cubeMinY;
+        aabb.maxY = m_config.cubeMaxY;
+        aabb.minZ = cz - m_config.cubeHalfXZ;
+        aabb.maxZ = cz + m_config.cubeHalfXZ;
+        return aabb;
+    }
+
+    bool WorldState::Intersects(const AABB& a, const AABB& b) const
+    {
+        return (a.minX <= b.maxX && a.maxX >= b.minX &&
+                a.minY <= b.maxY && a.maxY >= b.minY &&
+                a.minZ <= b.maxZ && a.maxZ >= b.minZ);
+    }
+
+    float WorldState::ComputeSignedPenetration(const AABB& pawn, const AABB& cube, Axis axis) const
+    {
+        // Center-based sign decision: push pawn AWAY from cube center
+        float pawnMin, pawnMax, cubeMin, cubeMax;
+
+        if (axis == Axis::X) {
+            pawnMin = pawn.minX; pawnMax = pawn.maxX;
+            cubeMin = cube.minX; cubeMax = cube.maxX;
+        } else if (axis == Axis::Y) {
+            pawnMin = pawn.minY; pawnMax = pawn.maxY;
+            cubeMin = cube.minY; cubeMax = cube.maxY;
+        } else { // Z
+            pawnMin = pawn.minZ; pawnMax = pawn.maxZ;
+            cubeMin = cube.minZ; cubeMax = cube.maxZ;
+        }
+
+        float centerPawn = (pawnMin + pawnMax) * 0.5f;
+        float centerCube = (cubeMin + cubeMax) * 0.5f;
+        float pawnHalf = (pawnMax - pawnMin) * 0.5f;
+        float cubeHalf = (cubeMax - cubeMin) * 0.5f;
+
+        // Overlap magnitude
+        float overlap = (pawnHalf + cubeHalf) - fabsf(centerPawn - centerCube);
+
+        // No penetration if overlap <= 0
+        if (overlap <= 0.0f) return 0.0f;
+
+        // Sign: push pawn away from cube center
+        float sign = (centerPawn < centerCube) ? -1.0f : 1.0f;
+
+        return sign * overlap;
+    }
+
+    std::vector<uint16_t> WorldState::QuerySpatialHash(const AABB& pawn) const
+    {
+        std::vector<uint16_t> candidates;
+
+        // Find cell range for pawn AABB
+        int minCellX = WorldToCellX(pawn.minX);
+        int maxCellX = WorldToCellX(pawn.maxX);
+        int minCellZ = WorldToCellZ(pawn.minZ);
+        int maxCellZ = WorldToCellZ(pawn.maxZ);
+
+        // Gather all cubes in overlapping cells
+        for (int gz = minCellZ; gz <= maxCellZ; ++gz)
+        {
+            for (int gx = minCellX; gx <= maxCellX; ++gx)
+            {
+                const auto& cell = m_spatialGrid[gz][gx];
+                for (uint16_t idx : cell)
+                {
+                    candidates.push_back(idx);
+                }
+            }
+        }
+
+        return candidates;
+    }
+
+    void WorldState::ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis)
+    {
+        // Build pawn AABB at proposed position
+        float px = (axis == Axis::X) ? posAxis : currentPosX;
+        float py = (axis == Axis::Y) ? posAxis : currentPosY;
+        float pz = (axis == Axis::Z) ? posAxis : currentPosZ;
+        AABB pawn = BuildPawnAABB(px, py, pz);
+
+        auto candidates = QuerySpatialHash(pawn);
+        m_collisionStats.candidatesChecked += static_cast<uint32_t>(candidates.size());
+
+        // Find deepest penetration cube (stability: avoid multi-cube jitter)
+        float deepestPen = 0.0f;
+        int deepestCubeIdx = -1;
+        float deepestCubeTop = 0.0f;
+
+        for (uint16_t cubeIdx : candidates)
+        {
+            AABB cube = GetCubeAABB(cubeIdx);
+            if (!Intersects(pawn, cube)) continue;
+
+            float pen = ComputeSignedPenetration(pawn, cube, axis);
+            if (fabsf(pen) > fabsf(deepestPen))
+            {
+                deepestPen = pen;
+                deepestCubeIdx = cubeIdx;
+                deepestCubeTop = cube.maxY;
+            }
+        }
+
+        // Apply only the deepest correction
+        if (deepestCubeIdx >= 0 && deepestPen != 0.0f)
+        {
+            posAxis -= deepestPen;
+            m_collisionStats.penetrationsResolved++;
+            m_collisionStats.lastHitCubeId = deepestCubeIdx;
+            m_collisionStats.lastAxisResolved = axis;
+
+            // Zero velocity on this axis
+            if (axis == Axis::X) m_pawn.velX = 0.0f;
+            if (axis == Axis::Z) m_pawn.velZ = 0.0f;
+            if (axis == Axis::Y)
+            {
+                // Y-axis onGround rule: check if LANDING (velY was <= 0) and
+                // pawnBottom is now at cubeTop (within epsilon)
+                float pawnBottom = posAxis;  // posY after correction
+                float epsilon = 0.01f;
+                if (m_pawn.velY <= 0.0f && fabsf(pawnBottom - deepestCubeTop) < epsilon)
+                {
+                    m_pawn.onGround = true;
+                }
+                m_pawn.velY = 0.0f;
+            }
         }
     }
 
@@ -187,6 +444,17 @@ namespace Engine
         snap.pitchDeg = m_pawn.pitch * RAD_TO_DEG;
         snap.fovDeg = m_camera.fovY * RAD_TO_DEG;
         snap.jumpQueued = m_jumpQueued;
+
+        // Part 1: Respawn tracking
+        snap.respawnCount = m_respawnCount;
+        snap.lastRespawnReason = m_lastRespawnReason;
+
+        // Part 2: Collision stats
+        snap.candidatesChecked = m_collisionStats.candidatesChecked;
+        snap.penetrationsResolved = m_collisionStats.penetrationsResolved;
+        snap.lastHitCubeId = m_collisionStats.lastHitCubeId;
+        snap.lastAxisResolved = static_cast<uint8_t>(m_collisionStats.lastAxisResolved);
+
         return snap;
     }
 }

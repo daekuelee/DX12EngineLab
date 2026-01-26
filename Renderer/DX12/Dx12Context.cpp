@@ -501,6 +501,13 @@ namespace Renderer
 
     Allocation Dx12Context::UpdateTransforms(FrameContext& ctx)
     {
+        // MT1: Skip transform generation if grid disabled
+        if (!ToggleSystem::IsGridEnabled())
+        {
+            m_generatedTransformCount = 0;
+            return {};  // Empty allocation
+        }
+
         // Allocate from per-frame upload arena (unified front-door)
         Allocation transformsAlloc = m_uploadArena.Allocate(TRANSFORMS_SIZE, 256, "Transforms");
 
@@ -535,6 +542,9 @@ namespace Renderer
                 ++idx;
             }
         }
+
+        // MT1: Store generated count for validation
+        m_generatedTransformCount = InstanceCount;
 
         return transformsAlloc;
     }
@@ -591,6 +601,12 @@ namespace Renderer
         inputs.geoInputs.gridEnabled = ToggleSystem::IsGridEnabled();
         inputs.geoInputs.markersEnabled = ToggleSystem::IsMarkersEnabled();
         inputs.geoInputs.instanceCount = InstanceCount;
+        // MT1: Pass generated transform count and frame ID for validation
+        inputs.geoInputs.generatedTransformCount = m_generatedTransformCount;
+        inputs.geoInputs.frameId = m_frameId;
+        // MT2: Debug single instance mode
+        inputs.geoInputs.debugSingleInstance = ToggleSystem::IsDebugSingleInstanceEnabled();
+        inputs.geoInputs.debugInstanceIndex = ToggleSystem::GetDebugInstanceIndex();
 
         // Check if we need to record character pass (ThirdPerson mode)
         bool recordCharacter = (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson);

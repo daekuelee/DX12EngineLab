@@ -200,6 +200,14 @@ namespace Renderer
         m_worldState.pitchDeg = snap.pitchDeg;
         m_worldState.fovDeg = snap.fovDeg;
         m_worldState.jumpQueued = snap.jumpQueued;
+        // Part 1: Respawn tracking
+        m_worldState.respawnCount = snap.respawnCount;
+        m_worldState.lastRespawnReason = snap.lastRespawnReason;
+        // Part 2: Collision stats
+        m_worldState.candidatesChecked = snap.candidatesChecked;
+        m_worldState.penetrationsResolved = snap.penetrationsResolved;
+        m_worldState.lastHitCubeId = snap.lastHitCubeId;
+        m_worldState.lastAxisResolved = snap.lastAxisResolved;
         m_hasWorldState = true;
     }
 
@@ -248,6 +256,28 @@ namespace Renderer
                 ImGui::Text("FOV: %.1f deg", m_worldState.fovDeg);
                 if (m_worldState.jumpQueued)
                     ImGui::TextColored(ImVec4(0,1,0,1), "JUMP!");
+
+                // Part 1: Respawn tracking
+                if (m_worldState.respawnCount > 0)
+                {
+                    ImGui::Separator();
+                    ImGui::Text("-- Respawn --");
+                    ImGui::Text("Count: %u", m_worldState.respawnCount);
+                    if (m_worldState.lastRespawnReason)
+                        ImGui::Text("Reason: %s", m_worldState.lastRespawnReason);
+                }
+
+                // Part 2: Collision stats
+                ImGui::Separator();
+                ImGui::Text("-- Collision --");
+                ImGui::Text("Candidates: %u", m_worldState.candidatesChecked);
+                ImGui::Text("Penetrations: %u", m_worldState.penetrationsResolved);
+                if (m_worldState.lastHitCubeId >= 0)
+                {
+                    const char* axisName = (m_worldState.lastAxisResolved == 0) ? "X" :
+                                           (m_worldState.lastAxisResolved == 1) ? "Y" : "Z";
+                    ImGui::Text("LastHit: cube=%d axis=%s", m_worldState.lastHitCubeId, axisName);
+                }
 
                 ImGui::Separator();
                 ImGui::Text("-- Render Passes --");

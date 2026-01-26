@@ -103,6 +103,13 @@ namespace Renderer
             return (s_cameraMode == CameraMode::ThirdPerson) ? "thirdperson" : "free";
         }
 
+        // MT2: Debug single instance mode (F9) - draw only one cube for diagnosis
+        static bool IsDebugSingleInstanceEnabled() { return s_debugSingleInstance; }
+        static void SetDebugSingleInstance(bool enabled) { s_debugSingleInstance = enabled; }
+        static void ToggleDebugSingleInstance() { s_debugSingleInstance = !s_debugSingleInstance; }
+        static uint32_t GetDebugInstanceIndex() { return s_debugInstanceIndex; }
+        static void SetDebugInstanceIndex(uint32_t idx) { s_debugInstanceIndex = idx; }
+
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
         static inline ColorMode s_colorMode = ColorMode::FaceDebug;
@@ -121,5 +128,9 @@ namespace Renderer
 
         // Camera mode (Day3) - ThirdPerson by default
         static inline CameraMode s_cameraMode = CameraMode::ThirdPerson;
+
+        // MT2: Debug single instance mode - OFF by default
+        static inline bool s_debugSingleInstance = false;
+        static inline uint32_t s_debugInstanceIndex = 0;  // Which instance to draw in debug mode
     };
 }

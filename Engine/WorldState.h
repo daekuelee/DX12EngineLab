@@ -1,12 +1,32 @@
 #pragma once
 
 #include <DirectXMath.h>
+#include <cstdint>
+#include <vector>
 
 // Forward declare HUDSnapshot from Renderer namespace
 namespace Renderer { struct HUDSnapshot; }
 
 namespace Engine
 {
+    // Part 2: Axis enum for collision resolution
+    enum class Axis : uint8_t { X, Y, Z };
+
+    // Part 2: Axis-Aligned Bounding Box
+    struct AABB
+    {
+        float minX, minY, minZ;
+        float maxX, maxY, maxZ;
+    };
+
+    // Part 2: Collision statistics for HUD display
+    struct CollisionStats
+    {
+        uint32_t candidatesChecked = 0;
+        uint32_t penetrationsResolved = 0;
+        int32_t lastHitCubeId = -1;
+        Axis lastAxisResolved = Axis::Y;
+    };
     // Input state sampled each frame
     struct InputState
     {
@@ -75,6 +95,31 @@ namespace Engine
         // Camera offset from pawn
         float camOffsetBehind = 15.0f;     // units
         float camOffsetUp = 8.0f;          // units
+
+        // Floor collision bounds (cube grid extents)
+        float floorMinX = -100.0f;
+        float floorMaxX = 100.0f;
+        float floorMinZ = -100.0f;
+        float floorMaxZ = 100.0f;
+        float floorY = 0.0f;
+
+        // KillZ (respawn trigger)
+        float killZ = -50.0f;
+
+        // Spawn position
+        float spawnX = 0.0f;
+        float spawnY = 5.0f;  // Slightly above floor
+        float spawnZ = 0.0f;
+
+        // Part 2: Pawn AABB dimensions
+        float pawnHalfWidth = 0.4f;    // X/Z half-extent
+        float pawnHeight = 5.0f;       // Total height (feet at posY, head at posY+height)
+
+        // Part 2: Cube dimensions (scale 0.9, 3.0, 0.9 -> half-extents 0.45, 1.5, 0.45)
+        // Cubes sit on floor (Y=0), top at Y=3.0
+        float cubeHalfXZ = 0.45f;
+        float cubeMinY = 0.0f;
+        float cubeMaxY = 3.0f;
     };
 
     class WorldState
@@ -102,6 +147,13 @@ namespace Engine
         float GetPawnPosZ() const { return m_pawn.posZ; }
         float GetPawnYaw() const { return m_pawn.yaw; }
 
+        // Respawn tracking accessors (Part 1)
+        uint32_t GetRespawnCount() const { return m_respawnCount; }
+        const char* GetLastRespawnReason() const { return m_lastRespawnReason; }
+
+        // Part 2: Collision stats accessor
+        const CollisionStats& GetCollisionStats() const { return m_collisionStats; }
+
     private:
         PawnState m_pawn;
         CameraState m_camera;
@@ -111,5 +163,33 @@ namespace Engine
         float m_sprintAlpha = 0.0f;         // 0-1 smoothed sprint blend
         bool m_jumpConsumedThisFrame = false;
         bool m_jumpQueued = false;          // Evidence: true for 1 frame after jump
+
+        // Respawn tracking (Part 1)
+        uint32_t m_respawnCount = 0;
+        const char* m_lastRespawnReason = nullptr;
+
+        // Part 2: Collision stats (reset each tick)
+        CollisionStats m_collisionStats;
+
+        // Part 2: Spatial hash grid (100x100 cells, each cell contains cube index)
+        // Built once at init - cubes don't move
+        static constexpr int GRID_SIZE = 100;
+        std::vector<uint16_t> m_spatialGrid[GRID_SIZE][GRID_SIZE];
+        bool m_spatialGridBuilt = false;
+
+        // Private helpers
+        void ResolveFloorCollision();
+        void CheckKillZ();
+
+        // Part 2: Collision helpers
+        void BuildSpatialGrid();
+        int WorldToCellX(float x) const;
+        int WorldToCellZ(float z) const;
+        AABB BuildPawnAABB(float px, float py, float pz) const;
+        AABB GetCubeAABB(uint16_t cubeIdx) const;
+        bool Intersects(const AABB& a, const AABB& b) const;
+        float ComputeSignedPenetration(const AABB& pawn, const AABB& cube, Axis axis) const;
+        std::vector<uint16_t> QuerySpatialHash(const AABB& pawn) const;
+        void ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis);
     };
 }
