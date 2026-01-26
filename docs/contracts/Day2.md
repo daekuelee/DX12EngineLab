@@ -34,6 +34,22 @@
 - peakOffset: ~640KB (both allocations fit in 1MB capacity)
 - capacity: 1048576 (1MB per-frame allocator)
 
+## Future Extension Points (Not in Current Scope)
+
+UploadArena currently handles per-frame dynamic uploads:
+- Frame constants (CB)
+- Per-instance transforms
+
+**Future per-frame upload candidates** (would go through UploadArena):
+- Dynamic vertex/index buffer updates (animated meshes)
+- Geometry streaming (LOD, open world chunks)
+- Indirect draw argument buffers
+- Compute-written buffers (GPU readback staging)
+
+**NOT candidates** (remain separate):
+- GeometryFactory: Init-time static geometry uploads (one-shot, synchronous)
+- Texture streaming: Would need separate async upload queue
+
 ## Notes / Bugs / Risks
 - peakOffset must be updated on every successful allocation (not just End())
 - lastAllocOffset uses returned Allocation.offset, never re-computed

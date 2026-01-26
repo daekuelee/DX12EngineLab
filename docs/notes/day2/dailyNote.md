@@ -49,8 +49,35 @@ Created `UploadArena` as a unified allocation front-door with diagnostic HUD ins
 5. **Truthful mapCalls**: Returns constexpr 1 (persistent map reality)
 
 ## Future Extension Points
-- Geometry uploads (mesh streaming)
+
+**Per-frame upload candidates** (would go through UploadArena):
+- Dynamic vertex/index buffer updates (animated meshes)
+- Geometry streaming (LOD, open world chunks)
+- Indirect draw argument buffers
 - Compute writes (indirect args, counters)
-- Texture streaming uploads
-- OOM handling / fallback strategies
-- Allocation profiling / timeline visualization
+
+**NOT candidates** (remain separate):
+- GeometryFactory: Init-time static geometry uploads (one-shot, synchronous)
+- Texture streaming: Would need separate async upload queue
+- OOM handling / fallback strategies (future work)
+- Allocation profiling / timeline visualization (future work)
+
+## GeometryFactory Exclusion Rationale
+
+GeometryFactory was audited and **intentionally excluded** from UploadArena unification:
+
+| Aspect | GeometryFactory | UploadArena |
+|--------|-----------------|-------------|
+| When called | Init-time only | Every frame |
+| Upload buffer lifetime | Temporary (destroyed after copy) | Ring-buffered (reused after fence) |
+| GPU sync | Synchronous wait | Async (fence-gated reuse) |
+| Allocator type | Ephemeral per-call | Persistent per-frame ring |
+| Purpose | Static geometry upload | Dynamic CB/transform updates |
+
+**Classification**: Type (A) init-time staging uploads, NOT type (B) per-frame dynamic uploads.
+
+**Pattern**: Temporary upload buffer created per-call, synchronous fence wait, immediate release after GPU copy completes.
+
+**Call sites**: Only during `RenderScene::Initialize()` (CreateCubeGeometry, CreateFloorGeometry, CreateMarkerGeometry) - never per-frame.
+
+**Decision**: Forcing GeometryFactory through UploadArena would waste per-frame allocator space on init-time data and mix incompatible lifecycles. Current design is correct.
