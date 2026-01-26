@@ -26,7 +26,8 @@ namespace Renderer
         { 0.4f, 0.75f, 0.0f,  0.5f, 1.5f, 0.5f },
     };
 
-    bool CharacterRenderer::Initialize(ID3D12Device* device, ResourceStateTracker* stateTracker)
+    bool CharacterRenderer::Initialize(ID3D12Device* device, ResourceStateTracker* stateTracker,
+                                        DescriptorRingAllocator* descRing)
     {
         m_device = device;
 
@@ -62,8 +63,23 @@ namespace Renderer
         // Register with state tracker (initial state = COPY_DEST)
         stateTracker->Register(m_transformsBuffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, "CharTransforms");
 
+        // Create PERSISTENT SRV using reserved slot (avoids per-frame ring allocation)
+        // This fixes the crash caused by ring wrap after ~1021 frames
+        D3D12_CPU_DESCRIPTOR_HANDLE srvCpuHandle = descRing->GetReservedCpuHandle(ReservedSrvSlot);
+        m_srvGpuHandle = descRing->GetReservedGpuHandle(ReservedSrvSlot);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvViewDesc = {};
+        srvViewDesc.Format = DXGI_FORMAT_UNKNOWN;
+        srvViewDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srvViewDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvViewDesc.Buffer.FirstElement = 0;
+        srvViewDesc.Buffer.NumElements = PartCount;       // 6 matrices
+        srvViewDesc.Buffer.StructureByteStride = 64;      // sizeof(float4x4)
+        srvViewDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+        device->CreateShaderResourceView(m_transformsBuffer.Get(), &srvViewDesc, srvCpuHandle);
+
         m_valid = true;
-        OutputDebugStringA("[CharacterRenderer] Initialized OK\n");
+        OutputDebugStringA("[CharacterRenderer] Initialized OK (persistent SRV at reserved slot 3)\n");
         return true;
     }
 
@@ -139,41 +155,25 @@ namespace Renderer
         stateTracker->Transition(m_transformsBuffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         stateTracker->FlushBarriers(cmd);
 
-        // 4. Allocate SRV descriptor from ring
-        DescriptorAllocation srvDesc = descRing->Allocate(1, "CharSRV");
-        if (!srvDesc.IsValid())
-        {
-            OutputDebugStringA("[CharacterRenderer] SRV alloc failed\n");
-            return;
-        }
+        // 4. Use PERSISTENT SRV (created at init, reserved slot 3)
+        // This eliminates per-frame ring allocation that caused wrap crash
 
-        // 5. Create SRV (FirstElement=0 since our own dedicated buffer)
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvViewDesc = {};
-        srvViewDesc.Format = DXGI_FORMAT_UNKNOWN;
-        srvViewDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-        srvViewDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvViewDesc.Buffer.FirstElement = 0;              // Our buffer starts at 0
-        srvViewDesc.Buffer.NumElements = PartCount;       // 6 matrices
-        srvViewDesc.Buffer.StructureByteStride = 64;      // sizeof(float4x4)
-        srvViewDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
-        m_device->CreateShaderResourceView(m_transformsBuffer.Get(), &srvViewDesc, srvDesc.cpuHandle);
-
-        // 6. CRITICAL: Bind descriptor heap before SetGraphicsRootDescriptorTable
+        // 5. CRITICAL: Bind descriptor heap before SetGraphicsRootDescriptorTable
         ID3D12DescriptorHeap* heaps[] = { descRing->GetHeap() };
         cmd->SetDescriptorHeaps(1, heaps);
 
-        // 7. Set pipeline state - Root Signature ABI:
+        // 6. Set pipeline state - Root Signature ABI:
         //    RP0 = CBV (FrameCB, b0)
         //    RP1 = Table (Transforms, t0)
         //    RP2 = Const (instanceOffset, 1x u32)
         cmd->SetPipelineState(shaders->GetPSO());
         cmd->SetGraphicsRootSignature(shaders->GetRootSignature());
         cmd->SetGraphicsRootConstantBufferView(0, frameCBAddress);      // RP0
-        cmd->SetGraphicsRootDescriptorTable(1, srvDesc.gpuHandle);      // RP1
+        cmd->SetGraphicsRootDescriptorTable(1, m_srvGpuHandle);         // RP1 (persistent SRV)
         uint32_t instanceOffset = 0;
         cmd->SetGraphicsRoot32BitConstants(2, 1, &instanceOffset, 0);   // RP2
 
-        // 8. Set geometry and draw (6 instances for 6 parts)
+        // 7. Set geometry and draw (6 instances for 6 parts)
         cmd->IASetVertexBuffers(0, 1, &scene->GetCubeVBV());
         cmd->IASetIndexBuffer(&scene->GetCubeIBV());
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -182,8 +182,8 @@ namespace Renderer
         // PROOF: Throttled debug log (once per second via DiagnosticLogger)
         if (DiagnosticLogger::ShouldLog("CHAR_COPY"))
         {
-            DiagnosticLogger::Log("Char copy: srcOff=%llu bytes=384 descSlot=%u heapBound=OK\n",
-                copyInfo.srcOffset, srvDesc.heapIndex);
+            DiagnosticLogger::Log("Char copy: srcOff=%llu bytes=384 persistentSRV=slot3 heapBound=OK\n",
+                copyInfo.srcOffset);
         }
     }
 }

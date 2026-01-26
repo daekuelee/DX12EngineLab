@@ -277,8 +277,10 @@ namespace Renderer
     bool Dx12Context::InitFrameResources()
     {
         // Initialize CBV/SRV/UAV descriptor ring allocator (shader-visible)
-        // Capacity: 1024 total, 3 reserved for per-frame transforms SRVs
-        if (!m_descRing.Initialize(m_device.Get(), 1024, FrameCount))
+        // Capacity: 1024 total, 4 reserved:
+        //   - Slots 0-2: per-frame transforms SRVs (FrameContextRing)
+        //   - Slot 3: character transforms SRV (CharacterRenderer, persistent)
+        if (!m_descRing.Initialize(m_device.Get(), 1024, FrameCount + 1))
         {
             OutputDebugStringA("Failed to initialize descriptor ring allocator\n");
             return false;
@@ -356,7 +358,8 @@ namespace Renderer
         }
 
         // Initialize character renderer (Day3)
-        if (!m_characterRenderer.Initialize(m_device.Get(), &m_stateTracker))
+        // Pass descRing for persistent SRV allocation (reserved slot 3)
+        if (!m_characterRenderer.Initialize(m_device.Get(), &m_stateTracker, &m_descRing))
         {
             OutputDebugStringA("Failed to initialize character renderer\n");
             return false;

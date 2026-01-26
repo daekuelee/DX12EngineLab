@@ -28,6 +28,7 @@ namespace Renderer
     public:
         static constexpr uint32_t PartCount = 6;
         static constexpr uint64_t TransformsSize = PartCount * sizeof(DirectX::XMFLOAT4X4);  // 384 bytes
+        static constexpr uint32_t ReservedSrvSlot = 3;  // Reserved slot index in descriptor ring
 
         CharacterRenderer() = default;
         ~CharacterRenderer() = default;
@@ -36,8 +37,10 @@ namespace Renderer
         CharacterRenderer(const CharacterRenderer&) = delete;
         CharacterRenderer& operator=(const CharacterRenderer&) = delete;
 
-        // Initialize: create DEFAULT buffer for character transforms
-        bool Initialize(ID3D12Device* device, ResourceStateTracker* stateTracker);
+        // Initialize: create DEFAULT buffer and persistent SRV for character transforms
+        // descRing: descriptor ring allocator (uses reserved slot 3 for persistent SRV)
+        bool Initialize(ID3D12Device* device, ResourceStateTracker* stateTracker,
+                       DescriptorRingAllocator* descRing);
         void Shutdown();
 
         // Called by App each frame
@@ -64,6 +67,7 @@ namespace Renderer
     private:
         ID3D12Device* m_device = nullptr;
         Microsoft::WRL::ComPtr<ID3D12Resource> m_transformsBuffer;  // DEFAULT heap
+        D3D12_GPU_DESCRIPTOR_HANDLE m_srvGpuHandle = {};  // Persistent SRV (reserved slot 3)
         float m_posX = 0, m_posY = 0, m_posZ = 0;
         float m_yaw = 0;
         bool m_valid = false;
