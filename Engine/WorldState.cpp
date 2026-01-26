@@ -34,6 +34,21 @@ namespace Engine
         m_jumpConsumedThisFrame = false;
     }
 
+    void WorldState::ApplyMouseLook(float deltaX, float deltaY)
+    {
+        // Mouse right -> yaw decreases -> turn right (matches camera yaw convention)
+        m_pawn.yaw -= deltaX * m_config.mouseSensitivity;
+
+        // Mouse down -> pitch decreases -> look down
+        m_pawn.pitch -= deltaY * m_config.mouseSensitivity;
+
+        // Clamp pitch
+        if (m_pawn.pitch < m_config.pitchClampMin)
+            m_pawn.pitch = m_config.pitchClampMin;
+        if (m_pawn.pitch > m_config.pitchClampMax)
+            m_pawn.pitch = m_config.pitchClampMax;
+    }
+
     void WorldState::TickFixed(const InputState& input, float fixedDt)
     {
         // 1. Apply yaw rotation (axis-based)

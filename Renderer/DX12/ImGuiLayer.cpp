@@ -248,6 +248,17 @@ namespace Renderer
                 ImGui::Text("FOV: %.1f deg", m_worldState.fovDeg);
                 if (m_worldState.jumpQueued)
                     ImGui::TextColored(ImVec4(0,1,0,1), "JUMP!");
+
+                ImGui::Separator();
+                ImGui::Text("-- Render Passes --");
+                // Character pass is always active in ThirdPerson mode
+                bool gridActive = ToggleSystem::IsGridEnabled();
+                bool charActive = (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson);
+                ImGui::Text("Passes: Grid=%s Char=%s",
+                    gridActive ? "ON" : "OFF",
+                    charActive ? "ON" : "OFF");
+                if (charActive)
+                    ImGui::Text("Character Parts: 6");
             }
 
             // Upload diagnostics section (Day2) - only show when diag mode enabled AND metrics valid
@@ -294,6 +305,7 @@ namespace Renderer
                 if (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson)
                 {
                     ImGui::BulletText("WASD: Move (cam-relative)");
+                    ImGui::BulletText("Mouse: Look around");
                     ImGui::BulletText("Q/E: Yaw, R/F: Pitch");
                     ImGui::BulletText("Shift: Sprint");
                     ImGui::BulletText("Space: Jump");

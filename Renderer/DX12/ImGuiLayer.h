@@ -56,6 +56,10 @@ namespace Renderer
             float yawDeg = 0, pitchDeg = 0;
             float fovDeg = 45;
             bool jumpQueued = false;
+            // Character pass proof fields
+            uint32_t characterPartCount = 0;
+            bool gridPassActive = true;
+            bool characterPassActive = false;
         } m_worldState;
         bool m_hasWorldState = false;
     };

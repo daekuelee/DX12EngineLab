@@ -20,8 +20,9 @@ namespace Engine
             if (GetAsyncKeyState('D') & 0x8000) input.moveX += 1.0f;
 
             // Look axes (Q/E for yaw, R/F for pitch)
-            if (GetAsyncKeyState('Q') & 0x8000) input.yawAxis -= 1.0f;
-            if (GetAsyncKeyState('E') & 0x8000) input.yawAxis += 1.0f;
+            // Q = turn left (yaw increases, CCW), E = turn right (yaw decreases, CW)
+            if (GetAsyncKeyState('Q') & 0x8000) input.yawAxis += 1.0f;
+            if (GetAsyncKeyState('E') & 0x8000) input.yawAxis -= 1.0f;
             if (GetAsyncKeyState('R') & 0x8000) input.pitchAxis += 1.0f;
             if (GetAsyncKeyState('F') & 0x8000) input.pitchAxis -= 1.0f;
 

@@ -40,6 +40,11 @@ namespace Renderer
         D3D12_VERTEX_BUFFER_VIEW GetVBView() const { return m_vbv; }
         D3D12_INDEX_BUFFER_VIEW GetIBView() const { return m_ibv; }
 
+        // Cube geometry accessors (return by reference for direct use with IASet*)
+        const D3D12_VERTEX_BUFFER_VIEW& GetCubeVBV() const { return m_vbv; }
+        const D3D12_INDEX_BUFFER_VIEW& GetCubeIBV() const { return m_ibv; }
+        uint32_t GetCubeIndexCount() const { return m_indexCount; }
+
     private:
         bool CreateCubeGeometry(GeometryFactory* factory);
         bool CreateFloorGeometry(GeometryFactory* factory);

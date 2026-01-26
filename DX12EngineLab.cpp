@@ -7,6 +7,7 @@
 #include "Renderer/DX12/ToggleSystem.h"
 #include "Renderer/DX12/ImGuiLayer.h"
 #include <cstdio>
+#include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM
 
 #define MAX_LOADSTRING 100
 
@@ -246,6 +247,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 sprintf_s(buf, "CameraMode: %s\n", Renderer::ToggleSystem::GetCameraModeName());
                 OutputDebugStringA(buf);
             }
+        }
+        break;
+    case WM_MOUSEMOVE:
+        {
+            int xPos = GET_X_LPARAM(lParam);
+            int yPos = GET_Y_LPARAM(lParam);
+            g_app.OnMouseMove(xPos, yPos);
         }
         break;
     case WM_DESTROY:

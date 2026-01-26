@@ -149,6 +149,8 @@
     <ClInclude Include="Renderer\DX12\ToggleSystem.h" />
     <ClInclude Include="Renderer\DX12\UploadArena.h" />
     <ClInclude Include="Renderer\DX12\ImGuiLayer.h" />
+    <ClInclude Include="Renderer\DX12\CharacterRenderer.h" />
+    <ClInclude Include="Renderer\DX12\CharacterPass.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
@@ -170,6 +172,7 @@
     <ClCompile Include="Renderer\DX12\RenderScene.cpp" />
     <ClCompile Include="Renderer\DX12\UploadArena.cpp" />
     <ClCompile Include="Renderer\DX12\ImGuiLayer.cpp" />
+    <ClCompile Include="Renderer\DX12\CharacterRenderer.cpp" />
     <ClCompile Include="third_party\imgui\imgui.cpp" />
     <ClCompile Include="third_party\imgui\imgui_draw.cpp" />
     <ClCompile Include="third_party\imgui\imgui_tables.cpp" />

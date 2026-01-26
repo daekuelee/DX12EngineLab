@@ -44,17 +44,26 @@ namespace Engine
         // Check camera mode
         if (Renderer::ToggleSystem::GetCameraMode() == Renderer::CameraMode::ThirdPerson)
         {
-            // Sample jump input with edge detection (must be on ground to trigger)
+            // 1. Apply mouse look ONCE per frame (before fixed-step loop)
+            if (!Renderer::ImGuiLayer::WantsMouse())
+            {
+                m_worldState.ApplyMouseLook(m_pendingMouseDeltaX, m_pendingMouseDeltaY);
+            }
+            m_pendingMouseDeltaX = 0.0f;
+            m_pendingMouseDeltaY = 0.0f;
+
+            // 2. Sample jump input with edge detection (must be on ground to trigger)
             bool spaceDown = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
             bool jumpEdge = spaceDown && !m_prevJump && m_worldState.IsOnGround();
             m_prevJump = spaceDown;
 
-            // Sample other inputs (may be blocked by ImGui)
+            // 3. Sample keyboard inputs (may be blocked by ImGui)
             InputState input;
             if (Renderer::ImGuiLayer::WantsKeyboard())
             {
                 // Zero pawn inputs when ImGui has keyboard focus
                 input = InputState{};
+                m_prevJump = false;  // Reset when ImGui has focus
             }
             else
             {
@@ -82,6 +91,14 @@ namespace Engine
 
             // Build and send HUD snapshot
             m_renderer.SetHUDSnapshot(m_worldState.BuildSnapshot());
+
+            // Send pawn transform for character rendering
+            m_renderer.SetPawnTransform(
+                m_worldState.GetPawnPosX(),
+                m_worldState.GetPawnPosY(),
+                m_worldState.GetPawnPosZ(),
+                m_worldState.GetPawnYaw()
+            );
         }
         // else: Free camera mode - renderer uses its internal FreeCamera
 
@@ -99,5 +116,23 @@ namespace Engine
 
         m_hwnd = nullptr;
         m_initialized = false;
+    }
+
+    void App::OnMouseMove(int x, int y)
+    {
+        if (!m_mouseInitialized)
+        {
+            // First mouse event - just record position, no delta
+            m_lastMouseX = x;
+            m_lastMouseY = y;
+            m_mouseInitialized = true;
+            return;
+        }
+
+        // Accumulate delta for this frame
+        m_pendingMouseDeltaX += static_cast<float>(x - m_lastMouseX);
+        m_pendingMouseDeltaY += static_cast<float>(y - m_lastMouseY);
+        m_lastMouseX = x;
+        m_lastMouseY = y;
     }
 }

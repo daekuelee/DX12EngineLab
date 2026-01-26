@@ -15,6 +15,7 @@
 #include "GeometryFactory.h"
 #include "ImGuiLayer.h"
 #include "UploadArena.h"
+#include "CharacterRenderer.h"
 
 namespace Renderer
 {
@@ -61,6 +62,9 @@ namespace Renderer
 
         // Window dimensions for aspect ratio
         float GetAspect() const { return m_width > 0 && m_height > 0 ? static_cast<float>(m_width) / static_cast<float>(m_height) : 1.0f; }
+
+        // Set pawn transform for character rendering (Day3)
+        void SetPawnTransform(float posX, float posY, float posZ, float yaw);
 
     private:
         HWND m_hwnd = nullptr;
@@ -112,6 +116,9 @@ namespace Renderer
 
         // Upload arena (unified allocation front-door with metrics)
         UploadArena m_uploadArena;
+
+        // Character renderer (Day3)
+        CharacterRenderer m_characterRenderer;
 
         // Backbuffer format (stored for ImGui initialization)
         DXGI_FORMAT m_backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;

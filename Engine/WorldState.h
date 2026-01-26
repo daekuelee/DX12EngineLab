@@ -55,6 +55,7 @@ namespace Engine
         float walkSpeed = 30.0f;           // units/sec
         float sprintMultiplier = 2.0f;     // ratio
         float lookSpeed = 2.0f;            // rad/sec
+        float mouseSensitivity = 0.003f;   // rad/pixel for mouse look
 
         // Pitch limits
         float pitchClampMin = -1.2f;       // rad (~-69 degrees)
@@ -91,6 +92,15 @@ namespace Engine
 
         bool IsOnGround() const { return m_pawn.onGround; }
         float GetSprintAlpha() const { return m_sprintAlpha; }
+
+        // Mouse look (applied once per frame, before fixed-step)
+        void ApplyMouseLook(float deltaX, float deltaY);
+
+        // Pawn position/yaw accessors for character rendering
+        float GetPawnPosX() const { return m_pawn.posX; }
+        float GetPawnPosY() const { return m_pawn.posY; }
+        float GetPawnPosZ() const { return m_pawn.posZ; }
+        float GetPawnYaw() const { return m_pawn.yaw; }
 
     private:
         PawnState m_pawn;

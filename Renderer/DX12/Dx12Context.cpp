@@ -10,6 +10,7 @@
 #include "DiagnosticLogger.h"
 #include "ResourceStateTracker.h"
 #include "PassOrchestrator.h"
+#include "CharacterPass.h"
 #include <cstdio>
 #include <DirectXMath.h>
 
@@ -353,6 +354,14 @@ namespace Renderer
             OutputDebugStringA("Failed to initialize render scene\n");
             return false;
         }
+
+        // Initialize character renderer (Day3)
+        if (!m_characterRenderer.Initialize(m_device.Get(), &m_stateTracker))
+        {
+            OutputDebugStringA("Failed to initialize character renderer\n");
+            return false;
+        }
+
         return true;
     }
 
@@ -455,6 +464,11 @@ namespace Renderer
     void Dx12Context::SetHUDSnapshot(const HUDSnapshot& snap)
     {
         m_imguiLayer.SetHUDSnapshot(snap);
+    }
+
+    void Dx12Context::SetPawnTransform(float posX, float posY, float posZ, float yaw)
+    {
+        m_characterRenderer.SetPawnTransform(posX, posY, posZ, yaw);
     }
 
     Allocation Dx12Context::UpdateFrameConstants(FrameContext& ctx)
@@ -575,8 +589,67 @@ namespace Renderer
         inputs.geoInputs.markersEnabled = ToggleSystem::IsMarkersEnabled();
         inputs.geoInputs.instanceCount = InstanceCount;
 
-        // Execute all passes via orchestrator
-        uint32_t drawCalls = PassOrchestrator::Execute(inputs);
+        // Check if we need to record character pass (ThirdPerson mode)
+        bool recordCharacter = (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson);
+
+        // Execute passes via orchestrator
+        // If recording character, skip ImGui in orchestrator (we'll record it after character)
+        PassEnableFlags flags;
+        flags.imguiPass = !recordCharacter;  // Disable ImGui if we're recording character
+        uint32_t drawCalls = PassOrchestrator::Execute(inputs, flags);
+
+        // Record character pass (separate from grid, only in ThirdPerson mode)
+        if (recordCharacter)
+        {
+            // After PassOrchestrator::Execute, backbuffer is in PRESENT state
+            // Transition back to RENDER_TARGET for character + ImGui
+            D3D12_RESOURCE_BARRIER barrier = {};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource = m_backBuffers[backBufferIndex].Get();
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            m_commandList->ResourceBarrier(1, &barrier);
+
+            // Re-set render targets (they were cleared when orchestrator finished)
+            m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+            m_commandList->RSSetViewports(1, &m_viewport);
+            m_commandList->RSSetScissorRects(1, &m_scissorRect);
+
+            // 1. Allocate and write character matrices via UploadArena
+            Allocation charAlloc = m_uploadArena.Allocate(
+                CharacterRenderer::TransformsSize, 256, "CharXforms");
+
+            // 2. Build and write matrices
+            m_characterRenderer.WriteMatrices(charAlloc.cpuPtr);
+
+            // 3. Build copy info (decoupled from FrameContext)
+            CharacterCopyInfo copyInfo;
+            copyInfo.uploadSrc = ctx.uploadAllocator.GetBuffer();
+            copyInfo.srcOffset = charAlloc.offset;
+
+            // 4. Build pass inputs and record
+            CharacterPassInputs charInputs;
+            charInputs.renderer = &m_characterRenderer;
+            charInputs.copyInfo = copyInfo;
+            charInputs.descRing = &m_descRing;
+            charInputs.stateTracker = &m_stateTracker;
+            charInputs.scene = &m_scene;
+            charInputs.shaders = &m_shaderLibrary;
+            charInputs.frameCBAddress = frameCBAlloc.gpuVA;
+
+            CharacterPass::Record(m_commandList.Get(), charInputs);
+            drawCalls += 1;  // Character is 1 draw call (6 instances)
+
+            // Record ImGui pass (we skipped it in orchestrator)
+            m_imguiLayer.RecordCommands(m_commandList.Get());
+            drawCalls += 1;
+
+            // Transition backbuffer back to PRESENT
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+            m_commandList->ResourceBarrier(1, &barrier);
+        }
 
         // PROOF: Once-per-second log showing frame indices and SRV offset match
         if (DiagnosticLogger::ShouldLog("PROOF_BIND"))
@@ -749,6 +822,9 @@ namespace Renderer
 
         // Shutdown scene
         m_scene.Shutdown();
+
+        // Shutdown character renderer
+        m_characterRenderer.Shutdown();
 
         // Shutdown geometry factory
         m_geometryFactory.Shutdown();
