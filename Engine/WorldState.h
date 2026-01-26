@@ -83,7 +83,7 @@ namespace Engine
 
         // Physics
         float gravity = 30.0f;             // units/sec^2
-        float jumpVelocity = 12.0f;        // units/sec
+        float jumpVelocity = 15.0f;        // units/sec (v²/2g = 225/60 = 3.75 max height)
 
         // Camera smoothing
         float sprintSmoothRate = 8.0f;     // 1/sec
@@ -96,7 +96,7 @@ namespace Engine
         float camOffsetBehind = 15.0f;     // units
         float camOffsetUp = 8.0f;          // units
 
-        // Floor collision bounds (cube grid extents)
+        // Floor collision bounds (match cube grid extents)
         float floorMinX = -100.0f;
         float floorMaxX = 100.0f;
         float floorMinZ = -100.0f;
@@ -106,9 +106,9 @@ namespace Engine
         // KillZ (respawn trigger)
         float killZ = -50.0f;
 
-        // Spawn position
+        // Spawn position (in gap between cubes at origin)
         float spawnX = 0.0f;
-        float spawnY = 5.0f;  // Slightly above floor
+        float spawnY = 5.0f;  // Above floor (falls to Y=0)
         float spawnZ = 0.0f;
 
         // Part 2: Pawn AABB dimensions

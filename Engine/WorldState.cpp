@@ -289,7 +289,7 @@ namespace Engine
         if (overlap <= 0.0f) return 0.0f;
 
         // Sign: push pawn away from cube center
-        float sign = (centerPawn < centerCube) ? -1.0f : 1.0f;
+        float sign = (centerPawn < centerCube) ? 1.0f : -1.0f;
 
         return sign * overlap;
     }
@@ -357,6 +357,12 @@ namespace Engine
             m_collisionStats.penetrationsResolved++;
             m_collisionStats.lastHitCubeId = deepestCubeIdx;
             m_collisionStats.lastAxisResolved = axis;
+
+            // Debug log for collision proof
+            char buf[128];
+            const char* axisName = (axis == Axis::X) ? "X" : (axis == Axis::Y) ? "Y" : "Z";
+            sprintf_s(buf, "[Collision] cube=%d axis=%s pen=%.3f\n", deepestCubeIdx, axisName, deepestPen);
+            OutputDebugStringA(buf);
 
             // Zero velocity on this axis
             if (axis == Axis::X) m_pawn.velX = 0.0f;
