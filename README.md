@@ -49,6 +49,33 @@ Engine-style DX12 sandbox built with **contracts + toggles + evidence** (not tut
 
 **Evidence**: [docs/contracts/day1.5/](docs/contracts/day1.5/)
 
+**Next**: Day1.7 - Composition-based refactor
+
+## Day1.7: Composition-Based Architecture Refactor (2026-01-26)
+
+**Goal**: Transform monolithic architecture into composition-based design with clear ownership, testable components, and explicit contracts. No runtime behavior changes.
+
+**New Components**:
+- `RenderContext` - Parameter bundle for render passes
+- `ClearPass` / `GeometryPass` / `ImGuiPass` - Composable render passes
+- `BarrierScope` - RAII barrier management
+- `DiagnosticLogger` - Centralized throttled logging
+- `ResourceStateTracker` - SOLE authority for resource state tracking
+- `GeometryFactory` - Consolidated buffer creation with upload sync
+- `PassOrchestrator` - Sequences render passes
+
+**Key Changes**:
+- Split `Initialize()` into focused helpers (Device, SwapChain, Subsystems)
+- Migrate transforms to `ResourceRegistry` (handle-based ownership)
+- Remove parallel state tracking (`FrameContext::transformsState` deleted)
+- Extract `FreeCamera` to `Dx12Context` member
+
+**Key Commit**: `8f32cb3` (19 files, +1382/-689 lines)
+
+**Debug Narrative**: [docs/notes/day1.7/dailyNote.md](docs/notes/day1.7/dailyNote.md)
+
+**Spec/Contract**: [docs/contracts/day1.7/finalRefact.md](docs/contracts/day1.7/finalRefact.md)
+
 **Next**: Day2 - Upload arena, GPU culling
 
 ## Build & Run
