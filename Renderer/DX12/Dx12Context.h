@@ -41,6 +41,13 @@ namespace Renderer
         uint32_t penetrationsResolved = 0;
         int32_t lastHitCubeId = -1;
         uint8_t lastAxisResolved = 1;  // 0=X, 1=Y, 2=Z
+
+        // Floor diagnostics (Day3 debug)
+        bool inFloorBounds = false;
+        bool didFloorClamp = false;
+        float floorMinX = 0, floorMaxX = 0;
+        float floorMinZ = 0, floorMaxZ = 0;
+        float floorY = 0;
     };
     class Dx12Context
     {

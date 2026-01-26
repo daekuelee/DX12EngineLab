@@ -171,6 +171,9 @@ namespace Engine
         // Part 2: Collision stats (reset each tick)
         CollisionStats m_collisionStats;
 
+        // Floor diagnostic flag (reset each tick, set in ResolveFloorCollision)
+        bool m_didFloorClampThisTick = false;
+
         // Part 2: Spatial hash grid (100x100 cells, each cell contains cube index)
         // Built once at init - cubes don't move
         static constexpr int GRID_SIZE = 100;

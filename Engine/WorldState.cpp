@@ -136,9 +136,30 @@ namespace Engine
         ResolveAxis(newY, m_pawn.posX, newY, m_pawn.posZ, Axis::Y);
         m_pawn.posY = newY;
 
+        // Reset floor clamp flag before floor collision
+        m_didFloorClampThisTick = false;
+
         // 9. Floor collision (bounded - only within grid extents)
         // This runs AFTER cube collision
+        // [FLOOR-A] PRE log
+        static uint32_t tickCount = 0;
+        tickCount++;
+        if (tickCount % 60 == 0) {  // Log once per second
+            char buf[256];
+            sprintf_s(buf, "[FLOOR-A] tick=%u PRE pos=(%.2f,%.2f,%.2f) velY=%.2f onGround=%d\n",
+                tickCount, m_pawn.posX, m_pawn.posY, m_pawn.posZ, m_pawn.velY, m_pawn.onGround ? 1 : 0);
+            OutputDebugStringA(buf);
+        }
+
         ResolveFloorCollision();
+
+        // [FLOOR-A] POST log
+        if (tickCount % 60 == 0) {
+            char buf[256];
+            sprintf_s(buf, "[FLOOR-A] tick=%u POST pos=(%.2f,%.2f,%.2f) velY=%.2f onGround=%d\n",
+                tickCount, m_pawn.posX, m_pawn.posY, m_pawn.posZ, m_pawn.velY, m_pawn.onGround ? 1 : 0);
+            OutputDebugStringA(buf);
+        }
 
         // 10. KillZ check (respawn if below threshold)
         CheckKillZ();
@@ -146,35 +167,65 @@ namespace Engine
 
     void WorldState::ResolveFloorCollision()
     {
+        // Calculate explicit pawn bottom (posY IS the feet position)
+        float pawnBottomY = m_pawn.posY;
+
         // Floor collision only applies within map bounds (cube grid extents)
         bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
                               m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
 
-        if (inFloorBounds && m_pawn.posY < m_config.floorY)
+        bool belowFloor = (pawnBottomY < m_config.floorY);
+        bool didClamp = false;
+
+        if (inFloorBounds && belowFloor)
         {
             m_pawn.posY = m_config.floorY;
             m_pawn.velY = 0.0f;
             m_pawn.onGround = true;
+            didClamp = true;
+            m_didFloorClampThisTick = true;
         }
         // Outside bounds: no floor, pawn falls (onGround remains unchanged from physics)
+
+        // [FLOOR-B] Log when pawn is near floor (Y < 1.0) or falling
+        if (pawnBottomY < 1.0f || m_pawn.velY < -1.0f) {
+            char buf[256];
+            sprintf_s(buf, "[FLOOR-B] pawnBot=%.3f floorY=%.3f belowFloor=%d inBounds=%d didClamp=%d velY=%.2f onGround=%d\n",
+                pawnBottomY, m_config.floorY, belowFloor ? 1 : 0, inFloorBounds ? 1 : 0,
+                didClamp ? 1 : 0, m_pawn.velY, m_pawn.onGround ? 1 : 0);
+            OutputDebugStringA(buf);
+        }
+
+        // [FLOOR-C] Log when OUT of bounds
+        if (!inFloorBounds) {
+            char buf[256];
+            sprintf_s(buf, "[FLOOR-C] OUT_OF_BOUNDS! posX=%.2f posZ=%.2f boundsX=[%.1f,%.1f] boundsZ=[%.1f,%.1f]\n",
+                m_pawn.posX, m_pawn.posZ,
+                m_config.floorMinX, m_config.floorMaxX,
+                m_config.floorMinZ, m_config.floorMaxZ);
+            OutputDebugStringA(buf);
+        }
     }
 
     void WorldState::CheckKillZ()
     {
         if (m_pawn.posY < m_config.killZ)
         {
+            m_respawnCount++;
+
+            // Log with position BEFORE respawn
+            char buf[256];
+            sprintf_s(buf, "[KILLZ] #%u at pos=(%.2f,%.2f,%.2f) - respawning\n",
+                m_respawnCount, m_pawn.posX, m_pawn.posY, m_pawn.posZ);
+            OutputDebugStringA(buf);
+
             // Respawn at spawn point
             m_pawn.posX = m_config.spawnX;
             m_pawn.posY = m_config.spawnY;
             m_pawn.posZ = m_config.spawnZ;
             m_pawn.velX = m_pawn.velY = m_pawn.velZ = 0.0f;
             m_pawn.onGround = false;  // NOT true! Floor resolve will set it next tick
-            m_respawnCount++;
             m_lastRespawnReason = "KillZ";
-
-            char buf[128];
-            sprintf_s(buf, "[KillZ] Respawn: count=%u onGround=false\n", m_respawnCount);
-            OutputDebugStringA(buf);
         }
     }
 
@@ -460,6 +511,16 @@ namespace Engine
         snap.penetrationsResolved = m_collisionStats.penetrationsResolved;
         snap.lastHitCubeId = m_collisionStats.lastHitCubeId;
         snap.lastAxisResolved = static_cast<uint8_t>(m_collisionStats.lastAxisResolved);
+
+        // Floor diagnostics
+        snap.inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
+                              m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
+        snap.didFloorClamp = m_didFloorClampThisTick;
+        snap.floorMinX = m_config.floorMinX;
+        snap.floorMaxX = m_config.floorMaxX;
+        snap.floorMinZ = m_config.floorMinZ;
+        snap.floorMaxZ = m_config.floorMaxZ;
+        snap.floorY = m_config.floorY;
 
         return snap;
     }

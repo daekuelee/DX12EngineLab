@@ -208,6 +208,14 @@ namespace Renderer
         m_worldState.penetrationsResolved = snap.penetrationsResolved;
         m_worldState.lastHitCubeId = snap.lastHitCubeId;
         m_worldState.lastAxisResolved = snap.lastAxisResolved;
+        // Floor diagnostics
+        m_worldState.inFloorBounds = snap.inFloorBounds;
+        m_worldState.didFloorClamp = snap.didFloorClamp;
+        m_worldState.floorMinX = snap.floorMinX;
+        m_worldState.floorMaxX = snap.floorMaxX;
+        m_worldState.floorMinZ = snap.floorMinZ;
+        m_worldState.floorMaxZ = snap.floorMaxZ;
+        m_worldState.floorY = snap.floorY;
         m_hasWorldState = true;
     }
 
@@ -278,6 +286,21 @@ namespace Renderer
                                            (m_worldState.lastAxisResolved == 1) ? "Y" : "Z";
                     ImGui::Text("LastHit: cube=%d axis=%s", m_worldState.lastHitCubeId, axisName);
                 }
+
+                // Floor diagnostics (Day3 debug)
+                ImGui::Separator();
+                ImGui::Text("-- FLOOR DEBUG --");
+                ImGui::Text("posX: %.2f  posZ: %.2f", m_worldState.posX, m_worldState.posZ);
+                ImGui::Text("posY (feet): %.3f", m_worldState.posY);
+                ImGui::Text("velY: %.2f", m_worldState.velY);
+                ImGui::Text("inBounds: %s", m_worldState.inFloorBounds ? "YES" : "NO");
+                ImGui::Text("onGround: %s", m_worldState.onGround ? "YES" : "NO");
+                ImGui::Text("didFloorClamp: %s", m_worldState.didFloorClamp ? "YES" : "NO");
+                ImGui::Text("KillZ count: %u", m_worldState.respawnCount);
+                // Show bounds for reference
+                ImGui::Text("Bounds: X[%.0f,%.0f] Z[%.0f,%.0f]",
+                    m_worldState.floorMinX, m_worldState.floorMaxX,
+                    m_worldState.floorMinZ, m_worldState.floorMaxZ);
 
                 ImGui::Separator();
                 ImGui::Text("-- Render Passes --");
