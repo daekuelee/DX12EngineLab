@@ -96,11 +96,11 @@ namespace Engine
         float camOffsetBehind = 15.0f;     // units
         float camOffsetUp = 8.0f;          // units
 
-        // Floor collision bounds (match cube grid extents)
-        float floorMinX = -100.0f;
-        float floorMaxX = 100.0f;
-        float floorMinZ = -100.0f;
-        float floorMaxZ = 100.0f;
+        // Floor collision bounds (match rendered floor geometry)
+        float floorMinX = -200.0f;
+        float floorMaxX = 200.0f;
+        float floorMinZ = -200.0f;
+        float floorMaxZ = 200.0f;
         float floorY = 0.0f;
 
         // KillZ (respawn trigger)
