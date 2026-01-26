@@ -51,6 +51,9 @@
     <ClInclude Include="Renderer\DX12\ToggleSystem.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Renderer\DX12\UploadArena.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp">
@@ -75,6 +78,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Renderer\DX12\RenderScene.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Renderer\DX12\UploadArena.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

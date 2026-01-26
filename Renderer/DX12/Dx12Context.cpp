@@ -447,8 +447,8 @@ namespace Renderer
 
     Allocation Dx12Context::UpdateFrameConstants(FrameContext& ctx)
     {
-        // Allocate from per-frame linear allocator
-        Allocation frameCBAlloc = ctx.uploadAllocator.Allocate(CB_SIZE, CBV_ALIGNMENT, "FrameCB");
+        // Allocate from per-frame upload arena (unified front-door)
+        Allocation frameCBAlloc = m_uploadArena.Allocate(CB_SIZE, CBV_ALIGNMENT, "FrameCB");
 
         float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
         XMMATRIX viewProj = BuildFreeCameraViewProj(m_camera, aspect);
@@ -463,8 +463,8 @@ namespace Renderer
 
     Allocation Dx12Context::UpdateTransforms(FrameContext& ctx)
     {
-        // Allocate from per-frame linear allocator
-        Allocation transformsAlloc = ctx.uploadAllocator.Allocate(TRANSFORMS_SIZE, 256, "Transforms");
+        // Allocate from per-frame upload arena (unified front-door)
+        Allocation transformsAlloc = m_uploadArena.Allocate(TRANSFORMS_SIZE, 256, "Transforms");
 
         float* transforms = static_cast<float*>(transformsAlloc.cpuPtr);
         uint32_t idx = 0;
@@ -628,6 +628,10 @@ namespace Renderer
         uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
         FrameContext& frameCtx = m_frameRing.BeginFrame(m_frameId);
 
+        // Begin upload arena with per-frame allocator
+        bool diagEnabled = ToggleSystem::IsUploadDiagEnabled();
+        m_uploadArena.Begin(&frameCtx.uploadAllocator, diagEnabled);
+
         // Retire completed descriptor ring frames
         uint64_t completedFence = m_frameRing.GetFence()->GetCompletedValue();
         m_descRing.BeginFrame(completedFence);
@@ -699,6 +703,10 @@ namespace Renderer
                 ToggleSystem::ClearDiagnosticLog();
             }
         }
+
+        // End upload arena and pass metrics to HUD
+        m_uploadArena.End();
+        m_imguiLayer.SetUploadArenaMetrics(m_uploadArena.GetLastSnapshot());
 
         // Phase 3: Execute & Present
         ExecuteAndPresent(frameCtx);

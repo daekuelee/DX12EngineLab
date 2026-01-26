@@ -79,6 +79,11 @@ namespace Renderer
         static void SetMarkersEnabled(bool enabled) { s_markersEnabled = enabled; }
         static void ToggleMarkers() { s_markersEnabled = !s_markersEnabled; }
 
+        // Upload diagnostic mode toggle (Day2)
+        static bool IsUploadDiagEnabled() { return s_uploadDiagEnabled; }
+        static void SetUploadDiagEnabled(bool enabled) { s_uploadDiagEnabled = enabled; }
+        static void ToggleUploadDiag() { s_uploadDiagEnabled = !s_uploadDiagEnabled; }
+
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
         static inline ColorMode s_colorMode = ColorMode::FaceDebug;
@@ -91,5 +96,8 @@ namespace Renderer
 
         // Diagnostic logging flag
         static inline bool s_logDiagnostics = false;
+
+        // Upload diagnostic mode (Day2) - OFF by default
+        static inline bool s_uploadDiagEnabled = false;
     };
 }

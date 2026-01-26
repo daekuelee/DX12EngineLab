@@ -177,6 +177,12 @@ namespace Renderer
         return io.WantCaptureMouse;
     }
 
+    void ImGuiLayer::SetUploadArenaMetrics(const UploadArenaMetrics& metrics)
+    {
+        m_uploadMetrics = metrics;  // Struct copy, no heap alloc
+        m_hasUploadMetrics = true;
+    }
+
     void ImGuiLayer::BuildHUDContent()
     {
         // Position at top-left with some padding
@@ -204,6 +210,38 @@ namespace Renderer
             ImGui::Text("Draw Mode: %s [T]", drawModeName);
             ImGui::Text("Color Mode: %s [C]", colorModeName);
             ImGui::Text("Grid: %s [G]", gridEnabled ? "ON" : "OFF");
+
+            // Upload diagnostics section (Day2) - only show when diag mode enabled AND metrics valid
+            if (ToggleSystem::IsUploadDiagEnabled() && m_hasUploadMetrics)
+            {
+                ImGui::Separator();
+                ImGui::Text("-- Upload Arena --");
+                ImGui::Text("Alloc Calls: %u", m_uploadMetrics.allocCalls);
+                ImGui::Text("Alloc Bytes: %llu KB", m_uploadMetrics.allocBytes / 1024);
+                ImGui::Text("Peak Offset: %llu / %llu KB (%.1f%%)",
+                    m_uploadMetrics.peakOffset / 1024,
+                    m_uploadMetrics.capacity / 1024,
+                    m_uploadMetrics.capacity > 0
+                        ? (100.0f * m_uploadMetrics.peakOffset / m_uploadMetrics.capacity)
+                        : 0.0f);
+
+                // Warn if >80% capacity
+                if (m_uploadMetrics.capacity > 0 &&
+                    m_uploadMetrics.peakOffset > m_uploadMetrics.capacity * 8 / 10)
+                {
+                    ImGui::TextColored(ImVec4(1,1,0,1), "Warning: >80%% capacity");
+                }
+
+                // Last allocation detail
+                if (m_uploadMetrics.lastAllocTag)
+                {
+                    ImGui::Text("Last: %s (%llu B @ %llu)",
+                        m_uploadMetrics.lastAllocTag,
+                        m_uploadMetrics.lastAllocSize,
+                        m_uploadMetrics.lastAllocOffset);
+                }
+            }
+
             ImGui::Separator();
 
             // Collapsible controls section
@@ -212,6 +250,7 @@ namespace Renderer
                 ImGui::BulletText("T: Toggle Draw Mode");
                 ImGui::BulletText("C: Cycle Color Mode");
                 ImGui::BulletText("G: Toggle Grid");
+                ImGui::BulletText("U: Upload Diagnostics");
                 ImGui::BulletText("F1/F2: Diagnostics");
                 ImGui::BulletText("WASD/Arrows: Move");
                 ImGui::BulletText("Space/Ctrl: Up/Down");

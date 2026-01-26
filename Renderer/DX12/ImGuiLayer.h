@@ -5,6 +5,7 @@
 #include <dxgi.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include "UploadArena.h"
 
 namespace Renderer
 {
@@ -26,10 +27,17 @@ namespace Renderer
         static bool WantsKeyboard();
         static bool WantsMouse();
 
+        // Upload arena metrics for HUD display (Day2)
+        void SetUploadArenaMetrics(const UploadArenaMetrics& metrics);
+
     private:
         void BuildHUDContent();
 
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_srvHeap;
         bool m_initialized = false;
+
+        // Upload arena metrics (Day2)
+        UploadArenaMetrics m_uploadMetrics;
+        bool m_hasUploadMetrics = false;
     };
 }

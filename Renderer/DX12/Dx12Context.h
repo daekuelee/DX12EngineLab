@@ -13,6 +13,7 @@
 #include "DescriptorRingAllocator.h"
 #include "GeometryFactory.h"
 #include "ImGuiLayer.h"
+#include "UploadArena.h"
 
 namespace Renderer
 {
@@ -82,6 +83,9 @@ namespace Renderer
 
         // ImGui layer (HUD overlay)
         ImGuiLayer m_imguiLayer;
+
+        // Upload arena (unified allocation front-door with metrics)
+        UploadArena m_uploadArena;
 
         // Backbuffer format (stored for ImGui initialization)
         DXGI_FORMAT m_backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
