@@ -174,24 +174,27 @@ namespace Engine
         bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
                               m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
 
-        bool belowFloor = (pawnBottomY < m_config.floorY);
+        const float eps = 0.01f;  // 1cm tolerance
+        bool touchingFloor = (pawnBottomY <= m_config.floorY + eps);
         bool didClamp = false;
 
-        if (inFloorBounds && belowFloor)
+        if (inFloorBounds && touchingFloor && m_pawn.velY <= 0.0f)
         {
-            m_pawn.posY = m_config.floorY;
+            if (pawnBottomY < m_config.floorY) {
+                m_pawn.posY = m_config.floorY;  // Only clamp if actually below
+                didClamp = true;
+                m_didFloorClampThisTick = true;
+            }
             m_pawn.velY = 0.0f;
             m_pawn.onGround = true;
-            didClamp = true;
-            m_didFloorClampThisTick = true;
         }
         // Outside bounds: no floor, pawn falls (onGround remains unchanged from physics)
 
         // [FLOOR-B] Log when pawn is near floor (Y < 1.0) or falling
         if (pawnBottomY < 1.0f || m_pawn.velY < -1.0f) {
             char buf[256];
-            sprintf_s(buf, "[FLOOR-B] pawnBot=%.3f floorY=%.3f belowFloor=%d inBounds=%d didClamp=%d velY=%.2f onGround=%d\n",
-                pawnBottomY, m_config.floorY, belowFloor ? 1 : 0, inFloorBounds ? 1 : 0,
+            sprintf_s(buf, "[FLOOR-B] pawnBot=%.3f floorY=%.3f touchFloor=%d inBounds=%d didClamp=%d velY=%.2f onGround=%d\n",
+                pawnBottomY, m_config.floorY, touchingFloor ? 1 : 0, inFloorBounds ? 1 : 0,
                 didClamp ? 1 : 0, m_pawn.velY, m_pawn.onGround ? 1 : 0);
             OutputDebugStringA(buf);
         }
