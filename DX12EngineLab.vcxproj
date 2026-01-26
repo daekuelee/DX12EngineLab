@@ -131,6 +131,8 @@
   <ItemGroup>
     <ClInclude Include="DX12EngineLab.h" />
     <ClInclude Include="Engine\App.h" />
+    <ClInclude Include="Engine\WorldState.h" />
+    <ClInclude Include="Engine\InputSampler.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="Renderer\DX12\DescriptorRingAllocator.h" />
     <ClInclude Include="Renderer\DX12\Dx12Context.h" />
@@ -153,6 +155,7 @@
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp" />
     <ClCompile Include="Engine\App.cpp" />
+    <ClCompile Include="Engine\WorldState.cpp" />
     <ClCompile Include="Renderer\DX12\DescriptorRingAllocator.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Context.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Debug.cpp" />

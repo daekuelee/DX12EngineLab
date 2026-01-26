@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 #include "../Renderer/DX12/Dx12Context.h"
+#include "WorldState.h"
 
 namespace Engine
 {
@@ -22,5 +23,12 @@ namespace Engine
         HWND m_hwnd = nullptr;
         Renderer::Dx12Context m_renderer;
         bool m_initialized = false;
+
+        // Day3: World state and fixed-step simulation
+        WorldState m_worldState;
+        float m_accumulator = 0.0f;
+        bool m_prevJump = false;  // Previous frame's space key state for edge detection
+
+        static constexpr float FIXED_DT = 1.0f / 60.0f;  // 60 Hz fixed step
     };
 }

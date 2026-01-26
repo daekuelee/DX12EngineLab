@@ -238,6 +238,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 OutputDebugStringA(Renderer::ToggleSystem::IsUploadDiagEnabled()
                     ? "UploadDiag: ON\n" : "UploadDiag: OFF\n");
             }
+            // 'V' key toggles camera mode (Day3)
+            else if (wParam == 'V')
+            {
+                Renderer::ToggleSystem::ToggleCameraMode();
+                char buf[64];
+                sprintf_s(buf, "CameraMode: %s\n", Renderer::ToggleSystem::GetCameraModeName());
+                OutputDebugStringA(buf);
+            }
         }
         break;
     case WM_DESTROY:

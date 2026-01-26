@@ -9,6 +9,8 @@
 
 namespace Renderer
 {
+    // Forward declaration
+    struct HUDSnapshot;
     class ImGuiLayer
     {
     public:
@@ -30,6 +32,9 @@ namespace Renderer
         // Upload arena metrics for HUD display (Day2)
         void SetUploadArenaMetrics(const UploadArenaMetrics& metrics);
 
+        // World state snapshot for HUD display (Day3)
+        void SetHUDSnapshot(const HUDSnapshot& snap);
+
     private:
         void BuildHUDContent();
 
@@ -39,5 +44,19 @@ namespace Renderer
         // Upload arena metrics (Day2)
         UploadArenaMetrics m_uploadMetrics;
         bool m_hasUploadMetrics = false;
+
+        // World state snapshot (Day3) - stored as individual fields to avoid header dependency
+        struct WorldStateFields {
+            const char* mapName = nullptr;
+            float posX = 0, posY = 0, posZ = 0;
+            float velX = 0, velY = 0, velZ = 0;
+            float speed = 0;
+            bool onGround = true;
+            float sprintAlpha = 0;
+            float yawDeg = 0, pitchDeg = 0;
+            float fovDeg = 45;
+            bool jumpQueued = false;
+        } m_worldState;
+        bool m_hasWorldState = false;
     };
 }

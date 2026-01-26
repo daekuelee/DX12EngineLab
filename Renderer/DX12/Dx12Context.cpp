@@ -442,7 +442,19 @@ namespace Renderer
             if (dt > 0.1f) dt = 0.1f;
         }
         m_lastTime = currentTime;
+        m_lastDeltaTime = dt;  // Store for external access
         return dt;
+    }
+
+    void Dx12Context::SetFrameCamera(const DirectX::XMFLOAT4X4& viewProj)
+    {
+        m_injectedViewProj = viewProj;
+        m_useInjectedCamera = true;
+    }
+
+    void Dx12Context::SetHUDSnapshot(const HUDSnapshot& snap)
+    {
+        m_imguiLayer.SetHUDSnapshot(snap);
     }
 
     Allocation Dx12Context::UpdateFrameConstants(FrameContext& ctx)
@@ -450,12 +462,21 @@ namespace Renderer
         // Allocate from per-frame upload arena (unified front-door)
         Allocation frameCBAlloc = m_uploadArena.Allocate(CB_SIZE, CBV_ALIGNMENT, "FrameCB");
 
-        float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
-        XMMATRIX viewProj = BuildFreeCameraViewProj(m_camera, aspect);
+        XMFLOAT4X4 vpMatrix;
+        if (m_useInjectedCamera)
+        {
+            // Use injected viewProj from ThirdPerson camera
+            vpMatrix = m_injectedViewProj;
+        }
+        else
+        {
+            // Use FreeCamera (fallback)
+            float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
+            XMMATRIX viewProj = BuildFreeCameraViewProj(m_camera, aspect);
+            XMStoreFloat4x4(&vpMatrix, viewProj);
+        }
 
         // DirectXMath uses row-major, HLSL row_major matches - no transpose needed
-        XMFLOAT4X4 vpMatrix;
-        XMStoreFloat4x4(&vpMatrix, viewProj);
         memcpy(frameCBAlloc.cpuPtr, &vpMatrix, sizeof(vpMatrix));
 
         return frameCBAlloc;
@@ -710,6 +731,9 @@ namespace Renderer
 
         // Phase 3: Execute & Present
         ExecuteAndPresent(frameCtx);
+
+        // Reset frame-scoped camera injection for next frame
+        m_useInjectedCamera = false;
 
         // Increment monotonic frame counter
         ++m_frameId;

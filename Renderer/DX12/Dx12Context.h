@@ -5,6 +5,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include <DirectXMath.h>
 #include "FrameContextRing.h"
 #include "ShaderLibrary.h"
 #include "RenderScene.h"
@@ -17,6 +18,19 @@
 
 namespace Renderer
 {
+    // HUD data struct (no Engine types - kept in Renderer namespace)
+    struct HUDSnapshot
+    {
+        const char* mapName = nullptr;    // Must be static literal
+        float posX = 0.0f, posY = 0.0f, posZ = 0.0f;   // World units
+        float velX = 0.0f, velY = 0.0f, velZ = 0.0f;   // World units/sec
+        float speed = 0.0f;               // World units/sec
+        bool onGround = true;
+        float sprintAlpha = 0.0f;         // 0-1
+        float yawDeg = 0.0f, pitchDeg = 0.0f;   // Degrees (converted from radians)
+        float fovDeg = 45.0f;             // Degrees (HUD display only)
+        bool jumpQueued = false;          // Evidence: true for 1 frame after jump
+    };
     class Dx12Context
     {
     public:
@@ -35,6 +49,18 @@ namespace Renderer
 
         // Accessors for backbuffer (RTV selection only - NOT for frame resources)
         uint32_t GetBackBufferIndex() const { return m_swapChain ? m_swapChain->GetCurrentBackBufferIndex() : 0; }
+
+        // Camera injection (frame-scoped: resets each Render)
+        void SetFrameCamera(const DirectX::XMFLOAT4X4& viewProj);
+
+        // HUD snapshot
+        void SetHUDSnapshot(const HUDSnapshot& snap);
+
+        // Delta time accessor for fixed-step loop
+        float GetDeltaTime() const { return m_lastDeltaTime; }
+
+        // Window dimensions for aspect ratio
+        float GetAspect() const { return m_width > 0 && m_height > 0 ? static_cast<float>(m_width) / static_cast<float>(m_height) : 1.0f; }
 
     private:
         HWND m_hwnd = nullptr;
@@ -117,6 +143,11 @@ namespace Renderer
         LARGE_INTEGER m_lastTime = {};
         LARGE_INTEGER m_frequency = {};
         bool m_timerInitialized = false;
+        float m_lastDeltaTime = 0.0f;
+
+        // Injected camera (frame-scoped)
+        DirectX::XMFLOAT4X4 m_injectedViewProj = {};
+        bool m_useInjectedCamera = false;
 
         bool m_initialized = false;
 

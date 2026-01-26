@@ -1,5 +1,6 @@
 #include "ImGuiLayer.h"
 #include "ToggleSystem.h"
+#include "Dx12Context.h"  // For HUDSnapshot definition
 
 #include <imgui.h>
 #include <imgui_impl_win32.h>
@@ -183,6 +184,25 @@ namespace Renderer
         m_hasUploadMetrics = true;
     }
 
+    void ImGuiLayer::SetHUDSnapshot(const HUDSnapshot& snap)
+    {
+        m_worldState.mapName = snap.mapName;
+        m_worldState.posX = snap.posX;
+        m_worldState.posY = snap.posY;
+        m_worldState.posZ = snap.posZ;
+        m_worldState.velX = snap.velX;
+        m_worldState.velY = snap.velY;
+        m_worldState.velZ = snap.velZ;
+        m_worldState.speed = snap.speed;
+        m_worldState.onGround = snap.onGround;
+        m_worldState.sprintAlpha = snap.sprintAlpha;
+        m_worldState.yawDeg = snap.yawDeg;
+        m_worldState.pitchDeg = snap.pitchDeg;
+        m_worldState.fovDeg = snap.fovDeg;
+        m_worldState.jumpQueued = snap.jumpQueued;
+        m_hasWorldState = true;
+    }
+
     void ImGuiLayer::BuildHUDContent()
     {
         // Position at top-left with some padding
@@ -210,6 +230,25 @@ namespace Renderer
             ImGui::Text("Draw Mode: %s [T]", drawModeName);
             ImGui::Text("Color Mode: %s [C]", colorModeName);
             ImGui::Text("Grid: %s [G]", gridEnabled ? "ON" : "OFF");
+            ImGui::Text("CamMode: %s [V]", ToggleSystem::GetCameraModeName());
+
+            // World State section (Day3) - only show in ThirdPerson mode
+            if (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson && m_hasWorldState)
+            {
+                ImGui::Separator();
+                ImGui::Text("-- World State --");
+                if (m_worldState.mapName)
+                    ImGui::Text("Map: %s", m_worldState.mapName);
+                ImGui::Text("Pos: %.1f, %.1f, %.1f", m_worldState.posX, m_worldState.posY, m_worldState.posZ);
+                ImGui::Text("Speed: %.1f", m_worldState.speed);
+                ImGui::Text("OnGround: %s", m_worldState.onGround ? "YES" : "NO");
+                ImGui::Text("Sprint: %.0f%%", m_worldState.sprintAlpha * 100.0f);
+                ImGui::Text("Yaw: %.1f deg", m_worldState.yawDeg);
+                ImGui::Text("Pitch: %.1f deg", m_worldState.pitchDeg);
+                ImGui::Text("FOV: %.1f deg", m_worldState.fovDeg);
+                if (m_worldState.jumpQueued)
+                    ImGui::TextColored(ImVec4(0,1,0,1), "JUMP!");
+            }
 
             // Upload diagnostics section (Day2) - only show when diag mode enabled AND metrics valid
             if (ToggleSystem::IsUploadDiagEnabled() && m_hasUploadMetrics)
@@ -247,14 +286,24 @@ namespace Renderer
             // Collapsible controls section
             if (ImGui::CollapsingHeader("Controls"))
             {
+                ImGui::BulletText("V: Toggle Camera Mode");
                 ImGui::BulletText("T: Toggle Draw Mode");
                 ImGui::BulletText("C: Cycle Color Mode");
                 ImGui::BulletText("G: Toggle Grid");
                 ImGui::BulletText("U: Upload Diagnostics");
-                ImGui::BulletText("F1/F2: Diagnostics");
-                ImGui::BulletText("WASD/Arrows: Move");
-                ImGui::BulletText("Space/Ctrl: Up/Down");
-                ImGui::BulletText("Q/E: Rotate");
+                if (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson)
+                {
+                    ImGui::BulletText("WASD: Move (cam-relative)");
+                    ImGui::BulletText("Q/E: Yaw, R/F: Pitch");
+                    ImGui::BulletText("Shift: Sprint");
+                    ImGui::BulletText("Space: Jump");
+                }
+                else
+                {
+                    ImGui::BulletText("WASD/Arrows: Move");
+                    ImGui::BulletText("Space/Ctrl: Up/Down");
+                    ImGui::BulletText("Q/E: Rotate");
+                }
             }
         }
         ImGui::End();
