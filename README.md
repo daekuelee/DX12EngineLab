@@ -78,6 +78,34 @@ Engine-style DX12 sandbox built with **contracts + toggles + evidence** (not tut
 
 **Next**: Day2 - Upload arena, GPU culling
 
+## Day2: UploadArena + Diagnostic Instrumentation (2026-01-26)
+
+**Goal**: Create unified allocation front-door with diagnostic HUD instrumentation.
+
+**New Components**:
+- `UploadArena` - Wraps FrameLinearAllocator as single entry point for dynamic uploads
+- Per-frame metrics: allocCalls, allocBytes, peakOffset, capacity
+
+**Key Changes**:
+- All upload allocations (CB, Transforms) now go through UploadArena
+- HUD displays Upload Arena section when U toggle is enabled
+- Runtime behavior unchanged (pure wrapper + instrumentation)
+
+**Toggle**:
+- Press `U` to toggle Upload Diagnostics ON/OFF
+- When ON: HUD shows allocation metrics
+
+**Expected Metrics** (per frame):
+- allocCalls: 2 (FrameCB + Transforms)
+- allocBytes: ~640KB
+- peakOffset/capacity: ~640KB / 1MB (64%)
+
+**Debug Narrative**: [docs/notes/day2/dailyNote.md](docs/notes/day2/dailyNote.md)
+
+**Contract**: [docs/contracts/Day2.md](docs/contracts/Day2.md)
+
+**Next**: Day2.5 - Failure mode proof (upload=bad toggle)
+
 ## Build & Run
 - Open DX12EngineLab.sln in VS2022
 - Select **x64 / Debug**

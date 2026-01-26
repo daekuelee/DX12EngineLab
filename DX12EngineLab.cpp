@@ -231,6 +231,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 sprintf_s(buf, "ColorMode = %s\n", Renderer::ToggleSystem::GetColorModeName());
                 OutputDebugStringA(buf);
             }
+            // 'U' key toggles upload diagnostic mode (Day2)
+            else if (wParam == 'U')
+            {
+                Renderer::ToggleSystem::ToggleUploadDiag();
+                OutputDebugStringA(Renderer::ToggleSystem::IsUploadDiagEnabled()
+                    ? "UploadDiag: ON\n" : "UploadDiag: OFF\n");
+            }
         }
         break;
     case WM_DESTROY:

@@ -145,6 +145,7 @@
     <ClInclude Include="Renderer\DX12\ShaderLibrary.h" />
     <ClInclude Include="Renderer\DX12\RenderScene.h" />
     <ClInclude Include="Renderer\DX12\ToggleSystem.h" />
+    <ClInclude Include="Renderer\DX12\UploadArena.h" />
     <ClInclude Include="Renderer\DX12\ImGuiLayer.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
@@ -164,6 +165,7 @@
     <ClCompile Include="Renderer\DX12\ResourceStateTracker.cpp" />
     <ClCompile Include="Renderer\DX12\ShaderLibrary.cpp" />
     <ClCompile Include="Renderer\DX12\RenderScene.cpp" />
+    <ClCompile Include="Renderer\DX12\UploadArena.cpp" />
     <ClCompile Include="Renderer\DX12\ImGuiLayer.cpp" />
     <ClCompile Include="third_party\imgui\imgui.cpp" />
     <ClCompile Include="third_party\imgui\imgui_draw.cpp" />
