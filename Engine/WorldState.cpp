@@ -163,17 +163,12 @@ namespace Engine
         {
             float totalDelta = 0.0f;
 
-            // X axis
-            float prevX = newX;
-            ResolveAxis(newX, newX, newY, newZ, Axis::X);
-            totalDelta += fabsf(newX - prevX);
+            // Day3.8: MTV-based XZ resolution (replaces separate X then Z)
+            float prevX = newX, prevZ = newZ;
+            ResolveXZ_MTV(newX, newZ, newY);
+            totalDelta += fabsf(newX - prevX) + fabsf(newZ - prevZ);
 
-            // Z axis
-            float prevZ = newZ;
-            ResolveAxis(newZ, newX, newY, newZ, Axis::Z);
-            totalDelta += fabsf(newZ - prevZ);
-
-            // Y axis
+            // Y axis (unchanged)
             float prevY = newY;
             ResolveAxis(newY, newX, newY, newZ, Axis::Y);
             totalDelta += fabsf(newY - prevY);
@@ -529,6 +524,80 @@ namespace Engine
         return result;
     }
 
+    // Day3.8: MTV-based XZ resolution (Issue A fix)
+    void WorldState::ResolveXZ_MTV(float& newX, float& newZ, float newY)
+    {
+        AABB pawn = BuildPawnAABB(newX, newY, newZ);
+        auto candidates = QuerySpatialHash(pawn);
+        m_collisionStats.candidatesChecked += static_cast<uint32_t>(candidates.size());
+
+        float bestPenX = 0.0f, bestPenZ = 0.0f;
+        int bestCubeIdx = -1;
+        float bestCenterDiffX = 0.0f, bestCenterDiffZ = 0.0f;
+
+        for (uint16_t cubeIdx : candidates)
+        {
+            AABB cube = GetCubeAABB(cubeIdx);
+            if (!Intersects(pawn, cube)) continue;
+
+            m_collisionStats.contacts++;
+
+            float penX = ComputeSignedPenetration(pawn, cube, Axis::X);
+            float penZ = ComputeSignedPenetration(pawn, cube, Axis::Z);
+
+            float centerDiffX = ((pawn.minX + pawn.maxX) - (cube.minX + cube.maxX)) * 0.5f;
+            float centerDiffZ = ((pawn.minZ + pawn.maxZ) - (cube.minZ + cube.maxZ)) * 0.5f;
+
+            // Select cube with largest min-axis penetration (deepest contact)
+            float minPen = fminf(fabsf(penX), fabsf(penZ));
+            float bestMinPen = fminf(fabsf(bestPenX), fabsf(bestPenZ));
+
+            if (minPen > bestMinPen || bestCubeIdx < 0)
+            {
+                bestPenX = penX;
+                bestPenZ = penZ;
+                bestCubeIdx = cubeIdx;
+                bestCenterDiffX = centerDiffX;
+                bestCenterDiffZ = centerDiffZ;
+            }
+        }
+
+        if (bestCubeIdx >= 0)
+        {
+            // Store debug info
+            m_collisionStats.lastPenX = bestPenX;
+            m_collisionStats.lastPenZ = bestPenZ;
+            m_collisionStats.centerDiffX = bestCenterDiffX;
+            m_collisionStats.centerDiffZ = bestCenterDiffZ;
+
+            // MTV: resolve along axis with SMALLER penetration
+            if (fabsf(bestPenX) < fabsf(bestPenZ) && bestPenX != 0.0f)
+            {
+                newX -= bestPenX;
+                m_pawn.velX = 0.0f;
+                m_collisionStats.mtvAxis = 0;
+                m_collisionStats.mtvMagnitude = fabsf(bestPenX);
+                m_collisionStats.lastAxisResolved = Axis::X;
+            }
+            else if (bestPenZ != 0.0f)
+            {
+                newZ -= bestPenZ;
+                m_pawn.velZ = 0.0f;
+                m_collisionStats.mtvAxis = 2;
+                m_collisionStats.mtvMagnitude = fabsf(bestPenZ);
+                m_collisionStats.lastAxisResolved = Axis::Z;
+            }
+
+            m_collisionStats.penetrationsResolved++;
+            m_collisionStats.lastHitCubeId = bestCubeIdx;
+
+            if (fabsf(bestPenX) > m_collisionStats.maxPenetrationAbs)
+                m_collisionStats.maxPenetrationAbs = fabsf(bestPenX);
+            if (fabsf(bestPenZ) > m_collisionStats.maxPenetrationAbs)
+                m_collisionStats.maxPenetrationAbs = fabsf(bestPenZ);
+        }
+    }
+
     void WorldState::ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis)
     {
         // Build pawn AABB at proposed position
@@ -704,6 +773,14 @@ namespace Engine
         // Day3.7: Collision extent proof (Bug C)
         snap.pawnExtentX = m_config.pawnHalfExtentX;
         snap.pawnExtentZ = m_config.pawnHalfExtentZ;
+
+        // Day3.8: MTV debug fields
+        snap.mtvPenX = m_collisionStats.lastPenX;
+        snap.mtvPenZ = m_collisionStats.lastPenZ;
+        snap.mtvAxis = m_collisionStats.mtvAxis;
+        snap.mtvMagnitude = m_collisionStats.mtvMagnitude;
+        snap.mtvCenterDiffX = m_collisionStats.centerDiffX;
+        snap.mtvCenterDiffZ = m_collisionStats.centerDiffZ;
 
         return snap;
     }

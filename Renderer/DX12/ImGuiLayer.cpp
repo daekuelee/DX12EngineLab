@@ -236,6 +236,13 @@ namespace Renderer
         // Day3.7: Collision extent proof
         m_worldState.pawnExtentX = snap.pawnExtentX;
         m_worldState.pawnExtentZ = snap.pawnExtentZ;
+        // Day3.8: MTV debug fields
+        m_worldState.mtvPenX = snap.mtvPenX;
+        m_worldState.mtvPenZ = snap.mtvPenZ;
+        m_worldState.mtvAxis = snap.mtvAxis;
+        m_worldState.mtvMagnitude = snap.mtvMagnitude;
+        m_worldState.mtvCenterDiffX = snap.mtvCenterDiffX;
+        m_worldState.mtvCenterDiffZ = snap.mtvCenterDiffZ;
         m_hasWorldState = true;
     }
 
@@ -352,6 +359,14 @@ namespace Renderer
                 ImGui::Separator();
                 ImGui::Text("-- Collision Extent --");
                 ImGui::Text("Extent: X=%.2f Z=%.2f", m_worldState.pawnExtentX, m_worldState.pawnExtentZ);
+
+                // Day3.8: MTV debug (Issue A proof)
+                ImGui::Separator();
+                ImGui::Text("-- MTV Debug --");
+                const char* mtvAxisName = (m_worldState.mtvAxis == 0) ? "X" : "Z";
+                ImGui::Text("penX=%.3f penZ=%.3f", m_worldState.mtvPenX, m_worldState.mtvPenZ);
+                ImGui::Text("MTV: axis=%s mag=%.3f", mtvAxisName, m_worldState.mtvMagnitude);
+                ImGui::Text("centerDiff: X=%.2f Z=%.2f", m_worldState.mtvCenterDiffX, m_worldState.mtvCenterDiffZ);
 
                 ImGui::Separator();
                 ImGui::Text("-- Render Passes --");

@@ -50,6 +50,13 @@ namespace Engine
         int32_t supportCubeId = -1;
         bool snappedThisTick = false;
         float supportGap = 0.0f;
+        // Day3.8: MTV debug fields (Issue A proof)
+        float lastPenX = 0.0f;      // X penetration before resolution
+        float lastPenZ = 0.0f;      // Z penetration before resolution
+        uint8_t mtvAxis = 0;        // 0=X, 2=Z (which axis MTV chose)
+        float mtvMagnitude = 0.0f;  // Magnitude of chosen penetration
+        float centerDiffX = 0.0f;   // For sign determination proof
+        float centerDiffZ = 0.0f;
     };
     // Input state sampled each frame
     struct InputState
@@ -235,5 +242,7 @@ namespace Engine
         float ComputeSignedPenetration(const AABB& pawn, const AABB& cube, Axis axis) const;
         std::vector<uint16_t> QuerySpatialHash(const AABB& pawn) const;
         void ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis);
+        // Day3.8: MTV-based XZ resolution (Issue A fix)
+        void ResolveXZ_MTV(float& newX, float& newZ, float newY);
     };
 }

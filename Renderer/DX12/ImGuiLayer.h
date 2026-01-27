@@ -91,6 +91,11 @@ namespace Renderer
             float camDot = 0;
             // Day3.7: Collision extent proof (Bug C)
             float pawnExtentX = 0, pawnExtentZ = 0;
+            // Day3.8: MTV debug fields
+            float mtvPenX = 0, mtvPenZ = 0;
+            uint8_t mtvAxis = 0;
+            float mtvMagnitude = 0;
+            float mtvCenterDiffX = 0, mtvCenterDiffZ = 0;
         } m_worldState;
         bool m_hasWorldState = false;
     };
