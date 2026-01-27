@@ -257,6 +257,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     Renderer::ToggleSystem::GetDebugInstanceIndex());
                 OutputDebugStringA(buf);
             }
+            // F6 key toggles controller mode (Day3.11)
+            else if (wParam == VK_F6)
+            {
+                g_app.ToggleControllerMode();
+            }
         }
         break;
     case WM_MOUSEMOVE:

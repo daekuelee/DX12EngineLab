@@ -22,6 +22,9 @@ namespace Engine
         // Mouse input handler (called from WndProc)
         void OnMouseMove(int x, int y);
 
+        // Day3.11: Controller mode toggle (forwarded from WndProc)
+        void ToggleControllerMode();
+
     private:
         HWND m_hwnd = nullptr;
         Renderer::Dx12Context m_renderer;

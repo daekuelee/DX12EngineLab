@@ -15,6 +15,9 @@ namespace Engine
     // Day3.5: Support source for onGround determination
     enum class SupportSource : uint8_t { FLOOR = 0, CUBE = 1, NONE = 2 };
 
+    // Day3.11: Controller mode (SSOT in Engine, not Renderer)
+    enum class ControllerMode : uint8_t { AABB = 0, Capsule = 1 };
+
     // Day3.5: Support query result
     struct SupportResult
     {
@@ -197,6 +200,11 @@ namespace Engine
         uint32_t GetRespawnCount() const { return m_respawnCount; }
         const char* GetLastRespawnReason() const { return m_lastRespawnReason; }
 
+        // Day3.11: Controller mode
+        ControllerMode GetControllerMode() const { return m_controllerMode; }
+        void ToggleControllerMode();
+        void RespawnResetControllerState();
+
         // Part 2: Collision stats accessor
         const CollisionStats& GetCollisionStats() const { return m_collisionStats; }
 
@@ -222,6 +230,9 @@ namespace Engine
 
         // Day3.5: Jump grace flag (prevents support query from clearing onGround on jump frame)
         bool m_justJumpedThisTick = false;
+
+        // Day3.11: Controller mode
+        ControllerMode m_controllerMode = ControllerMode::AABB;
 
         // Part 2: Spatial hash grid (100x100 cells, each cell contains cube index)
         // Built once at init - cubes don't move

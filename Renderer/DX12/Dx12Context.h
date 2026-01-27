@@ -80,6 +80,9 @@ namespace Renderer
         bool xzStillOverlapping = false;
         bool yStepUpSkipped = false;
         float yDeltaApplied = 0;
+
+        // Day3.11: Controller mode (0=AABB, 1=Capsule)
+        uint8_t controllerMode = 0;
     };
     class Dx12Context
     {
