@@ -433,8 +433,8 @@ namespace Engine
         // No penetration if overlap <= 0
         if (overlap <= 0.0f) return 0.0f;
 
-        // Sign: push pawn away from cube center
-        float sign = (centerPawn < centerCube) ? 1.0f : -1.0f;
+        // Sign: push pawn away from cube center (negative direction if pawn is left/below)
+        float sign = (centerPawn < centerCube) ? -1.0f : 1.0f;
 
         return sign * overlap;
     }
