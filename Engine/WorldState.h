@@ -293,6 +293,9 @@ namespace Engine
         // Day3.11 Phase 2: Capsule depenetration
         void ResolveOverlaps_Capsule();
         // Day3.11 Phase 3: Capsule XZ sweep/slide
-        void SweepXZ_Capsule(float reqDx, float reqDz, float& outAppliedDx, float& outAppliedDz);
+        void SweepXZ_Capsule(float reqDx, float reqDz, float& outAppliedDx, float& outAppliedDz,
+                             bool& outZeroVelX, bool& outZeroVelZ);
+        // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
+        void ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY);
     };
 }

@@ -117,8 +117,9 @@ namespace
     }
 
     // Sweep capsule (both P0 and P1) against expanded AABB, return earliest hit
+    // FIX: Added onGround parameter to use body-only Y-overlap when grounded
     SweepResult SweepCapsuleVsCubeXZ(float posX, float posZ, float feetY, float r, float hh,
-                                      float dx, float dz, const Engine::AABB& cube)
+                                      float dx, float dz, const Engine::AABB& cube, bool onGround)
     {
         // Expand cube by radius (Minkowski sum for XZ)
         float expMinX = cube.minX - r;
@@ -126,11 +127,31 @@ namespace
         float expMinZ = cube.minZ - r;
         float expMaxZ = cube.maxZ + r;
 
-        // Y overlap check: capsule Y range vs cube Y range
-        float capMinY = feetY;
-        float capMaxY = feetY + 2.0f * r + 2.0f * hh;
-        if (capMaxY < cube.minY || capMinY > cube.maxY)
+        // FIX: When grounded, use capsule BODY (excluding bottom hemisphere) for Y-overlap.
+        // This prevents floor-level hemisphere from causing false wall hits.
+        float capMinY, capMaxY;
+        if (onGround)
+        {
+            // Grounded: only check body (above bottom hemisphere)
+            capMinY = feetY + r;   // Start at center of bottom sphere
+            capMaxY = feetY + 2.0f * r + 2.0f * hh;
+        }
+        else
+        {
+            // Airborne: use full capsule height
+            capMinY = feetY;
+            capMaxY = feetY + 2.0f * r + 2.0f * hh;
+        }
+
+        // Y overlap check
+        if (capMaxY <= cube.minY || capMinY >= cube.maxY)
             return { false, 1.0f, 0.0f, 0.0f };  // No Y overlap, skip
+
+        // Additional check: if grounded and standing ON TOP of this cube, skip
+        // (feet at or above cube top = support, not wall)
+        const float SUPPORT_EPS = 0.05f;
+        if (onGround && feetY >= cube.maxY - SUPPORT_EPS)
+            return { false, 1.0f, 0.0f, 0.0f };
 
         // Sweep P0 and P1 (both at same XZ since capsule is vertical)
         SweepResult res = SegmentAABBSweepXZ(posX, posZ, dx, dz, expMinX, expMaxX, expMinZ, expMaxZ);
@@ -304,14 +325,22 @@ namespace Engine
         float newY = m_pawn.posY + m_pawn.velY * fixedDt;
 
         // Day3.11 Phase 3: Capsule XZ uses sweep/slide
+        bool capsuleZeroVelX = false, capsuleZeroVelZ = false;
         if (m_controllerMode == ControllerMode::Capsule)
         {
             float reqDx = m_pawn.velX * fixedDt;
             float reqDz = m_pawn.velZ * fixedDt;
             float appliedDx = 0.0f, appliedDz = 0.0f;
-            SweepXZ_Capsule(reqDx, reqDz, appliedDx, appliedDz);
+            SweepXZ_Capsule(reqDx, reqDz, appliedDx, appliedDz, capsuleZeroVelX, capsuleZeroVelZ);
             newX = m_pawn.posX + appliedDx;
             newZ = m_pawn.posZ + appliedDz;
+
+            // FIX: Post-sweep XZ cleanup (single iteration)
+            ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
+
+            // FIX: Higher-level velocity zeroing (after all sweep/slide logic)
+            if (capsuleZeroVelX) m_pawn.velX = 0.0f;
+            if (capsuleZeroVelZ) m_pawn.velZ = 0.0f;
         }
         else
         {
@@ -978,7 +1007,9 @@ namespace Engine
     }
 
     // Day3.11 Phase 3: Capsule XZ sweep/slide
-    void WorldState::SweepXZ_Capsule(float reqDx, float reqDz, float& outAppliedDx, float& outAppliedDz)
+    // FIX: Added outZeroVelX/Z flags to defer velocity zeroing to caller
+    void WorldState::SweepXZ_Capsule(float reqDx, float reqDz, float& outAppliedDx, float& outAppliedDz,
+                                     bool& outZeroVelX, bool& outZeroVelZ)
     {
         const float SKIN_WIDTH = 0.01f;
         const int MAX_SWEEPS = 2;
@@ -986,6 +1017,11 @@ namespace Engine
         float r = m_config.capsuleRadius;
         float hh = m_config.capsuleHalfHeight;
         float feetY = m_pawn.posY;
+        bool onGround = m_pawn.onGround;
+
+        // Initialize output flags
+        outZeroVelX = false;
+        outZeroVelZ = false;
 
         // Reset sweep stats
         m_collisionStats.sweepHit = false;
@@ -1032,7 +1068,7 @@ namespace Engine
             for (uint16_t cubeIdx : candidates)
             {
                 AABB cube = GetCubeAABB(cubeIdx);
-                SweepResult hit = SweepCapsuleVsCubeXZ(curX, curZ, feetY, r, hh, dx, dz, cube);
+                SweepResult hit = SweepCapsuleVsCubeXZ(curX, curZ, feetY, r, hh, dx, dz, cube, onGround);
                 if (hit.hit)
                 {
                     if (hit.t < earliest.t || (!earliest.hit))
@@ -1102,15 +1138,65 @@ namespace Engine
             dx = remDx;
             dz = remDz;
 
-            // Zero velocity component into wall
-            if (earliest.normalX != 0.0f) m_pawn.velX = 0.0f;
-            if (earliest.normalZ != 0.0f) m_pawn.velZ = 0.0f;
+            // FIX: Set flags for caller to zero velocity (instead of zeroing here)
+            if (earliest.normalX != 0.0f) outZeroVelX = true;
+            if (earliest.normalZ != 0.0f) outZeroVelZ = true;
         }
 
         m_collisionStats.sweepAppliedDx = totalAppliedDx;
         m_collisionStats.sweepAppliedDz = totalAppliedDz;
         outAppliedDx = totalAppliedDx;
         outAppliedDz = totalAppliedDz;
+    }
+
+    // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
+    void WorldState::ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY)
+    {
+        const float MAX_XZ_CLEANUP = 0.1f;
+        const float MIN_CLEANUP_DIST = 0.001f;
+
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+
+        AABB capAABB;
+        capAABB.minX = newX - r;  capAABB.maxX = newX + r;
+        capAABB.minY = newY;       capAABB.maxY = newY + 2.0f * r + 2.0f * hh;
+        capAABB.minZ = newZ - r;  capAABB.maxZ = newZ + r;
+
+        std::vector<uint16_t> candidates = QuerySpatialHash(capAABB);
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+        float pushX = 0.0f, pushZ = 0.0f;
+
+        for (uint16_t idx : candidates)
+        {
+            AABB cube = GetCubeAABB(idx);
+            CapsuleOverlapResult ov = CapsuleAABBOverlap(newY, newX, newZ, r, hh, cube);
+            if (ov.hit && ov.depth > MIN_CLEANUP_DIST)
+            {
+                // XZ components only
+                pushX += ov.normal.x * ov.depth;
+                pushZ += ov.normal.z * ov.depth;
+            }
+        }
+
+        float mag = sqrtf(pushX * pushX + pushZ * pushZ);
+        if (mag > MAX_XZ_CLEANUP)
+        {
+            float s = MAX_XZ_CLEANUP / mag;
+            pushX *= s;
+            pushZ *= s;
+        }
+
+        if (mag > MIN_CLEANUP_DIST)
+        {
+            newX += pushX;
+            newZ += pushZ;
+            char buf[96];
+            sprintf_s(buf, "[XZ_CLEANUP] push=(%.4f,%.4f)\n", pushX, pushZ);
+            OutputDebugStringA(buf);
+        }
     }
 
     void WorldState::TickFrame(float frameDt)
