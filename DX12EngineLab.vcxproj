@@ -131,6 +131,8 @@
   <ItemGroup>
     <ClInclude Include="DX12EngineLab.h" />
     <ClInclude Include="Engine\App.h" />
+    <ClInclude Include="Engine\WorldState.h" />
+    <ClInclude Include="Engine\InputSampler.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="Renderer\DX12\DescriptorRingAllocator.h" />
     <ClInclude Include="Renderer\DX12\Dx12Context.h" />
@@ -147,12 +149,15 @@
     <ClInclude Include="Renderer\DX12\ToggleSystem.h" />
     <ClInclude Include="Renderer\DX12\UploadArena.h" />
     <ClInclude Include="Renderer\DX12\ImGuiLayer.h" />
+    <ClInclude Include="Renderer\DX12\CharacterRenderer.h" />
+    <ClInclude Include="Renderer\DX12\CharacterPass.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp" />
     <ClCompile Include="Engine\App.cpp" />
+    <ClCompile Include="Engine\WorldState.cpp" />
     <ClCompile Include="Renderer\DX12\DescriptorRingAllocator.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Context.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Debug.cpp" />
@@ -167,6 +172,7 @@
     <ClCompile Include="Renderer\DX12\RenderScene.cpp" />
     <ClCompile Include="Renderer\DX12\UploadArena.cpp" />
     <ClCompile Include="Renderer\DX12\ImGuiLayer.cpp" />
+    <ClCompile Include="Renderer\DX12\CharacterRenderer.cpp" />
     <ClCompile Include="third_party\imgui\imgui.cpp" />
     <ClCompile Include="third_party\imgui\imgui_draw.cpp" />
     <ClCompile Include="third_party\imgui\imgui_tables.cpp" />

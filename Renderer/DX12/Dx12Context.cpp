@@ -10,6 +10,7 @@
 #include "DiagnosticLogger.h"
 #include "ResourceStateTracker.h"
 #include "PassOrchestrator.h"
+#include "CharacterPass.h"
 #include <cstdio>
 #include <DirectXMath.h>
 
@@ -276,8 +277,10 @@ namespace Renderer
     bool Dx12Context::InitFrameResources()
     {
         // Initialize CBV/SRV/UAV descriptor ring allocator (shader-visible)
-        // Capacity: 1024 total, 3 reserved for per-frame transforms SRVs
-        if (!m_descRing.Initialize(m_device.Get(), 1024, FrameCount))
+        // Capacity: 1024 total, 4 reserved:
+        //   - Slots 0-2: per-frame transforms SRVs (FrameContextRing)
+        //   - Slot 3: character transforms SRV (CharacterRenderer, persistent)
+        if (!m_descRing.Initialize(m_device.Get(), 1024, FrameCount + 1))
         {
             OutputDebugStringA("Failed to initialize descriptor ring allocator\n");
             return false;
@@ -353,6 +356,15 @@ namespace Renderer
             OutputDebugStringA("Failed to initialize render scene\n");
             return false;
         }
+
+        // Initialize character renderer (Day3)
+        // Pass descRing for persistent SRV allocation (reserved slot 3)
+        if (!m_characterRenderer.Initialize(m_device.Get(), &m_stateTracker, &m_descRing))
+        {
+            OutputDebugStringA("Failed to initialize character renderer\n");
+            return false;
+        }
+
         return true;
     }
 
@@ -442,7 +454,24 @@ namespace Renderer
             if (dt > 0.1f) dt = 0.1f;
         }
         m_lastTime = currentTime;
+        m_lastDeltaTime = dt;  // Store for external access
         return dt;
+    }
+
+    void Dx12Context::SetFrameCamera(const DirectX::XMFLOAT4X4& viewProj)
+    {
+        m_injectedViewProj = viewProj;
+        m_useInjectedCamera = true;
+    }
+
+    void Dx12Context::SetHUDSnapshot(const HUDSnapshot& snap)
+    {
+        m_imguiLayer.SetHUDSnapshot(snap);
+    }
+
+    void Dx12Context::SetPawnTransform(float posX, float posY, float posZ, float yaw)
+    {
+        m_characterRenderer.SetPawnTransform(posX, posY, posZ, yaw);
     }
 
     Allocation Dx12Context::UpdateFrameConstants(FrameContext& ctx)
@@ -450,12 +479,21 @@ namespace Renderer
         // Allocate from per-frame upload arena (unified front-door)
         Allocation frameCBAlloc = m_uploadArena.Allocate(CB_SIZE, CBV_ALIGNMENT, "FrameCB");
 
-        float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
-        XMMATRIX viewProj = BuildFreeCameraViewProj(m_camera, aspect);
+        XMFLOAT4X4 vpMatrix;
+        if (m_useInjectedCamera)
+        {
+            // Use injected viewProj from ThirdPerson camera
+            vpMatrix = m_injectedViewProj;
+        }
+        else
+        {
+            // Use FreeCamera (fallback)
+            float aspect = static_cast<float>(m_width) / static_cast<float>(m_height);
+            XMMATRIX viewProj = BuildFreeCameraViewProj(m_camera, aspect);
+            XMStoreFloat4x4(&vpMatrix, viewProj);
+        }
 
         // DirectXMath uses row-major, HLSL row_major matches - no transpose needed
-        XMFLOAT4X4 vpMatrix;
-        XMStoreFloat4x4(&vpMatrix, viewProj);
         memcpy(frameCBAlloc.cpuPtr, &vpMatrix, sizeof(vpMatrix));
 
         return frameCBAlloc;
@@ -463,6 +501,13 @@ namespace Renderer
 
     Allocation Dx12Context::UpdateTransforms(FrameContext& ctx)
     {
+        // MT1: Skip transform generation if grid disabled
+        if (!ToggleSystem::IsGridEnabled())
+        {
+            m_generatedTransformCount = 0;
+            return {};  // Empty allocation
+        }
+
         // Allocate from per-frame upload arena (unified front-door)
         Allocation transformsAlloc = m_uploadArena.Allocate(TRANSFORMS_SIZE, 256, "Transforms");
 
@@ -497,6 +542,9 @@ namespace Renderer
                 ++idx;
             }
         }
+
+        // MT1: Store generated count for validation
+        m_generatedTransformCount = InstanceCount;
 
         return transformsAlloc;
     }
@@ -553,9 +601,74 @@ namespace Renderer
         inputs.geoInputs.gridEnabled = ToggleSystem::IsGridEnabled();
         inputs.geoInputs.markersEnabled = ToggleSystem::IsMarkersEnabled();
         inputs.geoInputs.instanceCount = InstanceCount;
+        // MT1: Pass generated transform count and frame ID for validation
+        inputs.geoInputs.generatedTransformCount = m_generatedTransformCount;
+        inputs.geoInputs.frameId = m_frameId;
+        // MT2: Debug single instance mode
+        inputs.geoInputs.debugSingleInstance = ToggleSystem::IsDebugSingleInstanceEnabled();
+        inputs.geoInputs.debugInstanceIndex = ToggleSystem::GetDebugInstanceIndex();
 
-        // Execute all passes via orchestrator
-        uint32_t drawCalls = PassOrchestrator::Execute(inputs);
+        // Check if we need to record character pass (ThirdPerson mode)
+        bool recordCharacter = (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson);
+
+        // Execute passes via orchestrator
+        // If recording character, skip ImGui in orchestrator (we'll record it after character)
+        PassEnableFlags flags;
+        flags.imguiPass = !recordCharacter;  // Disable ImGui if we're recording character
+        uint32_t drawCalls = PassOrchestrator::Execute(inputs, flags);
+
+        // Record character pass (separate from grid, only in ThirdPerson mode)
+        if (recordCharacter)
+        {
+            // After PassOrchestrator::Execute, backbuffer is in PRESENT state
+            // Transition back to RENDER_TARGET for character + ImGui
+            D3D12_RESOURCE_BARRIER barrier = {};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource = m_backBuffers[backBufferIndex].Get();
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            m_commandList->ResourceBarrier(1, &barrier);
+
+            // Re-set render targets (they were cleared when orchestrator finished)
+            m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+            m_commandList->RSSetViewports(1, &m_viewport);
+            m_commandList->RSSetScissorRects(1, &m_scissorRect);
+
+            // 1. Allocate and write character matrices via UploadArena
+            Allocation charAlloc = m_uploadArena.Allocate(
+                CharacterRenderer::TransformsSize, 256, "CharXforms");
+
+            // 2. Build and write matrices
+            m_characterRenderer.WriteMatrices(charAlloc.cpuPtr);
+
+            // 3. Build copy info (decoupled from FrameContext)
+            CharacterCopyInfo copyInfo;
+            copyInfo.uploadSrc = ctx.uploadAllocator.GetBuffer();
+            copyInfo.srcOffset = charAlloc.offset;
+
+            // 4. Build pass inputs and record
+            CharacterPassInputs charInputs;
+            charInputs.renderer = &m_characterRenderer;
+            charInputs.copyInfo = copyInfo;
+            charInputs.descRing = &m_descRing;
+            charInputs.stateTracker = &m_stateTracker;
+            charInputs.scene = &m_scene;
+            charInputs.shaders = &m_shaderLibrary;
+            charInputs.frameCBAddress = frameCBAlloc.gpuVA;
+
+            CharacterPass::Record(m_commandList.Get(), charInputs);
+            drawCalls += 1;  // Character is 1 draw call (6 instances)
+
+            // Record ImGui pass (we skipped it in orchestrator)
+            m_imguiLayer.RecordCommands(m_commandList.Get());
+            drawCalls += 1;
+
+            // Transition backbuffer back to PRESENT
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+            m_commandList->ResourceBarrier(1, &barrier);
+        }
 
         // PROOF: Once-per-second log showing frame indices and SRV offset match
         if (DiagnosticLogger::ShouldLog("PROOF_BIND"))
@@ -711,6 +824,9 @@ namespace Renderer
         // Phase 3: Execute & Present
         ExecuteAndPresent(frameCtx);
 
+        // Reset frame-scoped camera injection for next frame
+        m_useInjectedCamera = false;
+
         // Increment monotonic frame counter
         ++m_frameId;
     }
@@ -725,6 +841,9 @@ namespace Renderer
 
         // Shutdown scene
         m_scene.Shutdown();
+
+        // Shutdown character renderer
+        m_characterRenderer.Shutdown();
 
         // Shutdown geometry factory
         m_geometryFactory.Shutdown();

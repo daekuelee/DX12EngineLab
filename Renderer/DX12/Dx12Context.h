@@ -5,6 +5,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include <DirectXMath.h>
 #include "FrameContextRing.h"
 #include "ShaderLibrary.h"
 #include "RenderScene.h"
@@ -14,9 +15,40 @@
 #include "GeometryFactory.h"
 #include "ImGuiLayer.h"
 #include "UploadArena.h"
+#include "CharacterRenderer.h"
 
 namespace Renderer
 {
+    // HUD data struct (no Engine types - kept in Renderer namespace)
+    struct HUDSnapshot
+    {
+        const char* mapName = nullptr;    // Must be static literal
+        float posX = 0.0f, posY = 0.0f, posZ = 0.0f;   // World units
+        float velX = 0.0f, velY = 0.0f, velZ = 0.0f;   // World units/sec
+        float speed = 0.0f;               // World units/sec
+        bool onGround = true;
+        float sprintAlpha = 0.0f;         // 0-1
+        float yawDeg = 0.0f, pitchDeg = 0.0f;   // Degrees (converted from radians)
+        float fovDeg = 45.0f;             // Degrees (HUD display only)
+        bool jumpQueued = false;          // Evidence: true for 1 frame after jump
+
+        // Part 1: Respawn tracking
+        uint32_t respawnCount = 0;
+        const char* lastRespawnReason = nullptr;
+
+        // Part 2: Collision stats
+        uint32_t candidatesChecked = 0;
+        uint32_t penetrationsResolved = 0;
+        int32_t lastHitCubeId = -1;
+        uint8_t lastAxisResolved = 1;  // 0=X, 1=Y, 2=Z
+
+        // Floor diagnostics (Day3 debug)
+        bool inFloorBounds = false;
+        bool didFloorClamp = false;
+        float floorMinX = 0, floorMaxX = 0;
+        float floorMinZ = 0, floorMaxZ = 0;
+        float floorY = 0;
+    };
     class Dx12Context
     {
     public:
@@ -35,6 +67,24 @@ namespace Renderer
 
         // Accessors for backbuffer (RTV selection only - NOT for frame resources)
         uint32_t GetBackBufferIndex() const { return m_swapChain ? m_swapChain->GetCurrentBackBufferIndex() : 0; }
+
+        // Camera injection (frame-scoped: resets each Render)
+        void SetFrameCamera(const DirectX::XMFLOAT4X4& viewProj);
+
+        // HUD snapshot
+        void SetHUDSnapshot(const HUDSnapshot& snap);
+
+        // Delta time accessor for fixed-step loop
+        float GetDeltaTime() const { return m_lastDeltaTime; }
+
+        // Window dimensions for aspect ratio
+        float GetAspect() const { return m_width > 0 && m_height > 0 ? static_cast<float>(m_width) / static_cast<float>(m_height) : 1.0f; }
+
+        // Set pawn transform for character rendering (Day3)
+        void SetPawnTransform(float posX, float posY, float posZ, float yaw);
+
+        // MT1: Generated transform count for validation
+        uint32_t GetGeneratedTransformCount() const { return m_generatedTransformCount; }
 
     private:
         HWND m_hwnd = nullptr;
@@ -87,6 +137,9 @@ namespace Renderer
         // Upload arena (unified allocation front-door with metrics)
         UploadArena m_uploadArena;
 
+        // Character renderer (Day3)
+        CharacterRenderer m_characterRenderer;
+
         // Backbuffer format (stored for ImGui initialization)
         DXGI_FORMAT m_backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
@@ -117,6 +170,14 @@ namespace Renderer
         LARGE_INTEGER m_lastTime = {};
         LARGE_INTEGER m_frequency = {};
         bool m_timerInitialized = false;
+        float m_lastDeltaTime = 0.0f;
+
+        // MT1: Transform generation count for validation
+        uint32_t m_generatedTransformCount = 0;
+
+        // Injected camera (frame-scoped)
+        DirectX::XMFLOAT4X4 m_injectedViewProj = {};
+        bool m_useInjectedCamera = false;
 
         bool m_initialized = false;
 

@@ -18,6 +18,12 @@ float3 HueToRGB(float hue)
 
 float4 PSMain(PSInput pin, uint primID : SV_PrimitiveID) : SV_Target
 {
+    // MT3: Check for invalid transform marker (magenta output)
+    if (pin.InstanceID == 0xFFFFFFFF)
+    {
+        return float4(1.0, 0.0, 1.0, 1.0);  // Magenta = invalid transform
+    }
+
     float3 color;
 
     if (ColorMode == COLOR_MODE_FACE_DEBUG)

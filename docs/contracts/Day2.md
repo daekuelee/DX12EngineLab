@@ -26,7 +26,7 @@
   - What it proves: "UploadDiag: ON/OFF" toggle messages
 - Screenshot/Capture:
   - Path: captures/day2/
-  - What it proves: HUD showing allocCalls=2, allocBytes~640KB, peakOffset/capacity %
+- What it proves: HUD showing allocCalls=2, allocBytes~640KB, peakOffset/capacity %
 
 ## Expected Metrics
 - allocCalls: 2 per frame (FrameCB + Transforms)

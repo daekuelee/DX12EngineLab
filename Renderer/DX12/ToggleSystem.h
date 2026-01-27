@@ -19,6 +19,13 @@ namespace Renderer
         Lambert = 2      // Simple directional lighting (gray diffuse)
     };
 
+    // Camera modes (Day3)
+    enum class CameraMode : uint32_t
+    {
+        ThirdPerson,  // Pawn-following camera with game controls
+        Free          // Debug fly camera
+    };
+
     // Global toggle system for runtime mode switching and diagnostics
     class ToggleSystem
     {
@@ -84,6 +91,25 @@ namespace Renderer
         static void SetUploadDiagEnabled(bool enabled) { s_uploadDiagEnabled = enabled; }
         static void ToggleUploadDiag() { s_uploadDiagEnabled = !s_uploadDiagEnabled; }
 
+        // Camera mode toggle (Day3)
+        static CameraMode GetCameraMode() { return s_cameraMode; }
+        static void SetCameraMode(CameraMode mode) { s_cameraMode = mode; }
+        static void ToggleCameraMode()
+        {
+            s_cameraMode = (s_cameraMode == CameraMode::ThirdPerson) ? CameraMode::Free : CameraMode::ThirdPerson;
+        }
+        static const char* GetCameraModeName()
+        {
+            return (s_cameraMode == CameraMode::ThirdPerson) ? "thirdperson" : "free";
+        }
+
+        // MT2: Debug single instance mode (F9) - draw only one cube for diagnosis
+        static bool IsDebugSingleInstanceEnabled() { return s_debugSingleInstance; }
+        static void SetDebugSingleInstance(bool enabled) { s_debugSingleInstance = enabled; }
+        static void ToggleDebugSingleInstance() { s_debugSingleInstance = !s_debugSingleInstance; }
+        static uint32_t GetDebugInstanceIndex() { return s_debugInstanceIndex; }
+        static void SetDebugInstanceIndex(uint32_t idx) { s_debugInstanceIndex = idx; }
+
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
         static inline ColorMode s_colorMode = ColorMode::FaceDebug;
@@ -99,5 +125,12 @@ namespace Renderer
 
         // Upload diagnostic mode (Day2) - OFF by default
         static inline bool s_uploadDiagEnabled = false;
+
+        // Camera mode (Day3) - ThirdPerson by default
+        static inline CameraMode s_cameraMode = CameraMode::ThirdPerson;
+
+        // MT2: Debug single instance mode - OFF by default
+        static inline bool s_debugSingleInstance = false;
+        static inline uint32_t s_debugInstanceIndex = 0;  // Which instance to draw in debug mode
     };
 }

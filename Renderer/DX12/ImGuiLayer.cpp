@@ -1,5 +1,6 @@
 #include "ImGuiLayer.h"
 #include "ToggleSystem.h"
+#include "Dx12Context.h"  // For HUDSnapshot definition
 
 #include <imgui.h>
 #include <imgui_impl_win32.h>
@@ -183,6 +184,41 @@ namespace Renderer
         m_hasUploadMetrics = true;
     }
 
+    void ImGuiLayer::SetHUDSnapshot(const HUDSnapshot& snap)
+    {
+        m_worldState.mapName = snap.mapName;
+        m_worldState.posX = snap.posX;
+        m_worldState.posY = snap.posY;
+        m_worldState.posZ = snap.posZ;
+        m_worldState.velX = snap.velX;
+        m_worldState.velY = snap.velY;
+        m_worldState.velZ = snap.velZ;
+        m_worldState.speed = snap.speed;
+        m_worldState.onGround = snap.onGround;
+        m_worldState.sprintAlpha = snap.sprintAlpha;
+        m_worldState.yawDeg = snap.yawDeg;
+        m_worldState.pitchDeg = snap.pitchDeg;
+        m_worldState.fovDeg = snap.fovDeg;
+        m_worldState.jumpQueued = snap.jumpQueued;
+        // Part 1: Respawn tracking
+        m_worldState.respawnCount = snap.respawnCount;
+        m_worldState.lastRespawnReason = snap.lastRespawnReason;
+        // Part 2: Collision stats
+        m_worldState.candidatesChecked = snap.candidatesChecked;
+        m_worldState.penetrationsResolved = snap.penetrationsResolved;
+        m_worldState.lastHitCubeId = snap.lastHitCubeId;
+        m_worldState.lastAxisResolved = snap.lastAxisResolved;
+        // Floor diagnostics
+        m_worldState.inFloorBounds = snap.inFloorBounds;
+        m_worldState.didFloorClamp = snap.didFloorClamp;
+        m_worldState.floorMinX = snap.floorMinX;
+        m_worldState.floorMaxX = snap.floorMaxX;
+        m_worldState.floorMinZ = snap.floorMinZ;
+        m_worldState.floorMaxZ = snap.floorMaxZ;
+        m_worldState.floorY = snap.floorY;
+        m_hasWorldState = true;
+    }
+
     void ImGuiLayer::BuildHUDContent()
     {
         // Position at top-left with some padding
@@ -210,6 +246,73 @@ namespace Renderer
             ImGui::Text("Draw Mode: %s [T]", drawModeName);
             ImGui::Text("Color Mode: %s [C]", colorModeName);
             ImGui::Text("Grid: %s [G]", gridEnabled ? "ON" : "OFF");
+            ImGui::Text("CamMode: %s [V]", ToggleSystem::GetCameraModeName());
+
+            // World State section (Day3) - only show in ThirdPerson mode
+            if (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson && m_hasWorldState)
+            {
+                ImGui::Separator();
+                ImGui::Text("-- World State --");
+                if (m_worldState.mapName)
+                    ImGui::Text("Map: %s", m_worldState.mapName);
+                ImGui::Text("Pos: %.1f, %.1f, %.1f", m_worldState.posX, m_worldState.posY, m_worldState.posZ);
+                ImGui::Text("Speed: %.1f", m_worldState.speed);
+                ImGui::Text("OnGround: %s", m_worldState.onGround ? "YES" : "NO");
+                ImGui::Text("Sprint: %.0f%%", m_worldState.sprintAlpha * 100.0f);
+                ImGui::Text("Yaw: %.1f deg", m_worldState.yawDeg);
+                ImGui::Text("Pitch: %.1f deg", m_worldState.pitchDeg);
+                ImGui::Text("FOV: %.1f deg", m_worldState.fovDeg);
+                if (m_worldState.jumpQueued)
+                    ImGui::TextColored(ImVec4(0,1,0,1), "JUMP!");
+
+                // Part 1: Respawn tracking
+                if (m_worldState.respawnCount > 0)
+                {
+                    ImGui::Separator();
+                    ImGui::Text("-- Respawn --");
+                    ImGui::Text("Count: %u", m_worldState.respawnCount);
+                    if (m_worldState.lastRespawnReason)
+                        ImGui::Text("Reason: %s", m_worldState.lastRespawnReason);
+                }
+
+                // Part 2: Collision stats
+                ImGui::Separator();
+                ImGui::Text("-- Collision --");
+                ImGui::Text("Candidates: %u", m_worldState.candidatesChecked);
+                ImGui::Text("Penetrations: %u", m_worldState.penetrationsResolved);
+                if (m_worldState.lastHitCubeId >= 0)
+                {
+                    const char* axisName = (m_worldState.lastAxisResolved == 0) ? "X" :
+                                           (m_worldState.lastAxisResolved == 1) ? "Y" : "Z";
+                    ImGui::Text("LastHit: cube=%d axis=%s", m_worldState.lastHitCubeId, axisName);
+                }
+
+                // Floor diagnostics (Day3 debug)
+                ImGui::Separator();
+                ImGui::Text("-- FLOOR DEBUG --");
+                ImGui::Text("posX: %.2f  posZ: %.2f", m_worldState.posX, m_worldState.posZ);
+                ImGui::Text("posY (feet): %.3f", m_worldState.posY);
+                ImGui::Text("velY: %.2f", m_worldState.velY);
+                ImGui::Text("inBounds: %s", m_worldState.inFloorBounds ? "YES" : "NO");
+                ImGui::Text("onGround: %s", m_worldState.onGround ? "YES" : "NO");
+                ImGui::Text("didFloorClamp: %s", m_worldState.didFloorClamp ? "YES" : "NO");
+                ImGui::Text("KillZ count: %u", m_worldState.respawnCount);
+                // Show bounds for reference
+                ImGui::Text("Bounds: X[%.0f,%.0f] Z[%.0f,%.0f]",
+                    m_worldState.floorMinX, m_worldState.floorMaxX,
+                    m_worldState.floorMinZ, m_worldState.floorMaxZ);
+
+                ImGui::Separator();
+                ImGui::Text("-- Render Passes --");
+                // Character pass is always active in ThirdPerson mode
+                bool gridActive = ToggleSystem::IsGridEnabled();
+                bool charActive = (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson);
+                ImGui::Text("Passes: Grid=%s Char=%s",
+                    gridActive ? "ON" : "OFF",
+                    charActive ? "ON" : "OFF");
+                if (charActive)
+                    ImGui::Text("Character Parts: 6");
+            }
 
             // Upload diagnostics section (Day2) - only show when diag mode enabled AND metrics valid
             if (ToggleSystem::IsUploadDiagEnabled() && m_hasUploadMetrics)
@@ -247,14 +350,25 @@ namespace Renderer
             // Collapsible controls section
             if (ImGui::CollapsingHeader("Controls"))
             {
+                ImGui::BulletText("V: Toggle Camera Mode");
                 ImGui::BulletText("T: Toggle Draw Mode");
                 ImGui::BulletText("C: Cycle Color Mode");
                 ImGui::BulletText("G: Toggle Grid");
                 ImGui::BulletText("U: Upload Diagnostics");
-                ImGui::BulletText("F1/F2: Diagnostics");
-                ImGui::BulletText("WASD/Arrows: Move");
-                ImGui::BulletText("Space/Ctrl: Up/Down");
-                ImGui::BulletText("Q/E: Rotate");
+                if (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson)
+                {
+                    ImGui::BulletText("WASD: Move (cam-relative)");
+                    ImGui::BulletText("Mouse: Look around");
+                    ImGui::BulletText("Q/E: Yaw, R/F: Pitch");
+                    ImGui::BulletText("Shift: Sprint");
+                    ImGui::BulletText("Space: Jump");
+                }
+                else
+                {
+                    ImGui::BulletText("WASD/Arrows: Move");
+                    ImGui::BulletText("Space/Ctrl: Up/Down");
+                    ImGui::BulletText("Q/E: Rotate");
+                }
             }
         }
         ImGui::End();

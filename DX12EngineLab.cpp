@@ -7,6 +7,7 @@
 #include "Renderer/DX12/ToggleSystem.h"
 #include "Renderer/DX12/ImGuiLayer.h"
 #include <cstdio>
+#include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM
 
 #define MAX_LOADSTRING 100
 
@@ -238,6 +239,31 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 OutputDebugStringA(Renderer::ToggleSystem::IsUploadDiagEnabled()
                     ? "UploadDiag: ON\n" : "UploadDiag: OFF\n");
             }
+            // 'V' key toggles camera mode (Day3)
+            else if (wParam == 'V')
+            {
+                Renderer::ToggleSystem::ToggleCameraMode();
+                char buf[64];
+                sprintf_s(buf, "CameraMode: %s\n", Renderer::ToggleSystem::GetCameraModeName());
+                OutputDebugStringA(buf);
+            }
+            // F9 key toggles debug single instance mode (MT2)
+            else if (wParam == VK_F9)
+            {
+                Renderer::ToggleSystem::ToggleDebugSingleInstance();
+                char buf[64];
+                sprintf_s(buf, "DebugSingleInstance: %s (idx=%u)\n",
+                    Renderer::ToggleSystem::IsDebugSingleInstanceEnabled() ? "ON" : "OFF",
+                    Renderer::ToggleSystem::GetDebugInstanceIndex());
+                OutputDebugStringA(buf);
+            }
+        }
+        break;
+    case WM_MOUSEMOVE:
+        {
+            int xPos = GET_X_LPARAM(lParam);
+            int yPos = GET_Y_LPARAM(lParam);
+            g_app.OnMouseMove(xPos, yPos);
         }
         break;
     case WM_DESTROY:
