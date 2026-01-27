@@ -35,6 +35,14 @@ namespace Engine
 
         // Part 2: Build spatial grid for cube collision
         BuildSpatialGrid();
+
+        // Day3.4: Collision geometry derivation proof log
+        OutputDebugStringA("[CollisionInit] CubeLocalHalf=1.0\n");
+        OutputDebugStringA("[CollisionInit] RenderScale: XZ=0.9 Y=3.0\n");
+        char collisionBuf[256];
+        sprintf_s(collisionBuf, "[CollisionInit] DerivedCollision: halfXZ=%.2f Y=[%.1f,%.1f]\n",
+            m_config.cubeHalfXZ, m_config.cubeMinY, m_config.cubeMaxY);
+        OutputDebugStringA(collisionBuf);
     }
 
     void WorldState::BeginFrame()
@@ -121,20 +129,52 @@ namespace Engine
         // Reset onGround - will be set by cube collision or floor collision
         m_pawn.onGround = false;
 
-        // 8a. X axis movement + collision
+        // Day3.4: Apply velocity to get proposed position
         float newX = m_pawn.posX + m_pawn.velX * fixedDt;
-        ResolveAxis(newX, newX, m_pawn.posY, m_pawn.posZ, Axis::X);
-        m_pawn.posX = newX;
-
-        // 8b. Z axis movement + collision
         float newZ = m_pawn.posZ + m_pawn.velZ * fixedDt;
-        ResolveAxis(newZ, m_pawn.posX, m_pawn.posY, newZ, Axis::Z);
-        m_pawn.posZ = newZ;
-
-        // 8c. Y axis movement + collision
         float newY = m_pawn.posY + m_pawn.velY * fixedDt;
-        ResolveAxis(newY, m_pawn.posX, newY, m_pawn.posZ, Axis::Y);
+
+        // Day3.4: Iterative collision resolution (X→Z→Y per iteration)
+        const int MAX_ITERATIONS = 8;
+        const float CONVERGENCE_EPSILON = 0.001f;
+        bool converged = false;
+
+        for (int iter = 0; iter < MAX_ITERATIONS; ++iter)
+        {
+            float totalDelta = 0.0f;
+
+            // X axis
+            float prevX = newX;
+            ResolveAxis(newX, newX, newY, newZ, Axis::X);
+            totalDelta += fabsf(newX - prevX);
+
+            // Z axis
+            float prevZ = newZ;
+            ResolveAxis(newZ, newX, newY, newZ, Axis::Z);
+            totalDelta += fabsf(newZ - prevZ);
+
+            // Y axis
+            float prevY = newY;
+            ResolveAxis(newY, newX, newY, newZ, Axis::Y);
+            totalDelta += fabsf(newY - prevY);
+
+            m_collisionStats.iterationsUsed = static_cast<uint8_t>(iter + 1);
+
+            // Convergence check: if total correction is negligible, we've converged
+            if (totalDelta < CONVERGENCE_EPSILON)
+            {
+                converged = true;
+                break;
+            }
+        }
+
+        // hitMaxIter = true ONLY if we ran all iterations AND did NOT converge
+        m_collisionStats.hitMaxIter = (m_collisionStats.iterationsUsed == MAX_ITERATIONS && !converged);
+
+        // Commit final position
+        m_pawn.posX = newX;
         m_pawn.posY = newY;
+        m_pawn.posZ = newZ;
 
         // Reset floor clamp flag before floor collision
         m_didFloorClampThisTick = false;
@@ -395,7 +435,15 @@ namespace Engine
             AABB cube = GetCubeAABB(cubeIdx);
             if (!Intersects(pawn, cube)) continue;
 
+            // Day3.4: Count actual intersections (summed, not deduplicated)
+            m_collisionStats.contacts++;
+
             float pen = ComputeSignedPenetration(pawn, cube, axis);
+
+            // Day3.4: Track max penetration for diagnostics
+            if (fabsf(pen) > m_collisionStats.maxPenetrationAbs)
+                m_collisionStats.maxPenetrationAbs = fabsf(pen);
+
             if (fabsf(pen) > fabsf(deepestPen))
             {
                 deepestPen = pen;
@@ -514,6 +562,12 @@ namespace Engine
         snap.penetrationsResolved = m_collisionStats.penetrationsResolved;
         snap.lastHitCubeId = m_collisionStats.lastHitCubeId;
         snap.lastAxisResolved = static_cast<uint8_t>(m_collisionStats.lastAxisResolved);
+
+        // Day3.4: Iteration diagnostics
+        snap.iterationsUsed = m_collisionStats.iterationsUsed;
+        snap.contacts = m_collisionStats.contacts;
+        snap.maxPenetrationAbs = m_collisionStats.maxPenetrationAbs;
+        snap.hitMaxIter = m_collisionStats.hitMaxIter;
 
         // Floor diagnostics
         snap.inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&

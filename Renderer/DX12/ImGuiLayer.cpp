@@ -208,6 +208,11 @@ namespace Renderer
         m_worldState.penetrationsResolved = snap.penetrationsResolved;
         m_worldState.lastHitCubeId = snap.lastHitCubeId;
         m_worldState.lastAxisResolved = snap.lastAxisResolved;
+        // Day3.4: Iteration diagnostics
+        m_worldState.iterationsUsed = snap.iterationsUsed;
+        m_worldState.contacts = snap.contacts;
+        m_worldState.maxPenetrationAbs = snap.maxPenetrationAbs;
+        m_worldState.hitMaxIter = snap.hitMaxIter;
         // Floor diagnostics
         m_worldState.inFloorBounds = snap.inFloorBounds;
         m_worldState.didFloorClamp = snap.didFloorClamp;
@@ -278,7 +283,7 @@ namespace Renderer
                 // Part 2: Collision stats
                 ImGui::Separator();
                 ImGui::Text("-- Collision --");
-                ImGui::Text("Candidates: %u", m_worldState.candidatesChecked);
+                ImGui::Text("Candidates: %u  Contacts(sum): %u", m_worldState.candidatesChecked, m_worldState.contacts);
                 ImGui::Text("Penetrations: %u", m_worldState.penetrationsResolved);
                 if (m_worldState.lastHitCubeId >= 0)
                 {
@@ -286,6 +291,16 @@ namespace Renderer
                                            (m_worldState.lastAxisResolved == 1) ? "Y" : "Z";
                     ImGui::Text("LastHit: cube=%d axis=%s", m_worldState.lastHitCubeId, axisName);
                 }
+
+                // Day3.4: Iteration solver diagnostics
+                ImGui::Separator();
+                ImGui::Text("-- Solver --");
+                if (m_worldState.hitMaxIter)
+                    ImGui::TextColored(ImVec4(1,0.3f,0,1), "Solver: HIT_MAX_ITER (%u/8)", m_worldState.iterationsUsed);
+                else
+                    ImGui::Text("SolverIter: %u/8", m_worldState.iterationsUsed);
+                if (m_worldState.maxPenetrationAbs > 0.001f)
+                    ImGui::TextColored(ImVec4(1,0.5f,0,1), "MaxPenAbs: %.4f", m_worldState.maxPenetrationAbs);
 
                 // Floor diagnostics (Day3 debug)
                 ImGui::Separator();

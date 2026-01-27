@@ -68,6 +68,11 @@ namespace Renderer
             uint32_t penetrationsResolved = 0;
             int32_t lastHitCubeId = -1;
             uint8_t lastAxisResolved = 1;  // 0=X, 1=Y, 2=Z
+            // Day3.4: Collision iteration diagnostics
+            uint8_t iterationsUsed = 0;
+            uint32_t contacts = 0;
+            float maxPenetrationAbs = 0.0f;
+            bool hitMaxIter = false;
             // Floor diagnostics (Day3 debug)
             bool inFloorBounds = false;
             bool didFloorClamp = false;

@@ -22,10 +22,15 @@ namespace Engine
     // Part 2: Collision statistics for HUD display
     struct CollisionStats
     {
-        uint32_t candidatesChecked = 0;
+        uint32_t candidatesChecked = 0;   // Sum of spatial hash query results (across all ResolveAxis calls)
+        uint32_t contacts = 0;            // Sum of AABB intersections (NOT deduplicated - same cube may be counted multiple times)
         uint32_t penetrationsResolved = 0;
         int32_t lastHitCubeId = -1;
         Axis lastAxisResolved = Axis::Y;
+        // Day3.4: Iteration diagnostics
+        uint8_t iterationsUsed = 0;       // 1-8 iterations before convergence or max
+        float maxPenetrationAbs = 0.0f;   // Largest |penetration| observed this tick
+        bool hitMaxIter = false;          // True ONLY if ran all 8 iterations AND did NOT converge
     };
     // Input state sampled each frame
     struct InputState
@@ -115,9 +120,13 @@ namespace Engine
         float pawnHalfWidth = 0.4f;    // X/Z half-extent
         float pawnHeight = 5.0f;       // Total height (feet at posY, head at posY+height)
 
-        // Part 2: Cube dimensions (scale 0.9, 3.0, 0.9 -> half-extents 0.45, 1.5, 0.45)
-        // Cubes sit on floor (Y=0), top at Y=3.0
-        float cubeHalfXZ = 0.45f;
+        // Part 2: Cube collision dimensions
+        // - Mesh local half-extent = 1.0 (vertices at ±1)
+        // - Render scale: XZ=0.9, Y=3.0, placed at Y=0 center
+        // - Visual bounds: X/Z = ±0.9, Y = -3 to +3
+        // - Collision X/Z = 1.0 * 0.9 = 0.9
+        // - Collision Y = [0,3] (above-floor portion only - floor prevents Y<0)
+        float cubeHalfXZ = 0.9f;
         float cubeMinY = 0.0f;
         float cubeMaxY = 3.0f;
     };

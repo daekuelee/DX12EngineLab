@@ -42,6 +42,12 @@ namespace Renderer
         int32_t lastHitCubeId = -1;
         uint8_t lastAxisResolved = 1;  // 0=X, 1=Y, 2=Z
 
+        // Day3.4: Collision iteration diagnostics
+        uint8_t iterationsUsed = 0;
+        uint32_t contacts = 0;           // Summed intersection count (may count same cube multiple times)
+        float maxPenetrationAbs = 0.0f;
+        bool hitMaxIter = false;         // True if solver ran 8 iterations AND did NOT converge
+
         // Floor diagnostics (Day3 debug)
         bool inFloorBounds = false;
         bool didFloorClamp = false;
