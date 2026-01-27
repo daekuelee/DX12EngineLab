@@ -243,6 +243,10 @@ namespace Renderer
         m_worldState.mtvMagnitude = snap.mtvMagnitude;
         m_worldState.mtvCenterDiffX = snap.mtvCenterDiffX;
         m_worldState.mtvCenterDiffZ = snap.mtvCenterDiffZ;
+        // Day3.9: Regression debug
+        m_worldState.xzStillOverlapping = snap.xzStillOverlapping;
+        m_worldState.yStepUpSkipped = snap.yStepUpSkipped;
+        m_worldState.yDeltaApplied = snap.yDeltaApplied;
         m_hasWorldState = true;
     }
 
@@ -367,6 +371,13 @@ namespace Renderer
                 ImGui::Text("penX=%.3f penZ=%.3f", m_worldState.mtvPenX, m_worldState.mtvPenZ);
                 ImGui::Text("MTV: axis=%s mag=%.3f", mtvAxisName, m_worldState.mtvMagnitude);
                 ImGui::Text("centerDiff: X=%.2f Z=%.2f", m_worldState.mtvCenterDiffX, m_worldState.mtvCenterDiffZ);
+
+                // Day3.9: Separation proof
+                ImGui::Separator();
+                ImGui::Text("-- Day3.9 Debug --");
+                ImGui::Text("xzStillOverlap: %s", m_worldState.xzStillOverlapping ? "YES" : "NO");
+                ImGui::Text("yStepUpSkip: %s  yDelta: %.3f",
+                    m_worldState.yStepUpSkipped ? "YES" : "NO", m_worldState.yDeltaApplied);
 
                 ImGui::Separator();
                 ImGui::Text("-- Render Passes --");

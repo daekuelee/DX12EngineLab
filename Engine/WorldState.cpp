@@ -154,6 +154,10 @@ namespace Engine
         float newZ = m_pawn.posZ + m_pawn.velZ * fixedDt;
         float newY = m_pawn.posY + m_pawn.velY * fixedDt;
 
+        // Day3.9: Store pawn AABB bottom before collision resolution (for anti-step-up)
+        AABB pawnPre = BuildPawnAABB(newX, newY, newZ);
+        float prevPawnBottom = pawnPre.minY;
+
         // Day3.4: Iterative collision resolution (X→Z→Y per iteration)
         const int MAX_ITERATIONS = 8;
         const float CONVERGENCE_EPSILON = 0.001f;
@@ -170,7 +174,7 @@ namespace Engine
 
             // Y axis (unchanged)
             float prevY = newY;
-            ResolveAxis(newY, newX, newY, newZ, Axis::Y);
+            ResolveAxis(newY, newX, newY, newZ, Axis::Y, prevPawnBottom);
             totalDelta += fabsf(newY - prevY);
 
             m_collisionStats.iterationsUsed = static_cast<uint8_t>(iter + 1);
@@ -570,26 +574,30 @@ namespace Engine
             m_collisionStats.centerDiffX = bestCenterDiffX;
             m_collisionStats.centerDiffZ = bestCenterDiffZ;
 
-            // MTV: resolve along axis with SMALLER penetration
-            if (fabsf(bestPenX) < fabsf(bestPenZ) && bestPenX != 0.0f)
+            // Day3.9: Separable-axis XZ push-out - apply BOTH axes to guarantee separation
+            if (bestPenX != 0.0f)
             {
                 newX -= bestPenX;
                 m_pawn.velX = 0.0f;
-                m_collisionStats.mtvAxis = 0;
-                m_collisionStats.mtvMagnitude = fabsf(bestPenX);
-                m_collisionStats.lastAxisResolved = Axis::X;
             }
-            else if (bestPenZ != 0.0f)
+            if (bestPenZ != 0.0f)
             {
                 newZ -= bestPenZ;
                 m_pawn.velZ = 0.0f;
-                m_collisionStats.mtvAxis = 2;
-                m_collisionStats.mtvMagnitude = fabsf(bestPenZ);
-                m_collisionStats.lastAxisResolved = Axis::Z;
             }
+
+            // Track dominant axis for HUD
+            m_collisionStats.mtvAxis = (fabsf(bestPenX) >= fabsf(bestPenZ)) ? 0 : 2;
+            m_collisionStats.mtvMagnitude = fmaxf(fabsf(bestPenX), fabsf(bestPenZ));
+            m_collisionStats.lastAxisResolved = (fabsf(bestPenX) >= fabsf(bestPenZ)) ? Axis::X : Axis::Z;
 
             m_collisionStats.penetrationsResolved++;
             m_collisionStats.lastHitCubeId = bestCubeIdx;
+
+            // Day3.9: Post-resolution proof - verify XZ separation achieved
+            AABB pawnAfterXZ = BuildPawnAABB(newX, newY, newZ);
+            AABB cubeCheck = GetCubeAABB(static_cast<uint16_t>(bestCubeIdx));
+            m_collisionStats.xzStillOverlapping = Intersects(pawnAfterXZ, cubeCheck);
 
             if (fabsf(bestPenX) > m_collisionStats.maxPenetrationAbs)
                 m_collisionStats.maxPenetrationAbs = fabsf(bestPenX);
@@ -598,7 +606,7 @@ namespace Engine
         }
     }
 
-    void WorldState::ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis)
+    void WorldState::ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis, float prevPawnBottom)
     {
         // Build pawn AABB at proposed position
         float px = (axis == Axis::X) ? posAxis : currentPosX;
@@ -618,6 +626,33 @@ namespace Engine
         {
             AABB cube = GetCubeAABB(cubeIdx);
             if (!Intersects(pawn, cube)) continue;
+
+            // Day3.9: Anti-step-up guard for Y axis
+            if (axis == Axis::Y)
+            {
+                float cubeTop = cube.maxY;
+
+                // Compute what the Y delta would be
+                float penY = ComputeSignedPenetration(pawn, cube, Axis::Y);
+                float deltaY = -penY;  // This is what would be applied: posAxis -= penY
+
+                // wouldPushUp = the correction would move pawn upward
+                bool wouldPushUp = (deltaY > 0.0f);
+
+                // Only allow upward correction if truly landing from above:
+                // - prevPawnBottom (AABB minY before collision) was at or above cubeTop
+                // - AND velocity is downward or zero (falling/landing)
+                bool wasAboveTop = (prevPawnBottom >= cubeTop - 0.01f);
+                bool fallingOrLanding = (m_pawn.velY <= 0.0f);
+                bool isLandingFromAbove = wasAboveTop && fallingOrLanding;
+
+                if (wouldPushUp && !isLandingFromAbove)
+                {
+                    // Wall contact trying to push up - skip this cube for Y
+                    m_collisionStats.yStepUpSkipped = true;
+                    continue;
+                }
+            }
 
             // Day3.4: Count actual intersections (summed, not deduplicated)
             m_collisionStats.contacts++;
@@ -640,6 +675,12 @@ namespace Engine
         if (deepestCubeIdx >= 0 && deepestPen != 0.0f)
         {
             posAxis -= deepestPen;
+
+            if (axis == Axis::Y)
+            {
+                m_collisionStats.yDeltaApplied = -deepestPen;  // Positive = pushed up, negative = pushed down
+            }
+
             m_collisionStats.penetrationsResolved++;
             m_collisionStats.lastHitCubeId = deepestCubeIdx;
             m_collisionStats.lastAxisResolved = axis;
@@ -781,6 +822,11 @@ namespace Engine
         snap.mtvMagnitude = m_collisionStats.mtvMagnitude;
         snap.mtvCenterDiffX = m_collisionStats.centerDiffX;
         snap.mtvCenterDiffZ = m_collisionStats.centerDiffZ;
+
+        // Day3.9: Regression debug
+        snap.xzStillOverlapping = m_collisionStats.xzStillOverlapping;
+        snap.yStepUpSkipped = m_collisionStats.yStepUpSkipped;
+        snap.yDeltaApplied = m_collisionStats.yDeltaApplied;
 
         return snap;
     }

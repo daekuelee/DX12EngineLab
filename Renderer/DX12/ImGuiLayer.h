@@ -96,6 +96,10 @@ namespace Renderer
             uint8_t mtvAxis = 0;
             float mtvMagnitude = 0;
             float mtvCenterDiffX = 0, mtvCenterDiffZ = 0;
+            // Day3.9: Regression debug
+            bool xzStillOverlapping = false;
+            bool yStepUpSkipped = false;
+            float yDeltaApplied = 0;
         } m_worldState;
         bool m_hasWorldState = false;
     };

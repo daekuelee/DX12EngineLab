@@ -57,6 +57,10 @@ namespace Engine
         float mtvMagnitude = 0.0f;  // Magnitude of chosen penetration
         float centerDiffX = 0.0f;   // For sign determination proof
         float centerDiffZ = 0.0f;
+        // Day3.9: Regression debug fields (reset each tick in TickFixed)
+        bool xzStillOverlapping = false;  // After XZ push-out, does intersection persist?
+        bool yStepUpSkipped = false;      // Was Y correction skipped by anti-step-up guard?
+        float yDeltaApplied = 0.0f;       // Actual Y correction applied
     };
     // Input state sampled each frame
     struct InputState
@@ -241,7 +245,7 @@ namespace Engine
         bool Intersects(const AABB& a, const AABB& b) const;
         float ComputeSignedPenetration(const AABB& pawn, const AABB& cube, Axis axis) const;
         std::vector<uint16_t> QuerySpatialHash(const AABB& pawn) const;
-        void ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis);
+        void ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis, float prevPawnBottom = 0.0f);
         // Day3.8: MTV-based XZ resolution (Issue A fix)
         void ResolveXZ_MTV(float& newX, float& newZ, float newY);
     };
