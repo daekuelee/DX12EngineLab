@@ -227,6 +227,15 @@ namespace Renderer
         m_worldState.floorMinZ = snap.floorMinZ;
         m_worldState.floorMaxZ = snap.floorMaxZ;
         m_worldState.floorY = snap.floorY;
+        // Day3.7: Camera basis proof
+        m_worldState.camFwdX = snap.camFwdX;
+        m_worldState.camFwdZ = snap.camFwdZ;
+        m_worldState.camRightX = snap.camRightX;
+        m_worldState.camRightZ = snap.camRightZ;
+        m_worldState.camDot = snap.camDot;
+        // Day3.7: Collision extent proof
+        m_worldState.pawnExtentX = snap.pawnExtentX;
+        m_worldState.pawnExtentZ = snap.pawnExtentZ;
         m_hasWorldState = true;
     }
 
@@ -331,6 +340,18 @@ namespace Renderer
                 ImGui::Text("Bounds: X[%.0f,%.0f] Z[%.0f,%.0f]",
                     m_worldState.floorMinX, m_worldState.floorMaxX,
                     m_worldState.floorMinZ, m_worldState.floorMaxZ);
+
+                // Day3.7: Camera basis proof (Bug A)
+                ImGui::Separator();
+                ImGui::Text("-- Camera Basis --");
+                ImGui::Text("Fwd: (%.2f, %.2f)", m_worldState.camFwdX, m_worldState.camFwdZ);
+                ImGui::Text("Right: (%.2f, %.2f)", m_worldState.camRightX, m_worldState.camRightZ);
+                ImGui::Text("Dot: %.4f", m_worldState.camDot);
+
+                // Day3.7: Collision extent proof (Bug C)
+                ImGui::Separator();
+                ImGui::Text("-- Collision Extent --");
+                ImGui::Text("Extent: X=%.2f Z=%.2f", m_worldState.pawnExtentX, m_worldState.pawnExtentZ);
 
                 ImGui::Separator();
                 ImGui::Text("-- Render Passes --");

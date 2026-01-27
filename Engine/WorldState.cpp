@@ -79,13 +79,33 @@ namespace Engine
         if (m_pawn.pitch < m_config.pitchClampMin) m_pawn.pitch = m_config.pitchClampMin;
         if (m_pawn.pitch > m_config.pitchClampMax) m_pawn.pitch = m_config.pitchClampMax;
 
-        // 3. Compute forward/right vectors from pawn yaw (camera-relative movement)
-        float cosYaw = cosf(m_pawn.yaw);
-        float sinYaw = sinf(m_pawn.yaw);
-        float forwardX = sinYaw;
-        float forwardZ = cosYaw;
-        float rightX = cosYaw;
-        float rightZ = -sinYaw;
+        // 3. Compute camera-relative movement vectors (pawnXZ - eyeXZ)
+        float camFwdX = m_pawn.posX - m_camera.eyeX;
+        float camFwdZ = m_pawn.posZ - m_camera.eyeZ;
+        float fwdLen = sqrtf(camFwdX * camFwdX + camFwdZ * camFwdZ);
+
+        // Len guard: fallback to pawn yaw if camera too close
+        if (fwdLen < 0.001f)
+        {
+            camFwdX = sinf(m_pawn.yaw);
+            camFwdZ = cosf(m_pawn.yaw);
+        }
+        else
+        {
+            camFwdX /= fwdLen;
+            camFwdZ /= fwdLen;
+        }
+
+        // Right = cross(up, camFwd) where up=(0,1,0): (fwdZ, 0, -fwdX)
+        float camRightX = camFwdZ;
+        float camRightZ = -camFwdX;
+
+        // Store for HUD proof + orthogonality check
+        m_camera.dbgFwdX = camFwdX;
+        m_camera.dbgFwdZ = camFwdZ;
+        m_camera.dbgRightX = camRightX;
+        m_camera.dbgRightZ = camRightZ;
+        m_camera.dbgDot = camFwdX * camRightX + camFwdZ * camRightZ;  // Should be ~0
 
         // 4. Smooth sprint alpha toward target
         float targetSprint = input.sprint ? 1.0f : 0.0f;
@@ -98,9 +118,9 @@ namespace Engine
         float speedMultiplier = 1.0f + (m_config.sprintMultiplier - 1.0f) * m_sprintAlpha;
         float currentSpeed = m_config.walkSpeed * speedMultiplier;
 
-        // Horizontal velocity from input
-        m_pawn.velX = (forwardX * input.moveZ + rightX * input.moveX) * currentSpeed;
-        m_pawn.velZ = (forwardZ * input.moveZ + rightZ * input.moveX) * currentSpeed;
+        // Horizontal velocity from input (camera-relative)
+        m_pawn.velX = (camFwdX * input.moveZ + camRightX * input.moveX) * currentSpeed;
+        m_pawn.velZ = (camFwdZ * input.moveZ + camRightZ * input.moveX) * currentSpeed;
 
         // 6. Apply gravity if not on ground
         if (!m_pawn.onGround)
@@ -247,7 +267,7 @@ namespace Engine
             char buf[320];
             sprintf_s(buf, "[GAP_ANOMALY] px=%.2f pz=%.2f py=%.3f inFloor=%d gap=%.3f foot=[%.2f..%.2f] cand=%u\n",
                 m_pawn.posX, m_pawn.posZ, m_pawn.posY, inFloorBounds ? 1 : 0, support.gap,
-                m_pawn.posX - m_config.pawnHalfWidth, m_pawn.posX + m_config.pawnHalfWidth,
+                m_pawn.posX - m_config.pawnHalfExtentX, m_pawn.posX + m_config.pawnHalfExtentX,
                 support.candidateCount);
             OutputDebugStringA(buf);
         }
@@ -350,13 +370,14 @@ namespace Engine
     AABB WorldState::BuildPawnAABB(float px, float py, float pz) const
     {
         // Pawn AABB: feet at posY, head at posY+height
+        // Day3.7: Axis-aware footprint (X=1.4 for arms, Z=0.4 tight)
         AABB aabb;
-        aabb.minX = px - m_config.pawnHalfWidth;
-        aabb.maxX = px + m_config.pawnHalfWidth;
+        aabb.minX = px - m_config.pawnHalfExtentX;
+        aabb.maxX = px + m_config.pawnHalfExtentX;
         aabb.minY = py;
         aabb.maxY = py + m_config.pawnHeight;
-        aabb.minZ = pz - m_config.pawnHalfWidth;
-        aabb.maxZ = pz + m_config.pawnHalfWidth;
+        aabb.minZ = pz - m_config.pawnHalfExtentZ;
+        aabb.maxZ = pz + m_config.pawnHalfExtentZ;
         return aabb;
     }
 
@@ -672,6 +693,17 @@ namespace Engine
         snap.floorMinZ = m_config.floorMinZ;
         snap.floorMaxZ = m_config.floorMaxZ;
         snap.floorY = m_config.floorY;
+
+        // Day3.7: Camera basis proof (Bug A)
+        snap.camFwdX = m_camera.dbgFwdX;
+        snap.camFwdZ = m_camera.dbgFwdZ;
+        snap.camRightX = m_camera.dbgRightX;
+        snap.camRightZ = m_camera.dbgRightZ;
+        snap.camDot = m_camera.dbgDot;
+
+        // Day3.7: Collision extent proof (Bug C)
+        snap.pawnExtentX = m_config.pawnHalfExtentX;
+        snap.pawnExtentZ = m_config.pawnHalfExtentZ;
 
         return snap;
     }

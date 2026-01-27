@@ -83,6 +83,10 @@ namespace Engine
         float eyeY = 8.0f;
         float eyeZ = -15.0f;
         float fovY = 0.785398163f;  // 45 degrees in radians
+        // Day3.7: Camera basis debug fields for HUD proof
+        float dbgFwdX = 0.0f, dbgFwdZ = 0.0f;
+        float dbgRightX = 0.0f, dbgRightZ = 0.0f;
+        float dbgDot = 0.0f;  // Orthogonality proof: should be ~0
     };
 
     // Map configuration
@@ -135,8 +139,11 @@ namespace Engine
         float spawnY = 5.0f;  // Above floor (falls to Y=0)
         float spawnZ = 0.0f;
 
-        // Part 2: Pawn AABB dimensions
-        float pawnHalfWidth = 0.4f;    // X/Z half-extent
+        // Part 2: Pawn AABB dimensions (Day3.7: axis-aware)
+        // X extent: arms outer edge = offsetX(1.0) + scaleX(0.4) = 1.4
+        // Z extent: keep tight depth
+        float pawnHalfExtentX = 1.4f;  // Arms reach
+        float pawnHalfExtentZ = 0.4f;  // Tight depth
         float pawnHeight = 5.0f;       // Total height (feet at posY, head at posY+height)
 
         // Part 2: Cube collision dimensions

@@ -85,6 +85,12 @@ namespace Renderer
             float floorMinX = 0, floorMaxX = 0;
             float floorMinZ = 0, floorMaxZ = 0;
             float floorY = 0;
+            // Day3.7: Camera basis proof (Bug A)
+            float camFwdX = 0, camFwdZ = 0;
+            float camRightX = 0, camRightZ = 0;
+            float camDot = 0;
+            // Day3.7: Collision extent proof (Bug C)
+            float pawnExtentX = 0, pawnExtentZ = 0;
         } m_worldState;
         bool m_hasWorldState = false;
     };
