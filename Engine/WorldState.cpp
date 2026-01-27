@@ -577,12 +577,12 @@ namespace Engine
             // Day3.9: Separable-axis XZ push-out - apply BOTH axes to guarantee separation
             if (bestPenX != 0.0f)
             {
-                newX -= bestPenX;
+                newX += bestPenX;
                 m_pawn.velX = 0.0f;
             }
             if (bestPenZ != 0.0f)
             {
-                newZ -= bestPenZ;
+                newZ += bestPenZ;
                 m_pawn.velZ = 0.0f;
             }
 
@@ -634,7 +634,7 @@ namespace Engine
 
                 // Compute what the Y delta would be
                 float penY = ComputeSignedPenetration(pawn, cube, Axis::Y);
-                float deltaY = -penY;  // This is what would be applied: posAxis -= penY
+                float deltaY = penY;  // Penetration is already signed correctly
 
                 // wouldPushUp = the correction would move pawn upward
                 bool wouldPushUp = (deltaY > 0.0f);
@@ -674,11 +674,11 @@ namespace Engine
         // Apply only the deepest correction
         if (deepestCubeIdx >= 0 && deepestPen != 0.0f)
         {
-            posAxis -= deepestPen;
+            posAxis += deepestPen;
 
             if (axis == Axis::Y)
             {
-                m_collisionStats.yDeltaApplied = -deepestPen;  // Positive = pushed up, negative = pushed down
+                m_collisionStats.yDeltaApplied = deepestPen;  // Signed penetration = signed delta
             }
 
             m_collisionStats.penetrationsResolved++;

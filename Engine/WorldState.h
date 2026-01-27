@@ -145,10 +145,10 @@ namespace Engine
         // KillZ (respawn trigger)
         float killZ = -50.0f;
 
-        // Spawn position (in gap between cubes at origin)
-        float spawnX = 0.0f;
+        // Spawn position (grid cell center, not boundary)
+        float spawnX = 1.0f;
         float spawnY = 5.0f;  // Above floor (falls to Y=0)
-        float spawnZ = 0.0f;
+        float spawnZ = 1.0f;
 
         // Part 2: Pawn AABB dimensions (Day3.7: axis-aware)
         // X extent: arms outer edge = offsetX(1.0) + scaleX(0.4) = 1.4
