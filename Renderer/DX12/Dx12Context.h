@@ -48,6 +48,13 @@ namespace Renderer
         float maxPenetrationAbs = 0.0f;
         bool hitMaxIter = false;         // True if solver ran 8 iterations AND did NOT converge
 
+        // Day3.5: Support diagnostics
+        uint8_t supportSource = 2;       // 0=FLOOR, 1=CUBE, 2=NONE
+        float supportY = -1000.0f;
+        int32_t supportCubeId = -1;
+        bool snappedThisTick = false;
+        float supportGap = 0.0f;
+
         // Floor diagnostics (Day3 debug)
         bool inFloorBounds = false;
         bool didFloorClamp = false;

@@ -213,6 +213,12 @@ namespace Renderer
         m_worldState.contacts = snap.contacts;
         m_worldState.maxPenetrationAbs = snap.maxPenetrationAbs;
         m_worldState.hitMaxIter = snap.hitMaxIter;
+        // Day3.5: Support diagnostics
+        m_worldState.supportSource = snap.supportSource;
+        m_worldState.supportY = snap.supportY;
+        m_worldState.supportCubeId = snap.supportCubeId;
+        m_worldState.snappedThisTick = snap.snappedThisTick;
+        m_worldState.supportGap = snap.supportGap;
         // Floor diagnostics
         m_worldState.inFloorBounds = snap.inFloorBounds;
         m_worldState.didFloorClamp = snap.didFloorClamp;
@@ -302,17 +308,26 @@ namespace Renderer
                 if (m_worldState.maxPenetrationAbs > 0.001f)
                     ImGui::TextColored(ImVec4(1,0.5f,0,1), "MaxPenAbs: %.4f", m_worldState.maxPenetrationAbs);
 
-                // Floor diagnostics (Day3 debug)
+                // Day3.5: Support diagnostics
                 ImGui::Separator();
-                ImGui::Text("-- FLOOR DEBUG --");
+                ImGui::Text("-- Support --");
+                const char* supportName = (m_worldState.supportSource == 0) ? "FLOOR" :
+                                          (m_worldState.supportSource == 1) ? "CUBE" : "NONE";
+                if (m_worldState.supportSource == 1)
+                    ImGui::Text("Support: %s(%d) Y=%.3f", supportName, m_worldState.supportCubeId, m_worldState.supportY);
+                else
+                    ImGui::Text("Support: %s Y=%.3f", supportName, m_worldState.supportY);
+                ImGui::Text("onGround: %s", m_worldState.onGround ? "YES" : "NO");
+                ImGui::Text("Snapped: %s  Gap: %.4f", m_worldState.snappedThisTick ? "YES" : "NO", m_worldState.supportGap);
+                ImGui::Text("contacts: %u", m_worldState.contacts);
+
+                // Floor bounds reference
+                ImGui::Separator();
+                ImGui::Text("-- Floor Bounds --");
                 ImGui::Text("posX: %.2f  posZ: %.2f", m_worldState.posX, m_worldState.posZ);
                 ImGui::Text("posY (feet): %.3f", m_worldState.posY);
                 ImGui::Text("velY: %.2f", m_worldState.velY);
                 ImGui::Text("inBounds: %s", m_worldState.inFloorBounds ? "YES" : "NO");
-                ImGui::Text("onGround: %s", m_worldState.onGround ? "YES" : "NO");
-                ImGui::Text("didFloorClamp: %s", m_worldState.didFloorClamp ? "YES" : "NO");
-                ImGui::Text("KillZ count: %u", m_worldState.respawnCount);
-                // Show bounds for reference
                 ImGui::Text("Bounds: X[%.0f,%.0f] Z[%.0f,%.0f]",
                     m_worldState.floorMinX, m_worldState.floorMaxX,
                     m_worldState.floorMinZ, m_worldState.floorMaxZ);

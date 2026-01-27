@@ -12,6 +12,19 @@ namespace Engine
     // Part 2: Axis enum for collision resolution
     enum class Axis : uint8_t { X, Y, Z };
 
+    // Day3.5: Support source for onGround determination
+    enum class SupportSource : uint8_t { FLOOR = 0, CUBE = 1, NONE = 2 };
+
+    // Day3.5: Support query result
+    struct SupportResult
+    {
+        SupportSource source = SupportSource::NONE;
+        float supportY = -1000.0f;
+        int32_t cubeId = -1;
+        float gap = 0.0f;
+        uint32_t candidateCount = 0;  // For gap anomaly log
+    };
+
     // Part 2: Axis-Aligned Bounding Box
     struct AABB
     {
@@ -31,6 +44,12 @@ namespace Engine
         uint8_t iterationsUsed = 0;       // 1-8 iterations before convergence or max
         float maxPenetrationAbs = 0.0f;   // Largest |penetration| observed this tick
         bool hitMaxIter = false;          // True ONLY if ran all 8 iterations AND did NOT converge
+        // Day3.5: Support diagnostics
+        SupportSource supportSource = SupportSource::NONE;
+        float supportY = -1000.0f;
+        int32_t supportCubeId = -1;
+        bool snappedThisTick = false;
+        float supportGap = 0.0f;
     };
     // Input state sampled each frame
     struct InputState
@@ -183,6 +202,9 @@ namespace Engine
         // Floor diagnostic flag (reset each tick, set in ResolveFloorCollision)
         bool m_didFloorClampThisTick = false;
 
+        // Day3.5: Jump grace flag (prevents support query from clearing onGround on jump frame)
+        bool m_justJumpedThisTick = false;
+
         // Part 2: Spatial hash grid (100x100 cells, each cell contains cube index)
         // Built once at init - cubes don't move
         static constexpr int GRID_SIZE = 100;
@@ -192,6 +214,9 @@ namespace Engine
         // Private helpers
         void ResolveFloorCollision();
         void CheckKillZ();
+
+        // Day3.5: Support query (checks floor and cubes for landing surface)
+        SupportResult QuerySupport(float px, float py, float pz, float velY) const;
 
         // Part 2: Collision helpers
         void BuildSpatialGrid();
