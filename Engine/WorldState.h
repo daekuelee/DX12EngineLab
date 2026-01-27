@@ -72,6 +72,15 @@ namespace Engine
         bool xzStillOverlapping = false;  // After XZ push-out, does intersection persist?
         bool yStepUpSkipped = false;      // Was Y correction skipped by anti-step-up guard?
         float yDeltaApplied = 0.0f;       // Actual Y correction applied
+        // Day3.11 Phase 2: Capsule depenetration diagnostics
+        // CONTRACT: These fields are set by ResolveOverlaps_Capsule() at tick start.
+        // Other collision code MUST NOT overwrite these fields.
+        bool depenApplied = false;
+        float depenTotalMag = 0.0f;
+        bool depenClampTriggered = false;
+        float depenMaxSingleMag = 0.0f;
+        uint32_t depenOverlapCount = 0;
+        uint32_t depenIterations = 0;
     };
     // Input state sampled each frame
     struct InputState
@@ -272,5 +281,7 @@ namespace Engine
         void ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis, float prevPawnBottom = 0.0f);
         // Day3.8: MTV-based XZ resolution (Issue A fix)
         void ResolveXZ_MTV(float& newX, float& newZ, float newY);
+        // Day3.11 Phase 2: Capsule depenetration
+        void ResolveOverlaps_Capsule();
     };
 }

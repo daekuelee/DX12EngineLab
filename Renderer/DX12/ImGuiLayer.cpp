@@ -254,6 +254,13 @@ namespace Renderer
         m_worldState.capsuleHalfHeight = snap.capsuleHalfHeight;
         m_worldState.capsuleP0y = snap.capsuleP0y;
         m_worldState.capsuleP1y = snap.capsuleP1y;
+        // Day3.11 Phase 2: Capsule depenetration
+        m_worldState.depenApplied = snap.depenApplied;
+        m_worldState.depenTotalMag = snap.depenTotalMag;
+        m_worldState.depenClampTriggered = snap.depenClampTriggered;
+        m_worldState.depenMaxSingleMag = snap.depenMaxSingleMag;
+        m_worldState.depenOverlapCount = snap.depenOverlapCount;
+        m_worldState.depenIterations = snap.depenIterations;
         m_hasWorldState = true;
     }
 
@@ -293,6 +300,18 @@ namespace Renderer
                 ImGui::Text("  P0.y=%.3f P1.y=%.3f", m_worldState.capsuleP0y, m_worldState.capsuleP1y);
                 float totalH = 2.0f * m_worldState.capsuleRadius + 2.0f * m_worldState.capsuleHalfHeight;
                 ImGui::Text("  H=%.2f", totalH);
+                ImGui::Separator();
+                ImGui::Text("-- Depen --");
+                if (m_worldState.depenApplied)
+                {
+                    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "ACTIVE");
+                    ImGui::Text("Iters:%u Mag:%.4f", m_worldState.depenIterations, m_worldState.depenTotalMag);
+                    ImGui::Text("Max:%.4f Cnt:%u", m_worldState.depenMaxSingleMag, m_worldState.depenOverlapCount);
+                    if (m_worldState.depenClampTriggered)
+                        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "CLAMP!");
+                }
+                else
+                    ImGui::Text("Clear");
             }
 
             // World State section (Day3) - only show in ThirdPerson mode
