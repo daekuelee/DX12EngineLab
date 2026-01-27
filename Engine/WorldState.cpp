@@ -376,6 +376,14 @@ namespace Engine
                 ResolveXZ_MTV(newX, newZ, newY);
                 totalDelta += fabsf(newX - prevX) + fabsf(newZ - prevZ);
             }
+            else if (m_controllerMode == ControllerMode::Capsule)
+            {
+                // Day3.11: XZ cleanup in iteration loop for Capsule mode
+                // ResolveAxis(Y) can push capsule into wall XZ, need cleanup each iteration
+                float prevX = newX, prevZ = newZ;
+                ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
+                totalDelta += fabsf(newX - prevX) + fabsf(newZ - prevZ);
+            }
 
             // Y axis (both modes)
             float prevY = newY;
@@ -1115,7 +1123,11 @@ namespace Engine
             m_collisionStats.sweepNormalZ = earliest.normalZ;
 
             // Move to contact (with skin offset)
-            float safeT = fmaxf(0.0f, earliest.t - SKIN_WIDTH / deltaMag);
+            // FIX: Clamp skin offset to never eat more than 50% of TOI
+            // Prevents safeT=0 trap when TOI is small relative to SKIN_WIDTH/deltaMag
+            float skinParam = SKIN_WIDTH / deltaMag;
+            float clampedSkin = fminf(skinParam, earliest.t * 0.5f);
+            float safeT = fmaxf(0.0f, earliest.t - clampedSkin);
             totalAppliedDx += dx * safeT;
             totalAppliedDz += dz * safeT;
 
@@ -1160,7 +1172,7 @@ namespace Engine
     // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
     void WorldState::ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY)
     {
-        const float MAX_XZ_CLEANUP = 0.1f;
+        const float MAX_XZ_CLEANUP = 1.0f;  // Must cover capsuleRadius (0.8f) + margin
         const float MIN_CLEANUP_DIST = 0.001f;
 
         float r = m_config.capsuleRadius;
