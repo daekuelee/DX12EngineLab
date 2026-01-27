@@ -851,6 +851,13 @@ namespace Engine
         // Day3.11: Controller mode
         snap.controllerMode = static_cast<uint8_t>(m_controllerMode);
 
+        // Day3.11: Capsule geometry
+        snap.capsuleRadius = m_config.capsuleRadius;
+        snap.capsuleHalfHeight = m_config.capsuleHalfHeight;
+        CapsulePoints cap = MakeCapsuleFromFeet(m_pawn.posY, m_config.capsuleRadius, m_config.capsuleHalfHeight);
+        snap.capsuleP0y = cap.P0y;
+        snap.capsuleP1y = cap.P1y;
+
         return snap;
     }
 }

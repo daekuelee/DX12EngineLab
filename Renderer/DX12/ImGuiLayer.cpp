@@ -249,6 +249,11 @@ namespace Renderer
         m_worldState.yDeltaApplied = snap.yDeltaApplied;
         // Day3.11: Controller mode
         m_worldState.controllerMode = snap.controllerMode;
+        // Day3.11: Capsule geometry
+        m_worldState.capsuleRadius = snap.capsuleRadius;
+        m_worldState.capsuleHalfHeight = snap.capsuleHalfHeight;
+        m_worldState.capsuleP0y = snap.capsuleP0y;
+        m_worldState.capsuleP1y = snap.capsuleP1y;
         m_hasWorldState = true;
     }
 
@@ -282,6 +287,13 @@ namespace Renderer
             ImGui::Text("CamMode: %s [V]", ToggleSystem::GetCameraModeName());
             const char* ctrlMode = (m_worldState.controllerMode == 0) ? "AABB" : "Capsule";
             ImGui::Text("Ctrl: %s [F6]", ctrlMode);
+            if (m_worldState.controllerMode == 1)
+            {
+                ImGui::Text("  r=%.2f hh=%.2f", m_worldState.capsuleRadius, m_worldState.capsuleHalfHeight);
+                ImGui::Text("  P0.y=%.3f P1.y=%.3f", m_worldState.capsuleP0y, m_worldState.capsuleP1y);
+                float totalH = 2.0f * m_worldState.capsuleRadius + 2.0f * m_worldState.capsuleHalfHeight;
+                ImGui::Text("  H=%.2f", totalH);
+            }
 
             // World State section (Day3) - only show in ThirdPerson mode
             if (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson && m_hasWorldState)

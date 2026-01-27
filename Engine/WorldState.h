@@ -35,6 +35,14 @@ namespace Engine
         float maxX, maxY, maxZ;
     };
 
+    // Day3.11: Capsule geometry helper (feet-bottom anchor)
+    struct CapsulePoints { float P0y, P1y; };
+
+    inline CapsulePoints MakeCapsuleFromFeet(float feetY, float r, float hh)
+    {
+        return { feetY + r, feetY + r + 2.0f * hh };
+    }
+
     // Part 2: Collision statistics for HUD display
     struct CollisionStats
     {
@@ -169,6 +177,11 @@ namespace Engine
         float cubeHalfXZ = 0.9f;
         float cubeMinY = 0.0f;
         float cubeMaxY = 3.0f;
+
+        // Day3.11: Capsule SSOT (feet-bottom anchor)
+        // Total height = 2*r + 2*hh = 2*0.8 + 2*1.7 = 5.0 (matches pawnHeight)
+        float capsuleRadius = 0.8f;
+        float capsuleHalfHeight = 1.7f;
     };
 
     class WorldState
