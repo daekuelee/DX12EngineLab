@@ -106,6 +106,47 @@ Engine-style DX12 sandbox built with **contracts + toggles + evidence** (not tut
 
 **Next**: Day2.5 - Failure mode proof (upload=bad toggle)
 
+## Day3: Game Simulation Layer + Collision (2026-01-27)
+
+**Goal**: ECS-lite game simulation with fixed-step physics, third-person camera, and AABB collision system.
+
+**New Components**:
+- `WorldState` - Pawn physics, camera state, collision config
+- `InputSampler` - Header-only input sampling
+- `CharacterRenderer` - Player cube rendering
+- Spatial hash broadphase (100x100 grid)
+- Axis-separated AABB collision (X->Z->Y)
+
+**Key Features**:
+- Fixed-step physics at 60Hz with accumulator cap
+- Camera-relative WASD movement with sprint (Shift)
+- Jump with hitch-safe consumption flag (Space)
+- Third-person camera with smooth follow and FOV change (45->55 sprint)
+- Floor collision with epsilon tolerance and KillZ respawn
+- Cube collision with spatial hash broadphase
+
+**Key Commits**:
+- `4a8686b` - ECS-lite foundation with fixed-step physics
+- `1c1dd19` - Collision system with spatial hash
+- `1b8b496` - Fix: Penetration sign for correct push direction
+- `6131c19` - Fix: onGround toggle bug with epsilon tolerance
+- `71a8dca` - Fix: Floor bounds to match rendered geometry
+
+**Toggles/Controls**:
+- `V` - Toggle camera mode (ThirdPerson/Free)
+- `WASD` - Move (camera-relative)
+- `Shift` - Sprint
+- `Space` - Jump
+- `Q/E` - Yaw rotation
+- `R/F` - Pitch rotation
+- Mouse - Look (in ThirdPerson mode)
+
+**Debug Narrative**: [docs/notes/day3/daily_note.md](docs/notes/day3/daily_note.md)
+
+**Plan Docs**: [docs/contracts/day3/](docs/contracts/day3/)
+
+**Next**: Day3.5 - View FX (fog, sky gradient, exposure)
+
 ## Build & Run
 - Open DX12EngineLab.sln in VS2022
 - Select **x64 / Debug**
