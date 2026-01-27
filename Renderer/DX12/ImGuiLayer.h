@@ -107,6 +107,13 @@ namespace Renderer
             float capsuleHalfHeight = 0.0f;
             float capsuleP0y = 0.0f;
             float capsuleP1y = 0.0f;
+            // Day3.11 Phase 2: Capsule depenetration diagnostics
+            bool depenApplied = false;
+            float depenTotalMag = 0.0f;
+            bool depenClampTriggered = false;
+            float depenMaxSingleMag = 0.0f;
+            uint32_t depenOverlapCount = 0;
+            uint32_t depenIterations = 0;
         } m_worldState;
         bool m_hasWorldState = false;
     };

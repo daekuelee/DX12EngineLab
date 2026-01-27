@@ -2,9 +2,79 @@
 #include "../Renderer/DX12/Dx12Context.h"  // For HUDSnapshot
 #include <cmath>
 #include <cstdio>
+#include <algorithm>  // For std::sort, std::unique
 #include <Windows.h>  // For OutputDebugStringA
 
 using namespace DirectX;
+
+// Day3.11 Phase 2: Capsule geometry helpers
+namespace
+{
+    DirectX::XMFLOAT3 ClosestPointOnSegment(
+        const DirectX::XMFLOAT3& A, const DirectX::XMFLOAT3& B, const DirectX::XMFLOAT3& P)
+    {
+        float ABx = B.x - A.x, ABy = B.y - A.y, ABz = B.z - A.z;
+        float APx = P.x - A.x, APy = P.y - A.y, APz = P.z - A.z;
+        float dotABAB = ABx * ABx + ABy * ABy + ABz * ABz;
+        if (dotABAB < 1e-8f) return A;
+        float t = (APx * ABx + APy * ABy + APz * ABz) / dotABAB;
+        t = (t < 0.0f) ? 0.0f : ((t > 1.0f) ? 1.0f : t);
+        return { A.x + t * ABx, A.y + t * ABy, A.z + t * ABz };
+    }
+
+    DirectX::XMFLOAT3 ClosestPointOnAABB(const DirectX::XMFLOAT3& P, const Engine::AABB& box)
+    {
+        auto clamp = [](float v, float lo, float hi) { return (v < lo) ? lo : ((v > hi) ? hi : v); };
+        return { clamp(P.x, box.minX, box.maxX), clamp(P.y, box.minY, box.maxY), clamp(P.z, box.minZ, box.maxZ) };
+    }
+
+    void ClosestPointsSegmentAABB(const DirectX::XMFLOAT3& segA, const DirectX::XMFLOAT3& segB,
+        const Engine::AABB& box, DirectX::XMFLOAT3& outOnSeg, DirectX::XMFLOAT3& outOnBox)
+    {
+        DirectX::XMFLOAT3 onSeg = { (segA.x + segB.x) * 0.5f, (segA.y + segB.y) * 0.5f, (segA.z + segB.z) * 0.5f };
+        for (int i = 0; i < 4; ++i) {
+            DirectX::XMFLOAT3 onBox = ClosestPointOnAABB(onSeg, box);
+            onSeg = ClosestPointOnSegment(segA, segB, onBox);
+        }
+        outOnSeg = onSeg;
+        outOnBox = ClosestPointOnAABB(onSeg, box);
+    }
+
+    DirectX::XMFLOAT3 FindMinPenetrationAxis(const DirectX::XMFLOAT3& pt, const Engine::AABB& box, float& outDepth)
+    {
+        float d[6] = { pt.x - box.minX, box.maxX - pt.x, pt.y - box.minY, box.maxY - pt.y, pt.z - box.minZ, box.maxZ - pt.z };
+        DirectX::XMFLOAT3 n[6] = { {-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1} };
+        int best = 0;
+        for (int i = 1; i < 6; ++i) if (d[i] < d[best]) best = i;
+        outDepth = d[best];
+        return n[best];
+    }
+
+    struct CapsuleOverlapResult { bool hit; DirectX::XMFLOAT3 normal; float depth; };
+
+    CapsuleOverlapResult CapsuleAABBOverlap(float feetY, float posX, float posZ, float r, float hh, const Engine::AABB& box)
+    {
+        CapsuleOverlapResult res = { false, {0,0,0}, 0.0f };
+        DirectX::XMFLOAT3 segA = { posX, feetY + r, posZ };
+        DirectX::XMFLOAT3 segB = { posX, feetY + r + 2.0f * hh, posZ };
+        DirectX::XMFLOAT3 onSeg, onBox;
+        ClosestPointsSegmentAABB(segA, segB, box, onSeg, onBox);
+        float dx = onSeg.x - onBox.x, dy = onSeg.y - onBox.y, dz = onSeg.z - onBox.z;
+        float distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq > r * r) return res;
+        res.hit = true;
+        float dist = sqrtf(distSq);
+        if (dist > 1e-6f) {
+            float inv = 1.0f / dist;
+            res.normal = { dx * inv, dy * inv, dz * inv };
+            res.depth = r - dist;
+        } else {
+            res.normal = FindMinPenetrationAxis(onSeg, box, res.depth);
+            res.depth += r;
+        }
+        return res;
+    }
+}
 
 namespace Engine
 {
@@ -70,6 +140,12 @@ namespace Engine
     {
         // Reset collision stats for this tick
         m_collisionStats = CollisionStats{};
+
+        // Day3.11 Phase 2: Capsule depenetration safety net
+        if (m_controllerMode == ControllerMode::Capsule)
+        {
+            ResolveOverlaps_Capsule();
+        }
 
         // 1. Apply yaw rotation (axis-based)
         m_pawn.yaw += input.yawAxis * m_config.lookSpeed * fixedDt;
@@ -722,6 +798,93 @@ namespace Engine
         }
     }
 
+    // Day3.11 Phase 2: Capsule depenetration safety net
+    void WorldState::ResolveOverlaps_Capsule()
+    {
+        const int MAX_DEPEN_ITERS = 4;
+        const float MIN_DEPEN_DIST = 0.001f;
+        const float MAX_DEPEN_CLAMP = 1.0f;
+        const float MAX_TOTAL_CLAMP = 2.0f;
+
+        // Reset depen stats (these are protected from overwrite per contract)
+        m_collisionStats.depenApplied = false;
+        m_collisionStats.depenTotalMag = 0.0f;
+        m_collisionStats.depenClampTriggered = false;
+        m_collisionStats.depenMaxSingleMag = 0.0f;
+        m_collisionStats.depenOverlapCount = 0;
+        m_collisionStats.depenIterations = 0;
+
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+
+        for (int iter = 0; iter < MAX_DEPEN_ITERS; ++iter)
+        {
+            m_collisionStats.depenIterations = static_cast<uint32_t>(iter + 1);
+
+            AABB capAABB;
+            capAABB.minX = m_pawn.posX - r;  capAABB.maxX = m_pawn.posX + r;
+            capAABB.minY = m_pawn.posY;       capAABB.maxY = m_pawn.posY + 2.0f * r + 2.0f * hh;
+            capAABB.minZ = m_pawn.posZ - r;  capAABB.maxZ = m_pawn.posZ + r;
+
+            std::vector<uint16_t> candidates = QuerySpatialHash(capAABB);
+            std::sort(candidates.begin(), candidates.end());
+            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+            float pushX = 0.0f, pushY = 0.0f, pushZ = 0.0f;
+            uint32_t overlapCount = 0;
+
+            for (uint16_t idx : candidates)
+            {
+                AABB cube = GetCubeAABB(idx);
+                CapsuleOverlapResult ov = CapsuleAABBOverlap(m_pawn.posY, m_pawn.posX, m_pawn.posZ, r, hh, cube);
+                if (ov.hit && ov.depth > MIN_DEPEN_DIST)
+                {
+                    overlapCount++;
+                    float clampedD = (ov.depth > MAX_DEPEN_CLAMP) ? MAX_DEPEN_CLAMP : ov.depth;
+                    if (ov.depth > MAX_DEPEN_CLAMP) m_collisionStats.depenClampTriggered = true;
+                    if (clampedD > m_collisionStats.depenMaxSingleMag) m_collisionStats.depenMaxSingleMag = clampedD;
+                    pushX += ov.normal.x * clampedD;
+                    pushY += ov.normal.y * clampedD;
+                    pushZ += ov.normal.z * clampedD;
+                }
+            }
+            m_collisionStats.depenOverlapCount = overlapCount;
+            if (overlapCount == 0) break;
+
+            float mag = sqrtf(pushX * pushX + pushY * pushY + pushZ * pushZ);
+            if (mag < MIN_DEPEN_DIST) break;  // Negligible push, stop
+
+            if (mag > MAX_TOTAL_CLAMP) {
+                float s = MAX_TOTAL_CLAMP / mag;
+                pushX *= s; pushY *= s; pushZ *= s;
+                mag = MAX_TOTAL_CLAMP;
+                m_collisionStats.depenClampTriggered = true;
+            }
+
+            m_pawn.posX += pushX;
+            m_pawn.posY += pushY;
+            m_pawn.posZ += pushZ;
+            m_collisionStats.depenApplied = true;
+            m_collisionStats.depenTotalMag += mag;
+
+            char buf[128];
+            sprintf_s(buf, "[DEPEN] iter=%d mag=%.4f clamp=%d cnt=%u\n",
+                iter, mag, m_collisionStats.depenClampTriggered ? 1 : 0, overlapCount);
+            OutputDebugStringA(buf);
+        }
+
+        if (m_collisionStats.depenApplied)
+        {
+            m_pawn.onGround = false;  // Avoid stale state
+            char buf[128];
+            sprintf_s(buf, "[DEPEN] DONE iters=%u total=%.4f clamp=%d pos=(%.2f,%.2f,%.2f)\n",
+                m_collisionStats.depenIterations, m_collisionStats.depenTotalMag,
+                m_collisionStats.depenClampTriggered ? 1 : 0,
+                m_pawn.posX, m_pawn.posY, m_pawn.posZ);
+            OutputDebugStringA(buf);
+        }
+    }
+
     void WorldState::TickFrame(float frameDt)
     {
         // 1. Compute target camera position (behind and above pawn)
@@ -857,6 +1020,14 @@ namespace Engine
         CapsulePoints cap = MakeCapsuleFromFeet(m_pawn.posY, m_config.capsuleRadius, m_config.capsuleHalfHeight);
         snap.capsuleP0y = cap.P0y;
         snap.capsuleP1y = cap.P1y;
+
+        // Day3.11 Phase 2: Capsule depenetration
+        snap.depenApplied = m_collisionStats.depenApplied;
+        snap.depenTotalMag = m_collisionStats.depenTotalMag;
+        snap.depenClampTriggered = m_collisionStats.depenClampTriggered;
+        snap.depenMaxSingleMag = m_collisionStats.depenMaxSingleMag;
+        snap.depenOverlapCount = m_collisionStats.depenOverlapCount;
+        snap.depenIterations = m_collisionStats.depenIterations;
 
         return snap;
     }
