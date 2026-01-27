@@ -66,8 +66,16 @@ namespace
         float dist = sqrtf(distSq);
         if (dist > 1e-6f) {
             float inv = 1.0f / dist;
-            res.normal = { dx * inv, dy * inv, dz * inv };
+            // FIX: Normal must point FROM capsule TOWARD box surface to push capsule OUT
+            // dx,dy,dz = onSeg - onBox points FROM box TO capsule, so negate for push direction
+            res.normal = { -dx * inv, -dy * inv, -dz * inv };
             res.depth = r - dist;
+#ifdef DEBUG_CAPSULE_OVERLAP
+            char buf[128];
+            sprintf_s(buf, "[OVERLAP] dist=%.4f depth=%.4f n=(%.2f,%.2f,%.2f)\n",
+                dist, res.depth, res.normal.x, res.normal.y, res.normal.z);
+            OutputDebugStringA(buf);
+#endif
         } else {
             res.normal = FindMinPenetrationAxis(onSeg, box, res.depth);
             res.depth += r;
@@ -1012,7 +1020,7 @@ namespace Engine
                                      bool& outZeroVelX, bool& outZeroVelZ)
     {
         const float SKIN_WIDTH = 0.01f;
-        const int MAX_SWEEPS = 2;
+        const int MAX_SWEEPS = 4;  // FIX: Corner contacts need 3+ iterations to fully resolve
 
         float r = m_config.capsuleRadius;
         float hh = m_config.capsuleHalfHeight;
@@ -1175,6 +1183,10 @@ namespace Engine
             CapsuleOverlapResult ov = CapsuleAABBOverlap(newY, newX, newZ, r, hh, cube);
             if (ov.hit && ov.depth > MIN_CLEANUP_DIST)
             {
+                char buf[160];
+                sprintf_s(buf, "[CLEANUP_CUBE] idx=%d depth=%.4f n=(%.3f,%.3f,%.3f)\n",
+                    idx, ov.depth, ov.normal.x, ov.normal.y, ov.normal.z);
+                OutputDebugStringA(buf);
                 // XZ components only
                 pushX += ov.normal.x * ov.depth;
                 pushZ += ov.normal.z * ov.depth;
