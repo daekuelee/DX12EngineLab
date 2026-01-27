@@ -66,9 +66,9 @@ namespace
         float dist = sqrtf(distSq);
         if (dist > 1e-6f) {
             float inv = 1.0f / dist;
-            // FIX: Normal must point FROM capsule TOWARD box surface to push capsule OUT
-            // dx,dy,dz = onSeg - onBox points FROM box TO capsule, so negate for push direction
-            res.normal = { -dx * inv, -dy * inv, -dz * inv };
+            // Push normal points FROM box TOWARD capsule (to push capsule OUT)
+            // dx,dy,dz = onSeg - onBox already points in correct direction
+            res.normal = { dx * inv, dy * inv, dz * inv };
             res.depth = r - dist;
 #ifdef DEBUG_CAPSULE_OVERLAP
             char buf[128];
