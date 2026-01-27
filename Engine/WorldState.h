@@ -15,6 +15,9 @@ namespace Engine
     // Day3.5: Support source for onGround determination
     enum class SupportSource : uint8_t { FLOOR = 0, CUBE = 1, NONE = 2 };
 
+    // Day3.11: Controller mode (SSOT in Engine, not Renderer)
+    enum class ControllerMode : uint8_t { AABB = 0, Capsule = 1 };
+
     // Day3.5: Support query result
     struct SupportResult
     {
@@ -31,6 +34,14 @@ namespace Engine
         float minX, minY, minZ;
         float maxX, maxY, maxZ;
     };
+
+    // Day3.11: Capsule geometry helper (feet-bottom anchor)
+    struct CapsulePoints { float P0y, P1y; };
+
+    inline CapsulePoints MakeCapsuleFromFeet(float feetY, float r, float hh)
+    {
+        return { feetY + r, feetY + r + 2.0f * hh };
+    }
 
     // Part 2: Collision statistics for HUD display
     struct CollisionStats
@@ -166,6 +177,11 @@ namespace Engine
         float cubeHalfXZ = 0.9f;
         float cubeMinY = 0.0f;
         float cubeMaxY = 3.0f;
+
+        // Day3.11: Capsule SSOT (feet-bottom anchor)
+        // Total height = 2*r + 2*hh = 2*0.8 + 2*1.7 = 5.0 (matches pawnHeight)
+        float capsuleRadius = 0.8f;
+        float capsuleHalfHeight = 1.7f;
     };
 
     class WorldState
@@ -197,6 +213,11 @@ namespace Engine
         uint32_t GetRespawnCount() const { return m_respawnCount; }
         const char* GetLastRespawnReason() const { return m_lastRespawnReason; }
 
+        // Day3.11: Controller mode
+        ControllerMode GetControllerMode() const { return m_controllerMode; }
+        void ToggleControllerMode();
+        void RespawnResetControllerState();
+
         // Part 2: Collision stats accessor
         const CollisionStats& GetCollisionStats() const { return m_collisionStats; }
 
@@ -222,6 +243,9 @@ namespace Engine
 
         // Day3.5: Jump grace flag (prevents support query from clearing onGround on jump frame)
         bool m_justJumpedThisTick = false;
+
+        // Day3.11: Controller mode
+        ControllerMode m_controllerMode = ControllerMode::AABB;
 
         // Part 2: Spatial hash grid (100x100 cells, each cell contains cube index)
         // Built once at init - cubes don't move

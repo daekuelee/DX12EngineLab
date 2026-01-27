@@ -135,4 +135,9 @@ namespace Engine
         m_lastMouseX = x;
         m_lastMouseY = y;
     }
+
+    void App::ToggleControllerMode()
+    {
+        m_worldState.ToggleControllerMode();
+    }
 }

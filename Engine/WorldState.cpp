@@ -304,21 +304,41 @@ namespace Engine
         if (m_pawn.posY < m_config.killZ)
         {
             m_respawnCount++;
+            m_lastRespawnReason = "KillZ";
 
-            // Log with position BEFORE respawn
             char buf[256];
-            sprintf_s(buf, "[KILLZ] #%u at pos=(%.2f,%.2f,%.2f) - respawning\n",
+            sprintf_s(buf, "[KILLZ] #%u at pos=(%.2f,%.2f,%.2f)\n",
                 m_respawnCount, m_pawn.posX, m_pawn.posY, m_pawn.posZ);
             OutputDebugStringA(buf);
 
-            // Respawn at spawn point
-            m_pawn.posX = m_config.spawnX;
-            m_pawn.posY = m_config.spawnY;
-            m_pawn.posZ = m_config.spawnZ;
-            m_pawn.velX = m_pawn.velY = m_pawn.velZ = 0.0f;
-            m_pawn.onGround = false;  // NOT true! Floor resolve will set it next tick
-            m_lastRespawnReason = "KillZ";
+            RespawnResetControllerState();
         }
+    }
+
+    void WorldState::ToggleControllerMode()
+    {
+        m_controllerMode = (m_controllerMode == ControllerMode::AABB)
+                           ? ControllerMode::Capsule : ControllerMode::AABB;
+        const char* name = (m_controllerMode == ControllerMode::AABB) ? "AABB" : "Capsule";
+        char buf[64];
+        sprintf_s(buf, "[MODE] ctrl=%s\n", name);
+        OutputDebugStringA(buf);
+    }
+
+    void WorldState::RespawnResetControllerState()
+    {
+        m_pawn.posX = m_config.spawnX;
+        m_pawn.posY = m_config.spawnY;
+        m_pawn.posZ = m_config.spawnZ;
+        m_pawn.velX = m_pawn.velY = m_pawn.velZ = 0.0f;
+        m_pawn.onGround = false;
+        m_collisionStats = CollisionStats{};
+
+        const char* modeName = (m_controllerMode == ControllerMode::AABB) ? "AABB" : "Capsule";
+        char buf[128];
+        sprintf_s(buf, "[RESPAWN] ctrl=%s stats_cleared=1 pos=(%.1f,%.1f,%.1f)\n",
+                  modeName, m_pawn.posX, m_pawn.posY, m_pawn.posZ);
+        OutputDebugStringA(buf);
     }
 
     // ========================================================================
@@ -827,6 +847,16 @@ namespace Engine
         snap.xzStillOverlapping = m_collisionStats.xzStillOverlapping;
         snap.yStepUpSkipped = m_collisionStats.yStepUpSkipped;
         snap.yDeltaApplied = m_collisionStats.yDeltaApplied;
+
+        // Day3.11: Controller mode
+        snap.controllerMode = static_cast<uint8_t>(m_controllerMode);
+
+        // Day3.11: Capsule geometry
+        snap.capsuleRadius = m_config.capsuleRadius;
+        snap.capsuleHalfHeight = m_config.capsuleHalfHeight;
+        CapsulePoints cap = MakeCapsuleFromFeet(m_pawn.posY, m_config.capsuleRadius, m_config.capsuleHalfHeight);
+        snap.capsuleP0y = cap.P0y;
+        snap.capsuleP1y = cap.P1y;
 
         return snap;
     }
