@@ -96,9 +96,9 @@ namespace Engine
             camFwdZ /= fwdLen;
         }
 
-        // Right = cross(up, camFwd) where up=(0,1,0): (fwdZ, 0, -fwdX)
-        float camRightX = camFwdZ;
-        float camRightZ = -camFwdX;
+        // Right = cross(camFwd, up) where up=(0,1,0): (-fwdZ, 0, fwdX)
+        float camRightX = -camFwdZ;
+        float camRightZ = camFwdX;
 
         // Store for HUD proof + orthogonality check
         m_camera.dbgFwdX = camFwdX;
