@@ -224,7 +224,7 @@ namespace Renderer
         D3D12_RASTERIZER_DESC rasterizer = {};
         rasterizer.FillMode = D3D12_FILL_MODE_SOLID;
         rasterizer.CullMode = D3D12_CULL_MODE_BACK;
-        rasterizer.FrontCounterClockwise = FALSE;
+        rasterizer.FrontCounterClockwise = FALSE;  // Day3.7: Match cube CW winding (indices are CW from outside)
         rasterizer.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
         rasterizer.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
         rasterizer.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;

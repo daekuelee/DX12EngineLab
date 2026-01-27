@@ -42,12 +42,44 @@ namespace Renderer
         int32_t lastHitCubeId = -1;
         uint8_t lastAxisResolved = 1;  // 0=X, 1=Y, 2=Z
 
+        // Day3.4: Collision iteration diagnostics
+        uint8_t iterationsUsed = 0;
+        uint32_t contacts = 0;           // Summed intersection count (may count same cube multiple times)
+        float maxPenetrationAbs = 0.0f;
+        bool hitMaxIter = false;         // True if solver ran 8 iterations AND did NOT converge
+
+        // Day3.5: Support diagnostics
+        uint8_t supportSource = 2;       // 0=FLOOR, 1=CUBE, 2=NONE
+        float supportY = -1000.0f;
+        int32_t supportCubeId = -1;
+        bool snappedThisTick = false;
+        float supportGap = 0.0f;
+
         // Floor diagnostics (Day3 debug)
         bool inFloorBounds = false;
         bool didFloorClamp = false;
         float floorMinX = 0, floorMaxX = 0;
         float floorMinZ = 0, floorMaxZ = 0;
         float floorY = 0;
+
+        // Day3.7: Camera basis proof (Bug A)
+        float camFwdX = 0, camFwdZ = 0;
+        float camRightX = 0, camRightZ = 0;
+        float camDot = 0;  // Orthogonality proof: should be ~0
+
+        // Day3.7: Collision extent proof (Bug C)
+        float pawnExtentX = 0, pawnExtentZ = 0;
+
+        // Day3.8: MTV debug fields
+        float mtvPenX = 0, mtvPenZ = 0;
+        uint8_t mtvAxis = 0;
+        float mtvMagnitude = 0;
+        float mtvCenterDiffX = 0, mtvCenterDiffZ = 0;
+
+        // Day3.9: Regression debug
+        bool xzStillOverlapping = false;
+        bool yStepUpSkipped = false;
+        float yDeltaApplied = 0;
     };
     class Dx12Context
     {

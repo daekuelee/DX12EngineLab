@@ -145,7 +145,61 @@ Engine-style DX12 sandbox built with **contracts + toggles + evidence** (not tut
 
 **Plan Docs**: [docs/contracts/day3/](docs/contracts/day3/)
 
-**Next**: Day3.5 - View FX (fog, sky gradient, exposure)
+---
+
+## Day 3.4-3.10: Collision System Refinement (2026-01-28)
+
+**Goal**: Iterative debugging and fixing of the AABB collision system through proof-first methodology.
+
+### Day 3.4: Iterative Solver & Bounds Fix
+- `cubeHalfXZ`: 0.45 -> 0.9 (match rendered geometry)
+- Iterative solver with 8 max iterations and epsilon convergence
+- HUD diagnostics: iterationsUsed, contacts, maxPenetrationAbs
+
+### Day 3.5: Support Query System
+- `QuerySupport()` - Pure function returning SupportResult (FLOOR/CUBE/NONE)
+- Single mutation point in TickFixed for snap/velY/onGround
+- Strict Intersects: touching is NOT intersection
+
+### Day 3.6: Multi-Issue Fix
+- Cube shading: Normal priority Y > X > Z
+- Character embedding: Leg offsetY fix
+- Floor fall-through: Penetration recovery block
+
+### Day 3.7: Face Culling & Movement
+- Fix +Z/-Y face index winding (all 6 cube faces visible)
+- Camera-relative A/D movement: `cross(fwd, up)` for right vector
+- Axis-aware collision extents: X=1.4, Z=0.4
+
+### Day 3.8: MTV-Based Collision
+- MTV (Minimum Translation Vector) XZ resolution
+- Resolve along axis with smaller penetration
+- HUD: penX/penZ, mtvAxis, centerDiff
+
+### Day 3.9: Wall-Climb Regression Fix
+- Separable-axis XZ push-out (apply BOTH penX and penZ)
+- Anti-step-up guard: Only allow upward Y if truly landing from above
+- HUD: xzStillOverlapping, yStepUpSkipped
+
+### Day 3.10: Penetration Sign Fix
+- **Root Cause**: `ComputeSignedPenetration` returned inverted sign
+- **Fix**: Single-line sign inversion corrects all axes
+- All 6 cube faces now block symmetrically
+
+**Key Commits**:
+- `8883d1b` - Day3.4: Iterative solver and cube bounds
+- `3dbd0f6` - Day3.5: QuerySupport system
+- `5f60a6e` - Day3.7: Fix face winding
+- `78a69b1` - Day3.8: Fix A/D movement direction
+- `5846944` - Day3.8: MTV-based collision
+- `1ae3fcc` - Day3.9: Wall-climb regression fix
+- `b69e7ed` - Day3.10: Penetration sign fix
+
+**Debug Narrative**: [docs/notes/day3/daily_note_half.md](docs/notes/day3/daily_note_half.md)
+
+**Contracts**: [docs/contracts/day3/](docs/contracts/day3/)
+
+**Next**: Day4 - View FX (fog, sky gradient, exposure)
 
 ## Build & Run
 - Open DX12EngineLab.sln in VS2022

@@ -35,6 +35,14 @@ namespace Engine
 
         // Part 2: Build spatial grid for cube collision
         BuildSpatialGrid();
+
+        // Day3.4: Collision geometry derivation proof log
+        OutputDebugStringA("[CollisionInit] CubeLocalHalf=1.0\n");
+        OutputDebugStringA("[CollisionInit] RenderScale: XZ=0.9 Y=3.0\n");
+        char collisionBuf[256];
+        sprintf_s(collisionBuf, "[CollisionInit] DerivedCollision: halfXZ=%.2f Y=[%.1f,%.1f]\n",
+            m_config.cubeHalfXZ, m_config.cubeMinY, m_config.cubeMaxY);
+        OutputDebugStringA(collisionBuf);
     }
 
     void WorldState::BeginFrame()
@@ -71,13 +79,33 @@ namespace Engine
         if (m_pawn.pitch < m_config.pitchClampMin) m_pawn.pitch = m_config.pitchClampMin;
         if (m_pawn.pitch > m_config.pitchClampMax) m_pawn.pitch = m_config.pitchClampMax;
 
-        // 3. Compute forward/right vectors from pawn yaw (camera-relative movement)
-        float cosYaw = cosf(m_pawn.yaw);
-        float sinYaw = sinf(m_pawn.yaw);
-        float forwardX = sinYaw;
-        float forwardZ = cosYaw;
-        float rightX = cosYaw;
-        float rightZ = -sinYaw;
+        // 3. Compute camera-relative movement vectors (pawnXZ - eyeXZ)
+        float camFwdX = m_pawn.posX - m_camera.eyeX;
+        float camFwdZ = m_pawn.posZ - m_camera.eyeZ;
+        float fwdLen = sqrtf(camFwdX * camFwdX + camFwdZ * camFwdZ);
+
+        // Len guard: fallback to pawn yaw if camera too close
+        if (fwdLen < 0.001f)
+        {
+            camFwdX = sinf(m_pawn.yaw);
+            camFwdZ = cosf(m_pawn.yaw);
+        }
+        else
+        {
+            camFwdX /= fwdLen;
+            camFwdZ /= fwdLen;
+        }
+
+        // Right = cross(camFwd, up) where up=(0,1,0): (-fwdZ, 0, fwdX)
+        float camRightX = -camFwdZ;
+        float camRightZ = camFwdX;
+
+        // Store for HUD proof + orthogonality check
+        m_camera.dbgFwdX = camFwdX;
+        m_camera.dbgFwdZ = camFwdZ;
+        m_camera.dbgRightX = camRightX;
+        m_camera.dbgRightZ = camRightZ;
+        m_camera.dbgDot = camFwdX * camRightX + camFwdZ * camRightZ;  // Should be ~0
 
         // 4. Smooth sprint alpha toward target
         float targetSprint = input.sprint ? 1.0f : 0.0f;
@@ -90,9 +118,9 @@ namespace Engine
         float speedMultiplier = 1.0f + (m_config.sprintMultiplier - 1.0f) * m_sprintAlpha;
         float currentSpeed = m_config.walkSpeed * speedMultiplier;
 
-        // Horizontal velocity from input
-        m_pawn.velX = (forwardX * input.moveZ + rightX * input.moveX) * currentSpeed;
-        m_pawn.velZ = (forwardZ * input.moveZ + rightZ * input.moveX) * currentSpeed;
+        // Horizontal velocity from input (camera-relative)
+        m_pawn.velX = (camFwdX * input.moveZ + camRightX * input.moveX) * currentSpeed;
+        m_pawn.velZ = (camFwdZ * input.moveZ + camRightZ * input.moveX) * currentSpeed;
 
         // 6. Apply gravity if not on ground
         if (!m_pawn.onGround)
@@ -115,51 +143,138 @@ namespace Engine
             m_pawn.onGround = false;
             m_jumpQueued = true;  // Evidence flag
             m_jumpConsumedThisFrame = true;
+            m_justJumpedThisTick = true;  // Day3.5: Prevent support query from clearing onGround
         }
 
         // Part 2: Axis-separated collision resolution
-        // Reset onGround - will be set by cube collision or floor collision
-        m_pawn.onGround = false;
+        // Day3.5: onGround is now determined by QuerySupport, not reset here
 
-        // 8a. X axis movement + collision
+        // Day3.4: Apply velocity to get proposed position
         float newX = m_pawn.posX + m_pawn.velX * fixedDt;
-        ResolveAxis(newX, newX, m_pawn.posY, m_pawn.posZ, Axis::X);
-        m_pawn.posX = newX;
-
-        // 8b. Z axis movement + collision
         float newZ = m_pawn.posZ + m_pawn.velZ * fixedDt;
-        ResolveAxis(newZ, m_pawn.posX, m_pawn.posY, newZ, Axis::Z);
+        float newY = m_pawn.posY + m_pawn.velY * fixedDt;
+
+        // Day3.9: Store pawn AABB bottom before collision resolution (for anti-step-up)
+        AABB pawnPre = BuildPawnAABB(newX, newY, newZ);
+        float prevPawnBottom = pawnPre.minY;
+
+        // Day3.4: Iterative collision resolution (X→Z→Y per iteration)
+        const int MAX_ITERATIONS = 8;
+        const float CONVERGENCE_EPSILON = 0.001f;
+        bool converged = false;
+
+        for (int iter = 0; iter < MAX_ITERATIONS; ++iter)
+        {
+            float totalDelta = 0.0f;
+
+            // Day3.8: MTV-based XZ resolution (replaces separate X then Z)
+            float prevX = newX, prevZ = newZ;
+            ResolveXZ_MTV(newX, newZ, newY);
+            totalDelta += fabsf(newX - prevX) + fabsf(newZ - prevZ);
+
+            // Y axis (unchanged)
+            float prevY = newY;
+            ResolveAxis(newY, newX, newY, newZ, Axis::Y, prevPawnBottom);
+            totalDelta += fabsf(newY - prevY);
+
+            m_collisionStats.iterationsUsed = static_cast<uint8_t>(iter + 1);
+
+            // Convergence check: if total correction is negligible, we've converged
+            if (totalDelta < CONVERGENCE_EPSILON)
+            {
+                converged = true;
+                break;
+            }
+        }
+
+        // hitMaxIter = true ONLY if we ran all iterations AND did NOT converge
+        m_collisionStats.hitMaxIter = (m_collisionStats.iterationsUsed == MAX_ITERATIONS && !converged);
+
+        // Commit final position
+        m_pawn.posX = newX;
+        m_pawn.posY = newY;
         m_pawn.posZ = newZ;
 
-        // 8c. Y axis movement + collision
-        float newY = m_pawn.posY + m_pawn.velY * fixedDt;
-        ResolveAxis(newY, m_pawn.posX, newY, m_pawn.posZ, Axis::Y);
-        m_pawn.posY = newY;
-
-        // Reset floor clamp flag before floor collision
+        // Reset floor clamp flag before support query
         m_didFloorClampThisTick = false;
 
-        // 9. Floor collision (bounded - only within grid extents)
-        // This runs AFTER cube collision
-        // [FLOOR-A] PRE log
-        static uint32_t tickCount = 0;
-        tickCount++;
-        if (tickCount % 60 == 0) {  // Log once per second
-            char buf[256];
-            sprintf_s(buf, "[FLOOR-A] tick=%u PRE pos=(%.2f,%.2f,%.2f) velY=%.2f onGround=%d\n",
-                tickCount, m_pawn.posX, m_pawn.posY, m_pawn.posZ, m_pawn.velY, m_pawn.onGround ? 1 : 0);
+        // Day3.5: Query support (ALWAYS for HUD)
+        SupportResult support = QuerySupport(m_pawn.posX, m_pawn.posY, m_pawn.posZ, m_pawn.velY);
+
+        // Day3.6: Floor penetration recovery (handle overshoots beyond epsilon)
+        if (support.source == SupportSource::NONE && m_pawn.velY <= 0.0f)
+        {
+            bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
+                                  m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
+            // If pawn is below floor and in bounds, force floor recovery
+            if (inFloorBounds && m_pawn.posY < m_config.floorY)
+            {
+                float overshoot = m_config.floorY - m_pawn.posY;
+                char buf[256];
+                sprintf_s(buf, "[FLOOR_RECOVERY] posY=%.3f overshoot=%.3f velY=%.2f\n",
+                    m_pawn.posY, overshoot, m_pawn.velY);
+                OutputDebugStringA(buf);
+
+                // Force floor support
+                support.source = SupportSource::FLOOR;
+                support.supportY = m_config.floorY;
+                support.cubeId = -1;
+                support.gap = overshoot;
+            }
+        }
+
+        // Copy to collision stats for HUD
+        m_collisionStats.supportSource = support.source;
+        m_collisionStats.supportY = support.supportY;
+        m_collisionStats.supportCubeId = support.cubeId;
+        m_collisionStats.supportGap = support.gap;
+        m_collisionStats.snappedThisTick = false;
+
+        // Day3.5: Support application
+        // Safety C: Rising case - clear onGround
+        if (!m_justJumpedThisTick && m_pawn.velY > 0.0f)
+        {
+            m_pawn.onGround = false;
+        }
+        // Falling or standing case
+        else if (!m_justJumpedThisTick && m_pawn.velY <= 0.0f)
+        {
+            if (support.source != SupportSource::NONE)
+            {
+                // Apply snap
+                if (m_pawn.posY != support.supportY)
+                {
+                    m_pawn.posY = support.supportY;
+                    m_collisionStats.snappedThisTick = true;
+                    m_didFloorClampThisTick = true;
+                }
+                m_pawn.velY = 0.0f;
+                m_pawn.onGround = true;
+            }
+            else
+            {
+                m_pawn.onGround = false;
+            }
+        }
+        // If justJumped: don't touch onGround (already set false in jump)
+
+        // Gap anomaly detection
+        if (support.source == SupportSource::NONE && fabsf(m_pawn.posY - 3.0f) < 0.02f)
+        {
+            bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
+                                  m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
+            char buf[320];
+            sprintf_s(buf, "[GAP_ANOMALY] px=%.2f pz=%.2f py=%.3f inFloor=%d gap=%.3f foot=[%.2f..%.2f] cand=%u\n",
+                m_pawn.posX, m_pawn.posZ, m_pawn.posY, inFloorBounds ? 1 : 0, support.gap,
+                m_pawn.posX - m_config.pawnHalfExtentX, m_pawn.posX + m_config.pawnHalfExtentX,
+                support.candidateCount);
             OutputDebugStringA(buf);
         }
 
+        m_justJumpedThisTick = false;  // Reset for next tick
+
+        // Legacy floor collision (now logging-only)
         ResolveFloorCollision();
-
-        // [FLOOR-A] POST log
-        if (tickCount % 60 == 0) {
-            char buf[256];
-            sprintf_s(buf, "[FLOOR-A] tick=%u POST pos=(%.2f,%.2f,%.2f) velY=%.2f onGround=%d\n",
-                tickCount, m_pawn.posX, m_pawn.posY, m_pawn.posZ, m_pawn.velY, m_pawn.onGround ? 1 : 0);
-            OutputDebugStringA(buf);
-        }
 
         // 10. KillZ check (respawn if below threshold)
         CheckKillZ();
@@ -167,37 +282,11 @@ namespace Engine
 
     void WorldState::ResolveFloorCollision()
     {
-        // Calculate explicit pawn bottom (posY IS the feet position)
+        // Day3.5: This function is now logging-only. Support/snap logic moved to QuerySupport.
         float pawnBottomY = m_pawn.posY;
 
-        // Floor collision only applies within map bounds (cube grid extents)
         bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
                               m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
-
-        const float eps = 0.01f;  // 1cm tolerance
-        bool touchingFloor = (pawnBottomY <= m_config.floorY + eps);
-        bool didClamp = false;
-
-        if (inFloorBounds && touchingFloor && m_pawn.velY <= 0.0f)
-        {
-            if (pawnBottomY < m_config.floorY) {
-                m_pawn.posY = m_config.floorY;  // Only clamp if actually below
-                didClamp = true;
-                m_didFloorClampThisTick = true;
-            }
-            m_pawn.velY = 0.0f;
-            m_pawn.onGround = true;
-        }
-        // Outside bounds: no floor, pawn falls (onGround remains unchanged from physics)
-
-        // [FLOOR-B] Log when pawn is near floor (Y < 1.0) or falling
-        if (pawnBottomY < 1.0f || m_pawn.velY < -1.0f) {
-            char buf[256];
-            sprintf_s(buf, "[FLOOR-B] pawnBot=%.3f floorY=%.3f touchFloor=%d inBounds=%d didClamp=%d velY=%.2f onGround=%d\n",
-                pawnBottomY, m_config.floorY, touchingFloor ? 1 : 0, inFloorBounds ? 1 : 0,
-                didClamp ? 1 : 0, m_pawn.velY, m_pawn.onGround ? 1 : 0);
-            OutputDebugStringA(buf);
-        }
 
         // [FLOOR-C] Log when OUT of bounds
         if (!inFloorBounds) {
@@ -280,13 +369,14 @@ namespace Engine
     AABB WorldState::BuildPawnAABB(float px, float py, float pz) const
     {
         // Pawn AABB: feet at posY, head at posY+height
+        // Day3.7: Axis-aware footprint (X=1.4 for arms, Z=0.4 tight)
         AABB aabb;
-        aabb.minX = px - m_config.pawnHalfWidth;
-        aabb.maxX = px + m_config.pawnHalfWidth;
+        aabb.minX = px - m_config.pawnHalfExtentX;
+        aabb.maxX = px + m_config.pawnHalfExtentX;
         aabb.minY = py;
         aabb.maxY = py + m_config.pawnHeight;
-        aabb.minZ = pz - m_config.pawnHalfWidth;
-        aabb.maxZ = pz + m_config.pawnHalfWidth;
+        aabb.minZ = pz - m_config.pawnHalfExtentZ;
+        aabb.maxZ = pz + m_config.pawnHalfExtentZ;
         return aabb;
     }
 
@@ -310,9 +400,10 @@ namespace Engine
 
     bool WorldState::Intersects(const AABB& a, const AABB& b) const
     {
-        return (a.minX <= b.maxX && a.maxX >= b.minX &&
-                a.minY <= b.maxY && a.maxY >= b.minY &&
-                a.minZ <= b.maxZ && a.maxZ >= b.minZ);
+        // Day3.5: Strict intersection (open intervals - touching doesn't count)
+        return (a.minX < b.maxX && a.maxX > b.minX &&
+                a.minY < b.maxY && a.maxY > b.minY &&
+                a.minZ < b.maxZ && a.maxZ > b.minZ);
     }
 
     float WorldState::ComputeSignedPenetration(const AABB& pawn, const AABB& cube, Axis axis) const
@@ -342,8 +433,8 @@ namespace Engine
         // No penetration if overlap <= 0
         if (overlap <= 0.0f) return 0.0f;
 
-        // Sign: push pawn away from cube center
-        float sign = (centerPawn < centerCube) ? 1.0f : -1.0f;
+        // Sign: push pawn away from cube center (negative direction if pawn is left/below)
+        float sign = (centerPawn < centerCube) ? -1.0f : 1.0f;
 
         return sign * overlap;
     }
@@ -374,7 +465,148 @@ namespace Engine
         return candidates;
     }
 
-    void WorldState::ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis)
+    SupportResult WorldState::QuerySupport(float px, float py, float pz, float velY) const
+    {
+        SupportResult result;
+        const float SUPPORT_EPSILON = 0.05f;
+        float pawnBottom = py;
+
+        // Early-out when rising (still return result for HUD)
+        if (velY > 0.0f) return result;
+
+        // Build query AABB with Y expanded
+        AABB queryAABB = BuildPawnAABB(px, py, pz);
+        queryAABB.minY -= SUPPORT_EPSILON;
+        queryAABB.maxY += SUPPORT_EPSILON;
+
+        // 1. Check floor support
+        bool inFloorBounds = (px >= m_config.floorMinX && px <= m_config.floorMaxX &&
+                              pz >= m_config.floorMinZ && pz <= m_config.floorMaxZ);
+        if (inFloorBounds && fabsf(pawnBottom - m_config.floorY) < SUPPORT_EPSILON &&
+            pawnBottom >= m_config.floorY - SUPPORT_EPSILON)  // Safety: not below floor
+        {
+            result.source = SupportSource::FLOOR;
+            result.supportY = m_config.floorY;
+            result.cubeId = -1;
+            result.gap = fabsf(pawnBottom - m_config.floorY);
+        }
+
+        // 2. Check cube support (pick highest)
+        float pawnMinX = queryAABB.minX;
+        float pawnMaxX = queryAABB.maxX;
+        float pawnMinZ = queryAABB.minZ;
+        float pawnMaxZ = queryAABB.maxZ;
+
+        auto candidates = QuerySpatialHash(queryAABB);
+        result.candidateCount = static_cast<uint32_t>(candidates.size());
+
+        for (uint16_t cubeIdx : candidates)
+        {
+            AABB cube = GetCubeAABB(cubeIdx);
+
+            // XZ footprint overlap (inclusive)
+            bool xzOverlap = (pawnMinX <= cube.maxX && pawnMaxX >= cube.minX &&
+                              pawnMinZ <= cube.maxZ && pawnMaxZ >= cube.minZ);
+            if (!xzOverlap) continue;
+
+            float cubeTop = cube.maxY;
+            float dist = fabsf(pawnBottom - cubeTop);
+
+            // Safety B: Only support from above (pawnBottom >= cubeTop - SUPPORT_EPSILON)
+            if (pawnBottom < cubeTop - SUPPORT_EPSILON) continue;
+
+            // Safety A: Select cube if better than current
+            if (dist < SUPPORT_EPSILON && (result.source == SupportSource::NONE || cubeTop > result.supportY))
+            {
+                result.source = SupportSource::CUBE;
+                result.supportY = cubeTop;
+                result.cubeId = cubeIdx;
+                result.gap = dist;
+            }
+        }
+
+        return result;
+    }
+
+    // Day3.8: MTV-based XZ resolution (Issue A fix)
+    void WorldState::ResolveXZ_MTV(float& newX, float& newZ, float newY)
+    {
+        AABB pawn = BuildPawnAABB(newX, newY, newZ);
+        auto candidates = QuerySpatialHash(pawn);
+        m_collisionStats.candidatesChecked += static_cast<uint32_t>(candidates.size());
+
+        float bestPenX = 0.0f, bestPenZ = 0.0f;
+        int bestCubeIdx = -1;
+        float bestCenterDiffX = 0.0f, bestCenterDiffZ = 0.0f;
+
+        for (uint16_t cubeIdx : candidates)
+        {
+            AABB cube = GetCubeAABB(cubeIdx);
+            if (!Intersects(pawn, cube)) continue;
+
+            m_collisionStats.contacts++;
+
+            float penX = ComputeSignedPenetration(pawn, cube, Axis::X);
+            float penZ = ComputeSignedPenetration(pawn, cube, Axis::Z);
+
+            float centerDiffX = ((pawn.minX + pawn.maxX) - (cube.minX + cube.maxX)) * 0.5f;
+            float centerDiffZ = ((pawn.minZ + pawn.maxZ) - (cube.minZ + cube.maxZ)) * 0.5f;
+
+            // Select cube with largest min-axis penetration (deepest contact)
+            float minPen = fminf(fabsf(penX), fabsf(penZ));
+            float bestMinPen = fminf(fabsf(bestPenX), fabsf(bestPenZ));
+
+            if (minPen > bestMinPen || bestCubeIdx < 0)
+            {
+                bestPenX = penX;
+                bestPenZ = penZ;
+                bestCubeIdx = cubeIdx;
+                bestCenterDiffX = centerDiffX;
+                bestCenterDiffZ = centerDiffZ;
+            }
+        }
+
+        if (bestCubeIdx >= 0)
+        {
+            // Store debug info
+            m_collisionStats.lastPenX = bestPenX;
+            m_collisionStats.lastPenZ = bestPenZ;
+            m_collisionStats.centerDiffX = bestCenterDiffX;
+            m_collisionStats.centerDiffZ = bestCenterDiffZ;
+
+            // Day3.9: Separable-axis XZ push-out - apply BOTH axes to guarantee separation
+            if (bestPenX != 0.0f)
+            {
+                newX += bestPenX;
+                m_pawn.velX = 0.0f;
+            }
+            if (bestPenZ != 0.0f)
+            {
+                newZ += bestPenZ;
+                m_pawn.velZ = 0.0f;
+            }
+
+            // Track dominant axis for HUD
+            m_collisionStats.mtvAxis = (fabsf(bestPenX) >= fabsf(bestPenZ)) ? 0 : 2;
+            m_collisionStats.mtvMagnitude = fmaxf(fabsf(bestPenX), fabsf(bestPenZ));
+            m_collisionStats.lastAxisResolved = (fabsf(bestPenX) >= fabsf(bestPenZ)) ? Axis::X : Axis::Z;
+
+            m_collisionStats.penetrationsResolved++;
+            m_collisionStats.lastHitCubeId = bestCubeIdx;
+
+            // Day3.9: Post-resolution proof - verify XZ separation achieved
+            AABB pawnAfterXZ = BuildPawnAABB(newX, newY, newZ);
+            AABB cubeCheck = GetCubeAABB(static_cast<uint16_t>(bestCubeIdx));
+            m_collisionStats.xzStillOverlapping = Intersects(pawnAfterXZ, cubeCheck);
+
+            if (fabsf(bestPenX) > m_collisionStats.maxPenetrationAbs)
+                m_collisionStats.maxPenetrationAbs = fabsf(bestPenX);
+            if (fabsf(bestPenZ) > m_collisionStats.maxPenetrationAbs)
+                m_collisionStats.maxPenetrationAbs = fabsf(bestPenZ);
+        }
+    }
+
+    void WorldState::ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis, float prevPawnBottom)
     {
         // Build pawn AABB at proposed position
         float px = (axis == Axis::X) ? posAxis : currentPosX;
@@ -395,7 +627,42 @@ namespace Engine
             AABB cube = GetCubeAABB(cubeIdx);
             if (!Intersects(pawn, cube)) continue;
 
+            // Day3.9: Anti-step-up guard for Y axis
+            if (axis == Axis::Y)
+            {
+                float cubeTop = cube.maxY;
+
+                // Compute what the Y delta would be
+                float penY = ComputeSignedPenetration(pawn, cube, Axis::Y);
+                float deltaY = penY;  // Penetration is already signed correctly
+
+                // wouldPushUp = the correction would move pawn upward
+                bool wouldPushUp = (deltaY > 0.0f);
+
+                // Only allow upward correction if truly landing from above:
+                // - prevPawnBottom (AABB minY before collision) was at or above cubeTop
+                // - AND velocity is downward or zero (falling/landing)
+                bool wasAboveTop = (prevPawnBottom >= cubeTop - 0.01f);
+                bool fallingOrLanding = (m_pawn.velY <= 0.0f);
+                bool isLandingFromAbove = wasAboveTop && fallingOrLanding;
+
+                if (wouldPushUp && !isLandingFromAbove)
+                {
+                    // Wall contact trying to push up - skip this cube for Y
+                    m_collisionStats.yStepUpSkipped = true;
+                    continue;
+                }
+            }
+
+            // Day3.4: Count actual intersections (summed, not deduplicated)
+            m_collisionStats.contacts++;
+
             float pen = ComputeSignedPenetration(pawn, cube, axis);
+
+            // Day3.4: Track max penetration for diagnostics
+            if (fabsf(pen) > m_collisionStats.maxPenetrationAbs)
+                m_collisionStats.maxPenetrationAbs = fabsf(pen);
+
             if (fabsf(pen) > fabsf(deepestPen))
             {
                 deepestPen = pen;
@@ -407,7 +674,13 @@ namespace Engine
         // Apply only the deepest correction
         if (deepestCubeIdx >= 0 && deepestPen != 0.0f)
         {
-            posAxis -= deepestPen;
+            posAxis += deepestPen;
+
+            if (axis == Axis::Y)
+            {
+                m_collisionStats.yDeltaApplied = deepestPen;  // Signed penetration = signed delta
+            }
+
             m_collisionStats.penetrationsResolved++;
             m_collisionStats.lastHitCubeId = deepestCubeIdx;
             m_collisionStats.lastAxisResolved = axis;
@@ -423,14 +696,7 @@ namespace Engine
             if (axis == Axis::Z) m_pawn.velZ = 0.0f;
             if (axis == Axis::Y)
             {
-                // Y-axis onGround rule: check if LANDING (velY was <= 0) and
-                // pawnBottom is now at cubeTop (within epsilon)
-                float pawnBottom = posAxis;  // posY after correction
-                float epsilon = 0.01f;
-                if (m_pawn.velY <= 0.0f && fabsf(pawnBottom - deepestCubeTop) < epsilon)
-                {
-                    m_pawn.onGround = true;
-                }
+                // Day3.5: onGround is now determined by QuerySupport, not here
                 m_pawn.velY = 0.0f;
             }
         }
@@ -515,6 +781,19 @@ namespace Engine
         snap.lastHitCubeId = m_collisionStats.lastHitCubeId;
         snap.lastAxisResolved = static_cast<uint8_t>(m_collisionStats.lastAxisResolved);
 
+        // Day3.4: Iteration diagnostics
+        snap.iterationsUsed = m_collisionStats.iterationsUsed;
+        snap.contacts = m_collisionStats.contacts;
+        snap.maxPenetrationAbs = m_collisionStats.maxPenetrationAbs;
+        snap.hitMaxIter = m_collisionStats.hitMaxIter;
+
+        // Day3.5: Support diagnostics
+        snap.supportSource = static_cast<uint8_t>(m_collisionStats.supportSource);
+        snap.supportY = m_collisionStats.supportY;
+        snap.supportCubeId = m_collisionStats.supportCubeId;
+        snap.snappedThisTick = m_collisionStats.snappedThisTick;
+        snap.supportGap = m_collisionStats.supportGap;
+
         // Floor diagnostics
         snap.inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
                               m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
@@ -524,6 +803,30 @@ namespace Engine
         snap.floorMinZ = m_config.floorMinZ;
         snap.floorMaxZ = m_config.floorMaxZ;
         snap.floorY = m_config.floorY;
+
+        // Day3.7: Camera basis proof (Bug A)
+        snap.camFwdX = m_camera.dbgFwdX;
+        snap.camFwdZ = m_camera.dbgFwdZ;
+        snap.camRightX = m_camera.dbgRightX;
+        snap.camRightZ = m_camera.dbgRightZ;
+        snap.camDot = m_camera.dbgDot;
+
+        // Day3.7: Collision extent proof (Bug C)
+        snap.pawnExtentX = m_config.pawnHalfExtentX;
+        snap.pawnExtentZ = m_config.pawnHalfExtentZ;
+
+        // Day3.8: MTV debug fields
+        snap.mtvPenX = m_collisionStats.lastPenX;
+        snap.mtvPenZ = m_collisionStats.lastPenZ;
+        snap.mtvAxis = m_collisionStats.mtvAxis;
+        snap.mtvMagnitude = m_collisionStats.mtvMagnitude;
+        snap.mtvCenterDiffX = m_collisionStats.centerDiffX;
+        snap.mtvCenterDiffZ = m_collisionStats.centerDiffZ;
+
+        // Day3.9: Regression debug
+        snap.xzStillOverlapping = m_collisionStats.xzStillOverlapping;
+        snap.yStepUpSkipped = m_collisionStats.yStepUpSkipped;
+        snap.yDeltaApplied = m_collisionStats.yDeltaApplied;
 
         return snap;
     }

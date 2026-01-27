@@ -108,16 +108,16 @@ namespace Renderer
         const uint16_t indices[] = {
             // -Z face (front) - CW viewed from -Z
             0, 2, 1,  0, 3, 2,
-            // +Z face (back) - CW viewed from +Z
-            4, 6, 5,  4, 7, 6,
+            // +Z face (back) - CW viewed from +Z (fixed winding)
+            4, 5, 6,  4, 6, 7,
             // -X face (left) - CW viewed from -X
             0, 1, 5,  0, 5, 4,
             // +X face (right) - CW viewed from +X
             3, 6, 2,  3, 7, 6,
             // +Y face (top) - CW viewed from +Y
             1, 2, 6,  1, 6, 5,
-            // -Y face (bottom) - CW viewed from -Y
-            0, 4, 7,  0, 7, 3
+            // -Y face (bottom) - CW viewed from -Y (fixed winding)
+            0, 7, 4,  0, 3, 7
         };
 
         m_indexCount = _countof(indices);

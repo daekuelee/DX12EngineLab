@@ -208,6 +208,17 @@ namespace Renderer
         m_worldState.penetrationsResolved = snap.penetrationsResolved;
         m_worldState.lastHitCubeId = snap.lastHitCubeId;
         m_worldState.lastAxisResolved = snap.lastAxisResolved;
+        // Day3.4: Iteration diagnostics
+        m_worldState.iterationsUsed = snap.iterationsUsed;
+        m_worldState.contacts = snap.contacts;
+        m_worldState.maxPenetrationAbs = snap.maxPenetrationAbs;
+        m_worldState.hitMaxIter = snap.hitMaxIter;
+        // Day3.5: Support diagnostics
+        m_worldState.supportSource = snap.supportSource;
+        m_worldState.supportY = snap.supportY;
+        m_worldState.supportCubeId = snap.supportCubeId;
+        m_worldState.snappedThisTick = snap.snappedThisTick;
+        m_worldState.supportGap = snap.supportGap;
         // Floor diagnostics
         m_worldState.inFloorBounds = snap.inFloorBounds;
         m_worldState.didFloorClamp = snap.didFloorClamp;
@@ -216,6 +227,26 @@ namespace Renderer
         m_worldState.floorMinZ = snap.floorMinZ;
         m_worldState.floorMaxZ = snap.floorMaxZ;
         m_worldState.floorY = snap.floorY;
+        // Day3.7: Camera basis proof
+        m_worldState.camFwdX = snap.camFwdX;
+        m_worldState.camFwdZ = snap.camFwdZ;
+        m_worldState.camRightX = snap.camRightX;
+        m_worldState.camRightZ = snap.camRightZ;
+        m_worldState.camDot = snap.camDot;
+        // Day3.7: Collision extent proof
+        m_worldState.pawnExtentX = snap.pawnExtentX;
+        m_worldState.pawnExtentZ = snap.pawnExtentZ;
+        // Day3.8: MTV debug fields
+        m_worldState.mtvPenX = snap.mtvPenX;
+        m_worldState.mtvPenZ = snap.mtvPenZ;
+        m_worldState.mtvAxis = snap.mtvAxis;
+        m_worldState.mtvMagnitude = snap.mtvMagnitude;
+        m_worldState.mtvCenterDiffX = snap.mtvCenterDiffX;
+        m_worldState.mtvCenterDiffZ = snap.mtvCenterDiffZ;
+        // Day3.9: Regression debug
+        m_worldState.xzStillOverlapping = snap.xzStillOverlapping;
+        m_worldState.yStepUpSkipped = snap.yStepUpSkipped;
+        m_worldState.yDeltaApplied = snap.yDeltaApplied;
         m_hasWorldState = true;
     }
 
@@ -278,7 +309,7 @@ namespace Renderer
                 // Part 2: Collision stats
                 ImGui::Separator();
                 ImGui::Text("-- Collision --");
-                ImGui::Text("Candidates: %u", m_worldState.candidatesChecked);
+                ImGui::Text("Candidates: %u  Contacts(sum): %u", m_worldState.candidatesChecked, m_worldState.contacts);
                 ImGui::Text("Penetrations: %u", m_worldState.penetrationsResolved);
                 if (m_worldState.lastHitCubeId >= 0)
                 {
@@ -287,20 +318,66 @@ namespace Renderer
                     ImGui::Text("LastHit: cube=%d axis=%s", m_worldState.lastHitCubeId, axisName);
                 }
 
-                // Floor diagnostics (Day3 debug)
+                // Day3.4: Iteration solver diagnostics
                 ImGui::Separator();
-                ImGui::Text("-- FLOOR DEBUG --");
+                ImGui::Text("-- Solver --");
+                if (m_worldState.hitMaxIter)
+                    ImGui::TextColored(ImVec4(1,0.3f,0,1), "Solver: HIT_MAX_ITER (%u/8)", m_worldState.iterationsUsed);
+                else
+                    ImGui::Text("SolverIter: %u/8", m_worldState.iterationsUsed);
+                if (m_worldState.maxPenetrationAbs > 0.001f)
+                    ImGui::TextColored(ImVec4(1,0.5f,0,1), "MaxPenAbs: %.4f", m_worldState.maxPenetrationAbs);
+
+                // Day3.5: Support diagnostics
+                ImGui::Separator();
+                ImGui::Text("-- Support --");
+                const char* supportName = (m_worldState.supportSource == 0) ? "FLOOR" :
+                                          (m_worldState.supportSource == 1) ? "CUBE" : "NONE";
+                if (m_worldState.supportSource == 1)
+                    ImGui::Text("Support: %s(%d) Y=%.3f", supportName, m_worldState.supportCubeId, m_worldState.supportY);
+                else
+                    ImGui::Text("Support: %s Y=%.3f", supportName, m_worldState.supportY);
+                ImGui::Text("onGround: %s", m_worldState.onGround ? "YES" : "NO");
+                ImGui::Text("Snapped: %s  Gap: %.4f", m_worldState.snappedThisTick ? "YES" : "NO", m_worldState.supportGap);
+                ImGui::Text("contacts: %u", m_worldState.contacts);
+
+                // Floor bounds reference
+                ImGui::Separator();
+                ImGui::Text("-- Floor Bounds --");
                 ImGui::Text("posX: %.2f  posZ: %.2f", m_worldState.posX, m_worldState.posZ);
                 ImGui::Text("posY (feet): %.3f", m_worldState.posY);
                 ImGui::Text("velY: %.2f", m_worldState.velY);
                 ImGui::Text("inBounds: %s", m_worldState.inFloorBounds ? "YES" : "NO");
-                ImGui::Text("onGround: %s", m_worldState.onGround ? "YES" : "NO");
-                ImGui::Text("didFloorClamp: %s", m_worldState.didFloorClamp ? "YES" : "NO");
-                ImGui::Text("KillZ count: %u", m_worldState.respawnCount);
-                // Show bounds for reference
                 ImGui::Text("Bounds: X[%.0f,%.0f] Z[%.0f,%.0f]",
                     m_worldState.floorMinX, m_worldState.floorMaxX,
                     m_worldState.floorMinZ, m_worldState.floorMaxZ);
+
+                // Day3.7: Camera basis proof (Bug A)
+                ImGui::Separator();
+                ImGui::Text("-- Camera Basis --");
+                ImGui::Text("Fwd: (%.2f, %.2f)", m_worldState.camFwdX, m_worldState.camFwdZ);
+                ImGui::Text("Right: (%.2f, %.2f)", m_worldState.camRightX, m_worldState.camRightZ);
+                ImGui::Text("Dot: %.4f", m_worldState.camDot);
+
+                // Day3.7: Collision extent proof (Bug C)
+                ImGui::Separator();
+                ImGui::Text("-- Collision Extent --");
+                ImGui::Text("Extent: X=%.2f Z=%.2f", m_worldState.pawnExtentX, m_worldState.pawnExtentZ);
+
+                // Day3.8: MTV debug (Issue A proof)
+                ImGui::Separator();
+                ImGui::Text("-- MTV Debug --");
+                const char* mtvAxisName = (m_worldState.mtvAxis == 0) ? "X" : "Z";
+                ImGui::Text("penX=%.3f penZ=%.3f", m_worldState.mtvPenX, m_worldState.mtvPenZ);
+                ImGui::Text("MTV: axis=%s mag=%.3f", mtvAxisName, m_worldState.mtvMagnitude);
+                ImGui::Text("centerDiff: X=%.2f Z=%.2f", m_worldState.mtvCenterDiffX, m_worldState.mtvCenterDiffZ);
+
+                // Day3.9: Separation proof
+                ImGui::Separator();
+                ImGui::Text("-- Day3.9 Debug --");
+                ImGui::Text("xzStillOverlap: %s", m_worldState.xzStillOverlapping ? "YES" : "NO");
+                ImGui::Text("yStepUpSkip: %s  yDelta: %.3f",
+                    m_worldState.yStepUpSkipped ? "YES" : "NO", m_worldState.yDeltaApplied);
 
                 ImGui::Separator();
                 ImGui::Text("-- Render Passes --");

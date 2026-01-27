@@ -1,0 +1,19 @@
+[DescRing] Wrap: wasting 0 slots, head=1024->3
+[DescRing] EndFrame: fence=1022 start=1024 count=1 records=3
+FrameLinearAllocator::Reset offset=640640
+[DescRing] Retired fence=1020 start=1022 count=1 tail=1023 used=2
+ALLOC: FrameCB offset=0 size=256
+ALLOC: Transforms offset=256 size=640000
+ALLOC: CharXforms offset=640256 size=384
+[DescRing] EndFrame: fence=1023 start=4 count=1 records=3
+FrameLinearAllocator::Reset offset=640640
+[DescRing] Retired fence=1021 start=1023 count=1 tail=3 used=2
+ALLOC: FrameCB offset=0 size=256
+ALLOC: Transforms offset=256 size=640000
+ALLOC: CharXforms offset=640256 size=384
+[DescRing] EndFrame: fence=1024 start=5 count=1 records=3
+FrameLinearAllocator::Reset offset=640640
+[DescRing] RETIRE CONTRACT VIOLATION! rec.start=1024 != tail=3 fence=1022 count=1 head=6
+A breakpoint instruction (__debugbreak() statement or a similar call) was executed in DX12EngineLab.exe.
+
+The program '[7944] DX12EngineLab.exe' has exited with code 0 (0x0).

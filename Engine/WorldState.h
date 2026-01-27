@@ -12,6 +12,19 @@ namespace Engine
     // Part 2: Axis enum for collision resolution
     enum class Axis : uint8_t { X, Y, Z };
 
+    // Day3.5: Support source for onGround determination
+    enum class SupportSource : uint8_t { FLOOR = 0, CUBE = 1, NONE = 2 };
+
+    // Day3.5: Support query result
+    struct SupportResult
+    {
+        SupportSource source = SupportSource::NONE;
+        float supportY = -1000.0f;
+        int32_t cubeId = -1;
+        float gap = 0.0f;
+        uint32_t candidateCount = 0;  // For gap anomaly log
+    };
+
     // Part 2: Axis-Aligned Bounding Box
     struct AABB
     {
@@ -22,10 +35,32 @@ namespace Engine
     // Part 2: Collision statistics for HUD display
     struct CollisionStats
     {
-        uint32_t candidatesChecked = 0;
+        uint32_t candidatesChecked = 0;   // Sum of spatial hash query results (across all ResolveAxis calls)
+        uint32_t contacts = 0;            // Sum of AABB intersections (NOT deduplicated - same cube may be counted multiple times)
         uint32_t penetrationsResolved = 0;
         int32_t lastHitCubeId = -1;
         Axis lastAxisResolved = Axis::Y;
+        // Day3.4: Iteration diagnostics
+        uint8_t iterationsUsed = 0;       // 1-8 iterations before convergence or max
+        float maxPenetrationAbs = 0.0f;   // Largest |penetration| observed this tick
+        bool hitMaxIter = false;          // True ONLY if ran all 8 iterations AND did NOT converge
+        // Day3.5: Support diagnostics
+        SupportSource supportSource = SupportSource::NONE;
+        float supportY = -1000.0f;
+        int32_t supportCubeId = -1;
+        bool snappedThisTick = false;
+        float supportGap = 0.0f;
+        // Day3.8: MTV debug fields (Issue A proof)
+        float lastPenX = 0.0f;      // X penetration before resolution
+        float lastPenZ = 0.0f;      // Z penetration before resolution
+        uint8_t mtvAxis = 0;        // 0=X, 2=Z (which axis MTV chose)
+        float mtvMagnitude = 0.0f;  // Magnitude of chosen penetration
+        float centerDiffX = 0.0f;   // For sign determination proof
+        float centerDiffZ = 0.0f;
+        // Day3.9: Regression debug fields (reset each tick in TickFixed)
+        bool xzStillOverlapping = false;  // After XZ push-out, does intersection persist?
+        bool yStepUpSkipped = false;      // Was Y correction skipped by anti-step-up guard?
+        float yDeltaApplied = 0.0f;       // Actual Y correction applied
     };
     // Input state sampled each frame
     struct InputState
@@ -59,6 +94,10 @@ namespace Engine
         float eyeY = 8.0f;
         float eyeZ = -15.0f;
         float fovY = 0.785398163f;  // 45 degrees in radians
+        // Day3.7: Camera basis debug fields for HUD proof
+        float dbgFwdX = 0.0f, dbgFwdZ = 0.0f;
+        float dbgRightX = 0.0f, dbgRightZ = 0.0f;
+        float dbgDot = 0.0f;  // Orthogonality proof: should be ~0
     };
 
     // Map configuration
@@ -106,18 +145,25 @@ namespace Engine
         // KillZ (respawn trigger)
         float killZ = -50.0f;
 
-        // Spawn position (in gap between cubes at origin)
-        float spawnX = 0.0f;
+        // Spawn position (grid cell center, not boundary)
+        float spawnX = 1.0f;
         float spawnY = 5.0f;  // Above floor (falls to Y=0)
-        float spawnZ = 0.0f;
+        float spawnZ = 1.0f;
 
-        // Part 2: Pawn AABB dimensions
-        float pawnHalfWidth = 0.4f;    // X/Z half-extent
+        // Part 2: Pawn AABB dimensions (Day3.7: axis-aware)
+        // X extent: arms outer edge = offsetX(1.0) + scaleX(0.4) = 1.4
+        // Z extent: keep tight depth
+        float pawnHalfExtentX = 1.4f;  // Arms reach
+        float pawnHalfExtentZ = 0.4f;  // Tight depth
         float pawnHeight = 5.0f;       // Total height (feet at posY, head at posY+height)
 
-        // Part 2: Cube dimensions (scale 0.9, 3.0, 0.9 -> half-extents 0.45, 1.5, 0.45)
-        // Cubes sit on floor (Y=0), top at Y=3.0
-        float cubeHalfXZ = 0.45f;
+        // Part 2: Cube collision dimensions
+        // - Mesh local half-extent = 1.0 (vertices at ±1)
+        // - Render scale: XZ=0.9, Y=3.0, placed at Y=0 center
+        // - Visual bounds: X/Z = ±0.9, Y = -3 to +3
+        // - Collision X/Z = 1.0 * 0.9 = 0.9
+        // - Collision Y = [0,3] (above-floor portion only - floor prevents Y<0)
+        float cubeHalfXZ = 0.9f;
         float cubeMinY = 0.0f;
         float cubeMaxY = 3.0f;
     };
@@ -174,6 +220,9 @@ namespace Engine
         // Floor diagnostic flag (reset each tick, set in ResolveFloorCollision)
         bool m_didFloorClampThisTick = false;
 
+        // Day3.5: Jump grace flag (prevents support query from clearing onGround on jump frame)
+        bool m_justJumpedThisTick = false;
+
         // Part 2: Spatial hash grid (100x100 cells, each cell contains cube index)
         // Built once at init - cubes don't move
         static constexpr int GRID_SIZE = 100;
@@ -184,6 +233,9 @@ namespace Engine
         void ResolveFloorCollision();
         void CheckKillZ();
 
+        // Day3.5: Support query (checks floor and cubes for landing surface)
+        SupportResult QuerySupport(float px, float py, float pz, float velY) const;
+
         // Part 2: Collision helpers
         void BuildSpatialGrid();
         int WorldToCellX(float x) const;
@@ -193,6 +245,8 @@ namespace Engine
         bool Intersects(const AABB& a, const AABB& b) const;
         float ComputeSignedPenetration(const AABB& pawn, const AABB& cube, Axis axis) const;
         std::vector<uint16_t> QuerySpatialHash(const AABB& pawn) const;
-        void ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis);
+        void ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis, float prevPawnBottom = 0.0f);
+        // Day3.8: MTV-based XZ resolution (Issue A fix)
+        void ResolveXZ_MTV(float& newX, float& newZ, float newY);
     };
 }
