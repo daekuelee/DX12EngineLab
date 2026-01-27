@@ -39,12 +39,13 @@ VSOutput VSMain(VSInput vin, uint iid : SV_InstanceID)
     o.WorldPos = worldPos;
 
     // Compute normal from local vertex position (cube normals point along dominant axis)
+    // Day3.6: Priority Y > X > Z ensures top/bottom faces get correct normals at corners
     float3 absPos = abs(vin.Pos);
     float3 normal = float3(0, 0, 0);
-    if (absPos.x >= absPos.y && absPos.x >= absPos.z)
-        normal = float3(sign(vin.Pos.x), 0, 0);
-    else if (absPos.y >= absPos.x && absPos.y >= absPos.z)
+    if (absPos.y >= absPos.x && absPos.y >= absPos.z)
         normal = float3(0, sign(vin.Pos.y), 0);
+    else if (absPos.x >= absPos.z)
+        normal = float3(sign(vin.Pos.x), 0, 0);
     else
         normal = float3(0, 0, sign(vin.Pos.z));
 

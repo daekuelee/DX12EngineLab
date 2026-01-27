@@ -20,10 +20,10 @@ namespace Renderer
         {-1.0f, 2.5f, 0.0f,   0.4f, 1.8f, 0.4f },
         // RightArm
         { 1.0f, 2.5f, 0.0f,   0.4f, 1.8f, 0.4f },
-        // LeftLeg
-        {-0.4f, 0.75f, 0.0f,  0.5f, 1.5f, 0.5f },
+        // LeftLeg - Day3.6: offsetY=scaleY so bottom aligns at feet (posY)
+        {-0.4f, 1.5f, 0.0f,  0.5f, 1.5f, 0.5f },
         // RightLeg
-        { 0.4f, 0.75f, 0.0f,  0.5f, 1.5f, 0.5f },
+        { 0.4f, 1.5f, 0.0f,  0.5f, 1.5f, 0.5f },
     };
 
     bool CharacterRenderer::Initialize(ID3D12Device* device, ResourceStateTracker* stateTracker,

@@ -182,6 +182,28 @@ namespace Engine
         // Day3.5: Query support (ALWAYS for HUD)
         SupportResult support = QuerySupport(m_pawn.posX, m_pawn.posY, m_pawn.posZ, m_pawn.velY);
 
+        // Day3.6: Floor penetration recovery (handle overshoots beyond epsilon)
+        if (support.source == SupportSource::NONE && m_pawn.velY <= 0.0f)
+        {
+            bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
+                                  m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
+            // If pawn is below floor and in bounds, force floor recovery
+            if (inFloorBounds && m_pawn.posY < m_config.floorY)
+            {
+                float overshoot = m_config.floorY - m_pawn.posY;
+                char buf[256];
+                sprintf_s(buf, "[FLOOR_RECOVERY] posY=%.3f overshoot=%.3f velY=%.2f\n",
+                    m_pawn.posY, overshoot, m_pawn.velY);
+                OutputDebugStringA(buf);
+
+                // Force floor support
+                support.source = SupportSource::FLOOR;
+                support.supportY = m_config.floorY;
+                support.cubeId = -1;
+                support.gap = overshoot;
+            }
+        }
+
         // Copy to collision stats for HUD
         m_collisionStats.supportSource = support.source;
         m_collisionStats.supportY = support.supportY;
