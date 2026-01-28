@@ -764,6 +764,8 @@ namespace Renderer
         // MT2: Debug single instance mode
         inputs.geoInputs.debugSingleInstance = ToggleSystem::IsDebugSingleInstanceEnabled();
         inputs.geoInputs.debugInstanceIndex = ToggleSystem::GetDebugInstanceIndex();
+        // Task B: Opaque PSO toggle
+        inputs.geoInputs.useOpaquePSO = ToggleSystem::IsOpaquePSOEnabled();
 
         // Check if we need to record character pass (ThirdPerson mode)
         bool recordCharacter = (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson);

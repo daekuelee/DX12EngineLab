@@ -110,6 +110,11 @@ namespace Renderer
         static uint32_t GetDebugInstanceIndex() { return s_debugInstanceIndex; }
         static void SetDebugInstanceIndex(uint32_t idx) { s_debugInstanceIndex = idx; }
 
+        // Task B: Opaque PSO toggle ('O' key) - sanity test for blend/depth state
+        static bool IsOpaquePSOEnabled() { return s_opaquePSO; }
+        static void SetOpaquePSO(bool enabled) { s_opaquePSO = enabled; }
+        static void ToggleOpaquePSO() { s_opaquePSO = !s_opaquePSO; }
+
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
         static inline ColorMode s_colorMode = ColorMode::FaceDebug;
@@ -132,5 +137,8 @@ namespace Renderer
         // MT2: Debug single instance mode - OFF by default
         static inline bool s_debugSingleInstance = false;
         static inline uint32_t s_debugInstanceIndex = 0;  // Which instance to draw in debug mode
+
+        // Task B: Opaque PSO toggle - OFF by default (uses normal PSO)
+        static inline bool s_opaquePSO = false;
     };
 }

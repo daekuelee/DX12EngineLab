@@ -36,6 +36,7 @@ namespace Renderer
         // Accessors
         ID3D12RootSignature* GetRootSignature() const { return m_rootSignature.Get(); }
         ID3D12PipelineState* GetPSO() const { return m_pso; }
+        ID3D12PipelineState* GetCubesOpaquePSO() const { return m_cubesOpaquePso; }  // Task B
         ID3D12PipelineState* GetFloorPSO() const { return m_floorPso; }
         ID3D12PipelineState* GetMarkerPSO() const { return m_markerPso; }
         ID3D12RootSignature* GetMarkerRootSignature() const { return m_markerRootSignature.Get(); }
@@ -56,6 +57,7 @@ namespace Renderer
 
         // Non-owning PSO pointers (owned by m_psoCache)
         ID3D12PipelineState* m_pso = nullptr;
+        ID3D12PipelineState* m_cubesOpaquePso = nullptr;  // Task B: Explicit opaque for sanity test
         ID3D12PipelineState* m_floorPso = nullptr;
         ID3D12PipelineState* m_markerPso = nullptr;
 

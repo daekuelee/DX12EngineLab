@@ -23,6 +23,8 @@ namespace Renderer
         // MT2: Debug single instance mode
         bool debugSingleInstance;
         uint32_t debugInstanceIndex;
+        // Task B: Opaque PSO toggle
+        bool useOpaquePSO;
     };
 
     // GeometryPass: Renders floor, cubes, and markers
@@ -64,7 +66,23 @@ namespace Renderer
                     OutputDebugStringA(mt1Buf);  // OK line every 300 frames
                 }
 
-                ctx.cmd->SetPipelineState(ctx.shaders->GetPSO());
+                // Task B: Select PSO based on opaque toggle
+                ID3D12PipelineState* cubePSO = inputs.useOpaquePSO
+                    ? ctx.shaders->GetCubesOpaquePSO()
+                    : ctx.shaders->GetPSO();
+                ctx.cmd->SetPipelineState(cubePSO);
+
+                // Task B: Proof logging (throttled to once per second)
+                static DWORD s_lastPSOLogTime = 0;
+                DWORD psoNow = GetTickCount();
+                if (psoNow - s_lastPSOLogTime > 1000)
+                {
+                    s_lastPSOLogTime = psoNow;
+                    char psoBuf[128];
+                    sprintf_s(psoBuf, "[PSO] cubesOpaque=%d frame=%llu\n",
+                        inputs.useOpaquePSO ? 1 : 0, inputs.frameId);
+                    OutputDebugStringA(psoBuf);
+                }
 
                 // Set color mode constant (RP_DebugCB = b2)
                 uint32_t colorMode = static_cast<uint32_t>(inputs.colorMode);

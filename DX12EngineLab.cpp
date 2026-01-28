@@ -262,6 +262,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             {
                 g_app.ToggleControllerMode();
             }
+            // 'O' key toggles opaque PSO (Task B: blend/depth sanity test)
+            else if (wParam == 'O')
+            {
+                Renderer::ToggleSystem::ToggleOpaquePSO();
+                OutputDebugStringA(Renderer::ToggleSystem::IsOpaquePSOEnabled()
+                    ? "OpaquePSO: ON\n" : "OpaquePSO: OFF\n");
+            }
         }
         break;
     case WM_MOUSEMOVE:
