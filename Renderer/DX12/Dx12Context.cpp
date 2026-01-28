@@ -535,8 +535,7 @@ namespace Renderer
                 // Row-major 4x4 scale+translate matrix (scale creates gaps between cubes)
                 // Day3.12 Fix: Match collision AABB Y=[0,3] half-height
                 const float scaleXZ = 0.9f;   // Half-width (matches cubeHalfXZ)
-                // DEBUG: Force idx 0 to have tiny scaleY - should show as dark cube at grid corner
-                const float scaleY = (idx == 0) ? 0.1f : 1.5f;
+                const float scaleY = 1.5f;    // Half-height = (cubeMaxY - cubeMinY) / 2
                 transforms[idx * 16 + 0] = scaleXZ;  transforms[idx * 16 + 1] = 0.0f;  transforms[idx * 16 + 2] = 0.0f;  transforms[idx * 16 + 3] = 0.0f;
                 transforms[idx * 16 + 4] = 0.0f;  transforms[idx * 16 + 5] = scaleY;  transforms[idx * 16 + 6] = 0.0f;  transforms[idx * 16 + 7] = 0.0f;
                 transforms[idx * 16 + 8] = 0.0f;  transforms[idx * 16 + 9] = 0.0f;  transforms[idx * 16 + 10] = scaleXZ; transforms[idx * 16 + 11] = 0.0f;
@@ -549,34 +548,19 @@ namespace Renderer
         // Day3.12 Phase 4B+: Override fixture grid transforms to match collision AABBs
         if (m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures)
         {
-            // Debug: Verify config flag at render time (once)
-            static bool s_cfgLogged = false;
-            if (!s_cfgLogged) {
-                char cfgBuf[128];
-                sprintf_s(cfgBuf, "[CFG_CHECK] enableStepUpTestFixtures=%d\n",
-                    m_worldState->GetConfig().enableStepUpTestFixtures ? 1 : 0);
-                OutputDebugStringA(cfgBuf);
-                s_cfgLogged = true;
-            }
-
-            // Verify fixture indices are initialized (non-zero)
-            if (m_worldState->GetFixtureT1Idx() == 0 ||
-                m_worldState->GetFixtureT2Idx() == 0 ||
-                m_worldState->GetFixtureT3StepIdx() == 0)
-            {
-                OutputDebugStringA("[WARN] Fixture indices not initialized!\n");
-            }
-
             float hxz = 0.9f;  // cubeHalfXZ
 
-            // Helper to override transform at grid index
-            auto overrideTransform = [&](uint16_t gridIdx, float height) {
+            // Override cube to include both cube + step height
+            auto overrideWithStep = [&](uint16_t gridIdx, float stepHeight) {
                 int gx = gridIdx % 100;
                 int gz = gridIdx / 100;
                 float cx = static_cast<float>(gx) * 2.0f - 99.0f;
                 float cz = static_cast<float>(gz) * 2.0f - 99.0f;
-                float cy = height * 0.5f;  // Center Y (AABB from 0 to height)
-                float sy = height * 0.5f;  // Scale Y (half-extent)
+
+                // Total height = cube (3.0) + step
+                float totalHeight = 3.0f + stepHeight;
+                float cy = totalHeight * 0.5f;  // Center Y
+                float sy = totalHeight * 0.5f;  // Scale Y
 
                 float* m = transforms + gridIdx * 16;
                 m[0] = hxz;  m[1] = 0.0f; m[2] = 0.0f; m[3] = 0.0f;
@@ -585,42 +569,9 @@ namespace Renderer
                 m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
             };
 
-            overrideTransform(m_worldState->GetFixtureT1Idx(), 0.2f);      // T1: h=0.2
-            overrideTransform(m_worldState->GetFixtureT2Idx(), 0.6f);      // T2: h=0.6
-            overrideTransform(m_worldState->GetFixtureT3StepIdx(), 0.2f);  // T3: h=0.2
-
-            // Debug: Print fixture transforms to verify override
-            {
-                char dbgBuf[256];
-                uint16_t t1 = m_worldState->GetFixtureT1Idx();
-                float* t1m = transforms + t1 * 16;
-                sprintf_s(dbgBuf, "[FIX_XFORM] T1 idx=%u cy=%.2f sy=%.2f\n", t1, t1m[13], t1m[5]);
-                OutputDebugStringA(dbgBuf);
-
-                uint16_t t3 = m_worldState->GetFixtureT3StepIdx();
-                float* t3m = transforms + t3 * 16;
-                sprintf_s(dbgBuf, "[FIX_XFORM] T3 idx=%u cy=%.2f sy=%.2f\n", t3, t3m[13], t3m[5]);
-                OutputDebugStringA(dbgBuf);
-            }
-
-            // Debug: Full T1 matrix dump to verify no corruption
-            {
-                uint16_t t1 = m_worldState->GetFixtureT1Idx();
-                float* m = transforms + t1 * 16;
-                char matBuf[512];
-                sprintf_s(matBuf,
-                    "[T1_MATRIX] idx=%u\n"
-                    "  [%.2f, %.2f, %.2f, %.2f]\n"
-                    "  [%.2f, %.2f, %.2f, %.2f]\n"
-                    "  [%.2f, %.2f, %.2f, %.2f]\n"
-                    "  [%.2f, %.2f, %.2f, %.2f]\n",
-                    t1,
-                    m[0], m[1], m[2], m[3],
-                    m[4], m[5], m[6], m[7],
-                    m[8], m[9], m[10], m[11],
-                    m[12], m[13], m[14], m[15]);
-                OutputDebugStringA(matBuf);
-            }
+            overrideWithStep(m_worldState->GetFixtureT1Idx(), 0.3f);      // T1: step h=0.3
+            overrideWithStep(m_worldState->GetFixtureT2Idx(), 0.6f);      // T2: step h=0.6
+            overrideWithStep(m_worldState->GetFixtureT3StepIdx(), 0.5f);  // T3: step h=0.5
 
             // Append ceiling transform after grid (index 10000)
             const auto& extras = m_worldState->GetExtras();
@@ -642,15 +593,6 @@ namespace Renderer
                 m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
             }
 
-            // Debug: Print ceiling transform
-            if (extras.size() > 0) {
-                float* cm = transforms + InstanceCount * 16;
-                char ceilBuf[256];
-                sprintf_s(ceilBuf, "[CEIL_XFORM] idx=10000 cy=%.2f sy=%.2f (expect cy=6.55 sy=1.45)\n",
-                    cm[13], cm[5]);
-                OutputDebugStringA(ceilBuf);
-            }
-
 #if defined(_DEBUG)
             // Sentinel: Zero out unused extra slots to catch over-draw
             for (uint32_t i = static_cast<uint32_t>(extras.size()); i < MaxExtraInstances; ++i)
@@ -662,12 +604,6 @@ namespace Renderer
 #endif
 
             m_generatedTransformCount = InstanceCount + static_cast<uint32_t>(extras.size());
-
-            // Proof log: verify generated count
-            char buf[128];
-            sprintf_s(buf, "[GEN] frame=%llu gen=%u extras=%zu\n",
-                m_frameId, m_generatedTransformCount, extras.size());
-            OutputDebugStringA(buf);
         }
         else
         {
@@ -681,28 +617,6 @@ namespace Renderer
     {
         // Get transforms buffer from registry
         ID3D12Resource* transformsResource = m_resourceRegistry.Get(ctx.transformsHandle);
-
-        // Debug: Verify buffer addresses match between copy and SRV
-        {
-            char dbgBuf[512];
-
-            // Log copy destination buffer
-            sprintf_s(dbgBuf, "[COPY_DBG] destBuffer=%p srcOffset=%llu\n",
-                transformsResource,
-                transformsAlloc.offset);
-            OutputDebugStringA(dbgBuf);
-
-            // Log index 0 scaleY value being copied
-            float* src0 = static_cast<float*>(transformsAlloc.cpuPtr);
-            sprintf_s(dbgBuf, "[COPY_DBG] idx0 scaleY=%.2f (expect 0.10)\n", src0[5]);
-            OutputDebugStringA(dbgBuf);
-
-            // Log which SRV will be bound (frame index)
-            uint32_t frameIdx = static_cast<uint32_t>(m_frameId % FrameCount);
-            sprintf_s(dbgBuf, "[SRV_DBG] frameId=%llu frameIdx=%u srvSlot=%u\n",
-                m_frameId, frameIdx, frameIdx);
-            OutputDebugStringA(dbgBuf);
-        }
 
         // Transition transforms buffer to COPY_DEST via state tracker
         m_stateTracker.Transition(transformsResource, D3D12_RESOURCE_STATE_COPY_DEST);

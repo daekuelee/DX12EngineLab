@@ -11,7 +11,6 @@ struct VSOutput
     float3 WorldPos : TEXCOORD0;
     float3 Normal : TEXCOORD1;    // For Lambert shading
     uint InstanceID : TEXCOORD2;  // For instance coloring
-    float ScaleY : TEXCOORD3;     // Day3.12: For fixture debug highlighting
 };
 
 VSOutput VSMain(VSInput vin, uint iid : SV_InstanceID)
@@ -32,7 +31,6 @@ VSOutput VSMain(VSInput vin, uint iid : SV_InstanceID)
         o.WorldPos = float3(0, 0, 0);
         o.Normal = float3(0, 1, 0);
         o.InstanceID = 0xFFFFFFFF;  // Marker for "invalid" in pixel shader
-        o.ScaleY = 999.0;           // High value to avoid fixture highlight
         return o;
     }
 
@@ -54,9 +52,6 @@ VSOutput VSMain(VSInput vin, uint iid : SV_InstanceID)
     // Transform normal to world space (assumes uniform scale)
     o.Normal = normalize(mul(float4(normal, 0.0), world).xyz);
     o.InstanceID = iid + InstanceOffset;
-
-    // Day3.12: Pass scaleY for fixture debug highlighting (row-major: M[1][1] = world._22)
-    o.ScaleY = world._22;
 
     return o;
 }

@@ -8,7 +8,6 @@ struct PSInput
     float3 WorldPos : TEXCOORD0;
     float3 Normal : TEXCOORD1;
     uint InstanceID : TEXCOORD2;
-    float ScaleY : TEXCOORD3;     // Day3.12: For fixture debug highlighting
 };
 
 float3 HueToRGB(float hue)
@@ -26,12 +25,6 @@ float4 PSMain(PSInput pin, uint primID : SV_PrimitiveID) : SV_Target
     }
 
     float3 color;
-
-    // Day3.12: Direct scaleY visualization as grayscale
-    // scaleY=0 -> black, scaleY=1.5 -> white (clamped)
-    // This shows exact value shader receives
-    float intensity = saturate(pin.ScaleY / 1.5);  // Normalize: 0->0, 1.5->1
-    return float4(intensity, intensity, intensity, 1.0);
 
     if (ColorMode == COLOR_MODE_FACE_DEBUG)
     {

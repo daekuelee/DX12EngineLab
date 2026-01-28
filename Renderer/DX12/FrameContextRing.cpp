@@ -1,6 +1,5 @@
 #include "FrameContextRing.h"
 #include "RenderConfig.h"
-#include <cstdio>
 
 namespace Renderer
 {
@@ -44,30 +43,6 @@ namespace Renderer
             // Create SRV for this frame's transforms buffer
             CreateSRV(device, i);
         }
-
-        // B-1: One-time SRV heap diagnostic log
-        OutputDebugStringA("=== SRV HEAP INIT (DescRing) ===\n");
-        {
-            char buf[256];
-            sprintf_s(buf, "descRing capacity=%u reserved=%u descSize=%u\n",
-                      m_descRing->GetCapacity(), m_descRing->GetReservedCount(),
-                      m_descRing->GetDescriptorSize());
-            OutputDebugStringA(buf);
-
-            D3D12_GPU_DESCRIPTOR_HANDLE heapGpuStart = m_descRing->GetHeap()->GetGPUDescriptorHandleForHeapStart();
-            sprintf_s(buf, "heapGpuStart=0x%llX\n", heapGpuStart.ptr);
-            OutputDebugStringA(buf);
-
-            for (uint32_t i = 0; i < FrameCount; ++i)
-            {
-                D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_descRing->GetReservedCpuHandle(m_frames[i].srvSlot);
-                D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_descRing->GetReservedGpuHandle(m_frames[i].srvSlot);
-                sprintf_s(buf, "frame[%u] srvSlot=%u CPU=0x%llX GPU=0x%llX\n",
-                          i, m_frames[i].srvSlot, cpu.ptr, gpu.ptr);
-                OutputDebugStringA(buf);
-            }
-        }
-        OutputDebugStringA("================================\n");
 
         return true;
     }
@@ -134,11 +109,6 @@ namespace Renderer
         ID3D12Resource* transformsResource = m_registry->Get(ctx.transformsHandle);
         device->CreateShaderResourceView(transformsResource, &srvDesc, cpuHandle);
 
-        // Debug: Log which buffer this SRV points to
-        char dbgBuf[128];
-        sprintf_s(dbgBuf, "[SRV_INIT] frame=%u srvSlot=%u buffer=%p\n",
-            frameIndex, ctx.srvSlot, transformsResource);
-        OutputDebugStringA(dbgBuf);
     }
 
     D3D12_GPU_DESCRIPTOR_HANDLE FrameContextRing::GetSrvGpuHandle(uint32_t frameIndex) const
