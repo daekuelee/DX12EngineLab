@@ -123,6 +123,12 @@ namespace Renderer
             float sweepAppliedDx = 0.0f, sweepAppliedDz = 0.0f;
             float sweepSlideDx = 0.0f, sweepSlideDz = 0.0f;
             float sweepNormalX = 0.0f, sweepNormalZ = 0.0f;
+            // Day3.12 Phase 4A: Y sweep diagnostics
+            bool sweepYHit = false;
+            float sweepYTOI = 1.0f;
+            int32_t sweepYHitCubeIdx = -1;
+            float sweepYReqDy = 0.0f;
+            float sweepYAppliedDy = 0.0f;
         } m_worldState;
         bool m_hasWorldState = false;
     };

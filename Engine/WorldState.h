@@ -90,6 +90,12 @@ namespace Engine
         float sweepAppliedDx = 0.0f, sweepAppliedDz = 0.0f;
         float sweepSlideDx = 0.0f, sweepSlideDz = 0.0f;
         float sweepNormalX = 0.0f, sweepNormalZ = 0.0f;
+        // Day3.12 Phase 4A: Y sweep diagnostics
+        bool sweepYHit = false;
+        float sweepYTOI = 1.0f;
+        int32_t sweepYHitCubeIdx = -1;
+        float sweepYReqDy = 0.0f;
+        float sweepYAppliedDy = 0.0f;
     };
     // Input state sampled each frame
     struct InputState
@@ -201,6 +207,10 @@ namespace Engine
         // Radius matches pawnHalfExtentX (1.4) for visual consistency
         float capsuleRadius = 1.4f;
         float capsuleHalfHeight = 1.1f;
+
+        // Day3.12 Phase 4A: Y sweep config
+        bool enableYSweep = true;   // Toggle for Y sweep (fallback to ResolveAxis Y)
+        float sweepSkinY = 0.01f;   // Skin width for Y sweep
     };
 
     class WorldState
@@ -296,6 +306,8 @@ namespace Engine
         // Day3.11 Phase 3: Capsule XZ sweep/slide
         void SweepXZ_Capsule(float reqDx, float reqDz, float& outAppliedDx, float& outAppliedDz,
                              bool& outZeroVelX, bool& outZeroVelZ);
+        // Day3.12 Phase 4A: Capsule Y sweep
+        void SweepY_Capsule(float reqDy, float& outAppliedDy);
         // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
         void ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY);
         // Day3.11 Phase 3 Debug: Scan max XZ penetration depth (for instrumentation)

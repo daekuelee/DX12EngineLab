@@ -357,7 +357,20 @@ namespace Engine
 
         // Day3.4: Apply velocity to get proposed position
         float newX, newZ;
-        float newY = m_pawn.posY + m_pawn.velY * fixedDt;
+        float newY;
+
+        // Day3.12 Phase 4A: Capsule Y uses sweep when enabled
+        if (m_controllerMode == ControllerMode::Capsule && m_config.enableYSweep)
+        {
+            float reqDy = m_pawn.velY * fixedDt;
+            float appliedDy = 0.0f;
+            SweepY_Capsule(reqDy, appliedDy);
+            newY = m_pawn.posY + appliedDy;
+        }
+        else
+        {
+            newY = m_pawn.posY + m_pawn.velY * fixedDt;
+        }
 
         // Day3.11 Phase 3: Capsule XZ uses sweep/slide
         bool capsuleZeroVelX = false, capsuleZeroVelZ = false;
@@ -916,8 +929,14 @@ namespace Engine
             if (!Intersects(pawn, cube)) continue;
 
             // Day3.9: Anti-step-up guard for Y axis
+            // Day3.12 Phase 4A: Skip this guard for Capsule mode when Y sweep is enabled
+            // (Y is already handled by SweepY_Capsule, so we don't need penetration-based Y resolution)
             if (axis == Axis::Y)
             {
+                // When Capsule + enableYSweep, Y is handled by sweep - skip Y resolution entirely
+                if (m_controllerMode == ControllerMode::Capsule && m_config.enableYSweep)
+                    continue;
+
                 float cubeTop = cube.maxY;
 
                 // Compute what the Y delta would be
@@ -1224,6 +1243,170 @@ namespace Engine
         outAppliedDz = totalAppliedDz;
     }
 
+    // Day3.12 Phase 4A: Capsule Y sweep for vertical movement (falling/jumping)
+    void WorldState::SweepY_Capsule(float reqDy, float& outAppliedDy)
+    {
+        const float SKIN_WIDTH = m_config.sweepSkinY;
+
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+        float feetY = m_pawn.posY;
+        float totalHeight = 2.0f * r + 2.0f * hh;
+
+        // Reset Y sweep stats
+        m_collisionStats.sweepYHit = false;
+        m_collisionStats.sweepYTOI = 1.0f;
+        m_collisionStats.sweepYHitCubeIdx = -1;
+        m_collisionStats.sweepYReqDy = reqDy;
+        m_collisionStats.sweepYAppliedDy = 0.0f;
+
+        // Early-out for no movement
+        if (fabsf(reqDy) < 0.0001f)
+        {
+            outAppliedDy = 0.0f;
+            return;
+        }
+
+        // Build swept AABB for broadphase (capsule footprint + Y sweep range)
+        float curX = m_pawn.posX;
+        float curZ = m_pawn.posZ;
+        AABB sweptAABB;
+        sweptAABB.minX = curX - r;
+        sweptAABB.maxX = curX + r;
+        sweptAABB.minZ = curZ - r;
+        sweptAABB.maxZ = curZ + r;
+        if (reqDy < 0.0f)
+        {
+            // Falling: sweep from current bottom to proposed bottom
+            sweptAABB.minY = feetY + reqDy;
+            sweptAABB.maxY = feetY + totalHeight;
+        }
+        else
+        {
+            // Rising: sweep from current top to proposed top
+            sweptAABB.minY = feetY;
+            sweptAABB.maxY = feetY + totalHeight + reqDy;
+        }
+
+        std::vector<uint16_t> candidates = QuerySpatialHash(sweptAABB);
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+        // Find earliest Y hit
+        float earliestTOI = 1.0f;
+        int earliestCubeIdx = -1;
+
+        for (uint16_t cubeIdx : candidates)
+        {
+            AABB cube = GetCubeAABB(cubeIdx);
+
+            // XZ overlap check (capsule footprint vs cube)
+            float expMinX = cube.minX - r;
+            float expMaxX = cube.maxX + r;
+            float expMinZ = cube.minZ - r;
+            float expMaxZ = cube.maxZ + r;
+            if (curX < expMinX || curX > expMaxX || curZ < expMinZ || curZ > expMaxZ)
+                continue;  // No XZ overlap
+
+            float toi = 1.0f;
+            bool hit = false;
+
+            if (reqDy < 0.0f)
+            {
+                // Falling: capsule bottom (feetY) sweeps toward cube.maxY
+                // TOI = (cube.maxY - feetY) / reqDy (reqDy is negative)
+                // Hit occurs when feetY + reqDy*t = cube.maxY
+                // t = (cube.maxY - feetY) / reqDy
+                if (feetY > cube.maxY)  // Currently above cube top
+                {
+                    float dist = feetY - cube.maxY;
+                    toi = dist / (-reqDy);  // reqDy is negative, so -reqDy is positive
+                    if (toi >= 0.0f && toi <= 1.0f)
+                        hit = true;
+                }
+            }
+            else
+            {
+                // Rising: capsule top (feetY + totalHeight) sweeps toward cube.minY
+                // Hit occurs when (feetY + totalHeight) + reqDy*t = cube.minY
+                // t = (cube.minY - (feetY + totalHeight)) / reqDy
+                float headY = feetY + totalHeight;
+                if (headY < cube.minY)  // Currently below cube bottom
+                {
+                    float dist = cube.minY - headY;
+                    toi = dist / reqDy;
+                    if (toi >= 0.0f && toi <= 1.0f)
+                        hit = true;
+                }
+            }
+
+            if (hit && toi < earliestTOI)
+            {
+                earliestTOI = toi;
+                earliestCubeIdx = cubeIdx;
+            }
+            else if (hit && fabsf(toi - earliestTOI) < 1e-6f && cubeIdx < earliestCubeIdx)
+            {
+                earliestCubeIdx = cubeIdx;  // Tie-break by ID for determinism
+            }
+        }
+
+        // Also check floor collision when falling
+        if (reqDy < 0.0f)
+        {
+            // Floor is at Y = floorY. Feet landing on floor.
+            if (feetY > m_config.floorY &&
+                curX >= m_config.floorMinX && curX <= m_config.floorMaxX &&
+                curZ >= m_config.floorMinZ && curZ <= m_config.floorMaxZ)
+            {
+                float dist = feetY - m_config.floorY;
+                float floorTOI = dist / (-reqDy);
+                if (floorTOI >= 0.0f && floorTOI <= 1.0f && floorTOI < earliestTOI)
+                {
+                    earliestTOI = floorTOI;
+                    earliestCubeIdx = -2;  // Special marker for floor
+                }
+            }
+        }
+
+        if (earliestCubeIdx == -1 && earliestTOI >= 1.0f)
+        {
+            // No collision, apply full delta
+            outAppliedDy = reqDy;
+            m_collisionStats.sweepYAppliedDy = reqDy;
+
+            char buf[128];
+            sprintf_s(buf, "[SWEEP_Y] req=%.3f cand=%zu hit=0\n", reqDy, candidates.size());
+            OutputDebugStringA(buf);
+        }
+        else
+        {
+            // Hit detected
+            m_collisionStats.sweepYHit = true;
+            m_collisionStats.sweepYTOI = earliestTOI;
+            m_collisionStats.sweepYHitCubeIdx = earliestCubeIdx;
+
+            // Move to contact with skin offset
+            float deltaMag = fabsf(reqDy);
+            float skinParam = SKIN_WIDTH / deltaMag;
+            float clampedSkin = fminf(skinParam, earliestTOI * 0.5f);
+            float safeT = fmaxf(0.0f, earliestTOI - clampedSkin);
+            outAppliedDy = reqDy * safeT;
+            m_collisionStats.sweepYAppliedDy = outAppliedDy;
+
+            // Zero velocity on collision
+            if (reqDy < 0.0f && m_pawn.velY < 0.0f)
+                m_pawn.velY = 0.0f;  // Landing
+            if (reqDy > 0.0f && m_pawn.velY > 0.0f)
+                m_pawn.velY = 0.0f;  // Ceiling bump
+
+            char buf[128];
+            sprintf_s(buf, "[SWEEP_Y] req=%.3f cand=%zu hit=1 toi=%.4f cube=%d applied=%.3f\n",
+                reqDy, candidates.size(), earliestTOI, earliestCubeIdx, outAppliedDy);
+            OutputDebugStringA(buf);
+        }
+    }
+
     // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
     void WorldState::ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY)
     {
@@ -1486,6 +1669,13 @@ namespace Engine
         snap.sweepSlideDz = m_collisionStats.sweepSlideDz;
         snap.sweepNormalX = m_collisionStats.sweepNormalX;
         snap.sweepNormalZ = m_collisionStats.sweepNormalZ;
+
+        // Day3.12 Phase 4A: Y sweep diagnostics
+        snap.sweepYHit = m_collisionStats.sweepYHit;
+        snap.sweepYTOI = m_collisionStats.sweepYTOI;
+        snap.sweepYHitCubeIdx = m_collisionStats.sweepYHitCubeIdx;
+        snap.sweepYReqDy = m_collisionStats.sweepYReqDy;
+        snap.sweepYAppliedDy = m_collisionStats.sweepYAppliedDy;
 
         return snap;
     }

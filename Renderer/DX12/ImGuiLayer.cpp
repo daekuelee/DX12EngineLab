@@ -274,6 +274,12 @@ namespace Renderer
         m_worldState.sweepSlideDz = snap.sweepSlideDz;
         m_worldState.sweepNormalX = snap.sweepNormalX;
         m_worldState.sweepNormalZ = snap.sweepNormalZ;
+        // Day3.12 Phase 4A: Y sweep
+        m_worldState.sweepYHit = snap.sweepYHit;
+        m_worldState.sweepYTOI = snap.sweepYTOI;
+        m_worldState.sweepYHitCubeIdx = snap.sweepYHitCubeIdx;
+        m_worldState.sweepYReqDy = snap.sweepYReqDy;
+        m_worldState.sweepYAppliedDy = snap.sweepYAppliedDy;
         m_hasWorldState = true;
     }
 
@@ -339,6 +345,17 @@ namespace Renderer
                 ImGui::Text("App:(%.3f,%.3f)", m_worldState.sweepAppliedDx, m_worldState.sweepAppliedDz);
                 if (m_worldState.sweepSlideDx != 0.0f || m_worldState.sweepSlideDz != 0.0f)
                     ImGui::Text("Slide:(%.3f,%.3f)", m_worldState.sweepSlideDx, m_worldState.sweepSlideDz);
+                // Day3.12 Phase 4A: Y sweep
+                ImGui::Separator();
+                ImGui::Text("-- SweepY --");
+                if (m_worldState.sweepYHit)
+                {
+                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), "HIT cube=%d", m_worldState.sweepYHitCubeIdx);
+                    ImGui::Text("TOI:%.4f", m_worldState.sweepYTOI);
+                }
+                else
+                    ImGui::Text("Clear");
+                ImGui::Text("Req:%.3f App:%.3f", m_worldState.sweepYReqDy, m_worldState.sweepYAppliedDy);
             }
 
             // World State section (Day3) - only show in ThirdPerson mode
