@@ -548,6 +548,14 @@ namespace Renderer
         // Day3.12 Phase 4B+: Override fixture grid transforms to match collision AABBs
         if (m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures)
         {
+            // Verify fixture indices are initialized (non-zero)
+            if (m_worldState->GetFixtureT1Idx() == 0 ||
+                m_worldState->GetFixtureT2Idx() == 0 ||
+                m_worldState->GetFixtureT3StepIdx() == 0)
+            {
+                OutputDebugStringA("[WARN] Fixture indices not initialized!\n");
+            }
+
             float hxz = 0.9f;  // cubeHalfXZ
 
             // Helper to override transform at grid index
@@ -590,7 +598,23 @@ namespace Renderer
                 m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
             }
 
+#if defined(_DEBUG)
+            // Sentinel: Zero out unused extra slots to catch over-draw
+            for (uint32_t i = static_cast<uint32_t>(extras.size()); i < MaxExtraInstances; ++i)
+            {
+                uint32_t extraIdx = InstanceCount + i;
+                float* m = transforms + extraIdx * 16;
+                memset(m, 0, sizeof(float) * 16);  // All zeros = degenerate (invisible)
+            }
+#endif
+
             m_generatedTransformCount = InstanceCount + static_cast<uint32_t>(extras.size());
+
+            // Proof log: verify generated count
+            char buf[128];
+            sprintf_s(buf, "[GEN] frame=%llu gen=%u extras=%zu\n",
+                m_frameId, m_generatedTransformCount, extras.size());
+            OutputDebugStringA(buf);
         }
         else
         {
