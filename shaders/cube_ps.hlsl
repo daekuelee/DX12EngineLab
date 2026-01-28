@@ -27,13 +27,15 @@ float4 PSMain(PSInput pin, uint primID : SV_PrimitiveID) : SV_Target
 
     float3 color;
 
-    // Day3.12: Fixture debug highlighting - bright magenta for small scaleY (fixtures)
-    // Fixtures have scaleY <= 0.3 (h=0.2 -> sy=0.1, h=0.6 -> sy=0.3)
-    // Regular cubes have scaleY = 1.5
+    // Day3.12: ScaleY debug visualization - color gradient to see actual shader values
+    // Expected: Fixtures scaleY=0.1 (red), Regular cubes scaleY=1.5 (normal)
+    if (pin.ScaleY < 0.2)
+        return float4(1.0, 0.0, 0.0, 1.0);  // Bright RED: scaleY < 0.2 (fixtures h=0.2)
     if (pin.ScaleY < 0.5)
-    {
-        return float4(1.0, 0.0, 1.0, 1.0);  // Bright magenta for fixtures
-    }
+        return float4(1.0, 0.0, 1.0, 1.0);  // Bright MAGENTA: scaleY < 0.5 (fixtures h=0.6)
+    if (pin.ScaleY < 1.0)
+        return float4(1.0, 1.0, 0.0, 1.0);  // Bright YELLOW: scaleY < 1.0 (unexpected)
+    // scaleY >= 1.0: normal coloring (regular cubes have scaleY=1.5)
 
     if (ColorMode == COLOR_MODE_FACE_DEBUG)
     {
