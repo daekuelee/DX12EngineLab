@@ -386,6 +386,23 @@ namespace Engine
             // FIX: Post-sweep XZ cleanup (single iteration)
             ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
 
+            // Day3.12 Phase 4B: Step-up when blocked by wall-like surface
+            if (m_config.enableStepUp && m_collisionStats.sweepHit &&
+                IsWallLike(m_collisionStats.sweepNormalX, m_collisionStats.sweepNormalZ) &&
+                m_pawn.onGround)
+            {
+                float stepOutX, stepOutY, stepOutZ;
+                if (TryStepUp_Capsule(m_pawn.posX, newY, m_pawn.posZ, reqDx, reqDz,
+                                      stepOutX, stepOutY, stepOutZ))
+                {
+                    newX = stepOutX;
+                    newY = stepOutY;
+                    newZ = stepOutZ;
+                    capsuleZeroVelX = false;  // Don't zero velocity on step success
+                    capsuleZeroVelZ = false;
+                }
+            }
+
             // FIX: Higher-level velocity zeroing (after all sweep/slide logic)
             if (capsuleZeroVelX) m_pawn.velX = 0.0f;
             if (capsuleZeroVelZ) m_pawn.velZ = 0.0f;
@@ -1512,6 +1529,311 @@ namespace Engine
         return maxPen;
     }
 
+    // Day3.12 Phase 4B: Check if collision normal is wall-like (horizontal)
+    bool WorldState::IsWallLike(float normalX, float normalZ) const
+    {
+        // Wall-like = normal is mostly horizontal (Y component small)
+        // Since we only have XZ components from sweep, check magnitude
+        float xzMag = sqrtf(normalX * normalX + normalZ * normalZ);
+        return xzMag > 0.8f;  // Normal is >80% horizontal
+    }
+
+    // Day3.12 Phase 4B: Probe Y sweep at arbitrary pose (no stats mutation)
+    float WorldState::ProbeY(float posX, float posY, float posZ, float reqDy, int& hitCubeIdx)
+    {
+        const float SKIN_WIDTH = m_config.sweepSkinY;
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+        float totalHeight = 2.0f * r + 2.0f * hh;
+
+        hitCubeIdx = -1;
+
+        if (fabsf(reqDy) < 0.0001f)
+            return 0.0f;
+
+        // Build swept AABB for broadphase
+        AABB sweptAABB;
+        sweptAABB.minX = posX - r;
+        sweptAABB.maxX = posX + r;
+        sweptAABB.minZ = posZ - r;
+        sweptAABB.maxZ = posZ + r;
+        if (reqDy < 0.0f)
+        {
+            sweptAABB.minY = posY + reqDy;
+            sweptAABB.maxY = posY + totalHeight;
+        }
+        else
+        {
+            sweptAABB.minY = posY;
+            sweptAABB.maxY = posY + totalHeight + reqDy;
+        }
+
+        std::vector<uint16_t> candidates = QuerySpatialHash(sweptAABB);
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+        float earliestTOI = 1.0f;
+        int earliestCube = -1;
+
+        for (uint16_t cubeIdx : candidates)
+        {
+            AABB cube = GetCubeAABB(cubeIdx);
+
+            // XZ overlap check
+            float expMinX = cube.minX - r;
+            float expMaxX = cube.maxX + r;
+            float expMinZ = cube.minZ - r;
+            float expMaxZ = cube.maxZ + r;
+            if (posX < expMinX || posX > expMaxX || posZ < expMinZ || posZ > expMaxZ)
+                continue;
+
+            float toi = 1.0f;
+            bool hit = false;
+
+            if (reqDy < 0.0f)
+            {
+                // Falling
+                if (posY > cube.maxY)
+                {
+                    float dist = posY - cube.maxY;
+                    toi = dist / (-reqDy);
+                    if (toi >= 0.0f && toi <= 1.0f)
+                        hit = true;
+                }
+            }
+            else
+            {
+                // Rising
+                float headY = posY + totalHeight;
+                if (headY < cube.minY)
+                {
+                    float dist = cube.minY - headY;
+                    toi = dist / reqDy;
+                    if (toi >= 0.0f && toi <= 1.0f)
+                        hit = true;
+                }
+            }
+
+            if (hit && toi < earliestTOI)
+            {
+                earliestTOI = toi;
+                earliestCube = cubeIdx;
+            }
+            else if (hit && fabsf(toi - earliestTOI) < 1e-6f && cubeIdx < earliestCube)
+            {
+                earliestCube = cubeIdx;
+            }
+        }
+
+        // Also check floor when falling
+        if (reqDy < 0.0f && posY > m_config.floorY &&
+            posX >= m_config.floorMinX && posX <= m_config.floorMaxX &&
+            posZ >= m_config.floorMinZ && posZ <= m_config.floorMaxZ)
+        {
+            float dist = posY - m_config.floorY;
+            float floorTOI = dist / (-reqDy);
+            if (floorTOI >= 0.0f && floorTOI <= 1.0f && floorTOI < earliestTOI)
+            {
+                earliestTOI = floorTOI;
+                earliestCube = -2;  // Floor marker
+            }
+        }
+
+        if (earliestCube == -1 && earliestTOI >= 1.0f)
+        {
+            hitCubeIdx = -1;
+            return reqDy;
+        }
+
+        hitCubeIdx = earliestCube;
+        float deltaMag = fabsf(reqDy);
+        float skinParam = SKIN_WIDTH / deltaMag;
+        float clampedSkin = fminf(skinParam, earliestTOI * 0.5f);
+        float safeT = fmaxf(0.0f, earliestTOI - clampedSkin);
+        return reqDy * safeT;
+    }
+
+    // Day3.12 Phase 4B: Probe XZ sweep at arbitrary pose (no stats mutation)
+    float WorldState::ProbeXZ(float posX, float posY, float posZ, float reqDx, float reqDz,
+                              float& outNormalX, float& outNormalZ, int& hitCubeIdx)
+    {
+        const float SKIN_WIDTH = 0.01f;
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+
+        outNormalX = 0.0f;
+        outNormalZ = 0.0f;
+        hitCubeIdx = -1;
+
+        float deltaMag = sqrtf(reqDx * reqDx + reqDz * reqDz);
+        if (deltaMag < 0.0001f)
+            return 1.0f;  // Return TOI=1 for no movement
+
+        // Build swept AABB for broadphase
+        AABB sweptAABB;
+        sweptAABB.minX = fminf(posX - r, posX - r + reqDx);
+        sweptAABB.maxX = fmaxf(posX + r, posX + r + reqDx);
+        sweptAABB.minY = posY;
+        sweptAABB.maxY = posY + 2.0f * r + 2.0f * hh;
+        sweptAABB.minZ = fminf(posZ - r, posZ - r + reqDz);
+        sweptAABB.maxZ = fmaxf(posZ + r, posZ + r + reqDz);
+
+        std::vector<uint16_t> candidates = QuerySpatialHash(sweptAABB);
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+        SweepResult earliest = { false, 1.0f, 0.0f, 0.0f };
+        int earliestCube = -1;
+
+        for (uint16_t cubeIdx : candidates)
+        {
+            AABB cube = GetCubeAABB(cubeIdx);
+            // Use body-only Y overlap (not grounded for probe)
+            SweepResult hit = SweepCapsuleVsCubeXZ(posX, posZ, posY, r, hh, reqDx, reqDz, cube, false);
+            if (hit.hit)
+            {
+                if (hit.t < earliest.t || (!earliest.hit))
+                {
+                    earliest = hit;
+                    earliestCube = cubeIdx;
+                }
+                else if (fabsf(hit.t - earliest.t) < 1e-6f && cubeIdx < earliestCube)
+                {
+                    earliest = hit;
+                    earliestCube = cubeIdx;
+                }
+            }
+        }
+
+        if (!earliest.hit)
+        {
+            return 1.0f;  // Full travel, no hit
+        }
+
+        hitCubeIdx = earliestCube;
+        outNormalX = earliest.normalX;
+        outNormalZ = earliest.normalZ;
+
+        // Return TOI with skin offset
+        float skinParam = SKIN_WIDTH / deltaMag;
+        float clampedSkin = fminf(skinParam, earliest.t * 0.5f);
+        return fmaxf(0.0f, earliest.t - clampedSkin);
+    }
+
+    // Day3.12 Phase 4B: Try step-up maneuver
+    bool WorldState::TryStepUp_Capsule(float startX, float startY, float startZ,
+                                        float reqDx, float reqDz,
+                                        float& outX, float& outY, float& outZ)
+    {
+        float maxStep = m_config.maxStepHeight;
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+        const float SETTLE_EXTRA = 2.0f * m_config.sweepSkinY;
+
+        // Reset step diagnostics
+        m_collisionStats.stepTry = true;
+        m_collisionStats.stepSuccess = false;
+        m_collisionStats.stepFailMask = STEP_FAIL_NONE;
+        m_collisionStats.stepHeightUsed = 0.0f;
+        m_collisionStats.stepCubeIdx = -1;
+
+        // Phase 1: Probe UP by maxStepHeight
+        int upHitCube = -1;
+        float appliedUpDy = ProbeY(startX, startY, startZ, maxStep, upHitCube);
+
+        if (upHitCube != -1 && appliedUpDy < maxStep * 0.9f)
+        {
+            // Ceiling blocked us before reaching step height
+            m_collisionStats.stepFailMask |= STEP_FAIL_UP_BLOCKED;
+            char buf[128];
+            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (UP_BLOCKED appliedUp=%.3f)\n",
+                m_collisionStats.stepFailMask, appliedUpDy);
+            OutputDebugStringA(buf);
+            return false;
+        }
+
+        float raisedY = startY + appliedUpDy;
+
+        // Phase 2: Probe FORWARD at raised height
+        float fwdNormalX = 0.0f, fwdNormalZ = 0.0f;
+        int fwdHitCube = -1;
+        float fwdTOI = ProbeXZ(startX, raisedY, startZ, reqDx, reqDz, fwdNormalX, fwdNormalZ, fwdHitCube);
+
+        // Check if forward is still blocked (same obstacle or minimal progress)
+        if (fwdHitCube != -1 && fwdTOI < 0.1f)
+        {
+            // Still blocked - obstacle is too tall
+            m_collisionStats.stepFailMask |= STEP_FAIL_FWD_BLOCKED;
+            char buf[128];
+            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (FWD_BLOCKED toi=%.3f cube=%d)\n",
+                m_collisionStats.stepFailMask, fwdTOI, fwdHitCube);
+            OutputDebugStringA(buf);
+            return false;
+        }
+
+        float fwdX = startX + reqDx * fwdTOI;
+        float fwdZ = startZ + reqDz * fwdTOI;
+
+        // Phase 3: Settle DOWN to find ground
+        float settleMax = maxStep + SETTLE_EXTRA;
+        int downHitCube = -1;
+        float appliedDownDy = ProbeY(fwdX, raisedY, fwdZ, -settleMax, downHitCube);
+
+        if (downHitCube == -1)
+        {
+            // No ground found within settle range
+            m_collisionStats.stepFailMask |= STEP_FAIL_NO_GROUND;
+            char buf[128];
+            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (NO_GROUND settleMax=%.3f)\n",
+                m_collisionStats.stepFailMask, settleMax);
+            OutputDebugStringA(buf);
+            return false;
+        }
+
+        float settledY = raisedY + appliedDownDy;
+
+        // Phase 4: Validate - don't step into holes (settledY >= startY - epsilon)
+        const float HOLE_EPSILON = 0.05f;
+        if (settledY < startY - HOLE_EPSILON)
+        {
+            // This would be stepping down into a hole, not up onto a step
+            m_collisionStats.stepFailMask |= STEP_FAIL_NO_GROUND;
+            char buf[128];
+            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (HOLE settledY=%.3f < startY=%.3f)\n",
+                m_collisionStats.stepFailMask, settledY, startY);
+            OutputDebugStringA(buf);
+            return false;
+        }
+
+        // Optional: Check for residual penetration at final pose
+        float penCheck = ScanMaxXZPenetration(fwdX, settledY, fwdZ);
+        if (penCheck > 0.01f)
+        {
+            m_collisionStats.stepFailMask |= STEP_FAIL_PENETRATION;
+            char buf[128];
+            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (PENETRATION pen=%.4f)\n",
+                m_collisionStats.stepFailMask, penCheck);
+            OutputDebugStringA(buf);
+            return false;
+        }
+
+        // Success! Commit the step-up
+        outX = fwdX;
+        outY = settledY;
+        outZ = fwdZ;
+
+        m_collisionStats.stepSuccess = true;
+        m_collisionStats.stepHeightUsed = settledY - startY;
+        m_collisionStats.stepCubeIdx = downHitCube;
+
+        char buf[160];
+        sprintf_s(buf, "[STEP_UP] try=1 ok=1 mask=0x00 h=%.3f cube=%d pos=(%.2f,%.2f,%.2f)\n",
+            m_collisionStats.stepHeightUsed, downHitCube, outX, outY, outZ);
+        OutputDebugStringA(buf);
+
+        return true;
+    }
+
     void WorldState::TickFrame(float frameDt)
     {
         // 1. Compute target camera position (behind and above pawn)
@@ -1676,6 +1998,13 @@ namespace Engine
         snap.sweepYHitCubeIdx = m_collisionStats.sweepYHitCubeIdx;
         snap.sweepYReqDy = m_collisionStats.sweepYReqDy;
         snap.sweepYAppliedDy = m_collisionStats.sweepYAppliedDy;
+
+        // Day3.12 Phase 4B: Step-up diagnostics
+        snap.stepTry = m_collisionStats.stepTry;
+        snap.stepSuccess = m_collisionStats.stepSuccess;
+        snap.stepFailMask = m_collisionStats.stepFailMask;
+        snap.stepHeightUsed = m_collisionStats.stepHeightUsed;
+        snap.stepCubeIdx = m_collisionStats.stepCubeIdx;
 
         return snap;
     }

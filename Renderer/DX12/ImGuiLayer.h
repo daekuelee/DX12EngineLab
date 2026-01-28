@@ -129,6 +129,12 @@ namespace Renderer
             int32_t sweepYHitCubeIdx = -1;
             float sweepYReqDy = 0.0f;
             float sweepYAppliedDy = 0.0f;
+            // Day3.12 Phase 4B: Step-up diagnostics
+            bool stepTry = false;
+            bool stepSuccess = false;
+            uint8_t stepFailMask = 0;
+            float stepHeightUsed = 0.0f;
+            int32_t stepCubeIdx = -1;
         } m_worldState;
         bool m_hasWorldState = false;
     };

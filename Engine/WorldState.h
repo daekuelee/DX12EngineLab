@@ -96,6 +96,21 @@ namespace Engine
         int32_t sweepYHitCubeIdx = -1;
         float sweepYReqDy = 0.0f;
         float sweepYAppliedDy = 0.0f;
+        // Day3.12 Phase 4B: Step-up diagnostics
+        bool stepTry = false;           // Did we attempt step-up?
+        bool stepSuccess = false;       // Did step-up succeed?
+        uint8_t stepFailMask = 0;       // Failure reason bits (StepFailMask enum)
+        float stepHeightUsed = 0.0f;    // Actual height stepped
+        int32_t stepCubeIdx = -1;       // Cube we stepped onto
+    };
+
+    // Day3.12 Phase 4B: Step-up failure reason bits
+    enum StepFailMask : uint8_t {
+        STEP_FAIL_NONE          = 0x00,
+        STEP_FAIL_UP_BLOCKED    = 0x01,  // Ceiling within step height
+        STEP_FAIL_FWD_BLOCKED   = 0x02,  // Forward probe still blocked
+        STEP_FAIL_NO_GROUND     = 0x04,  // Down settle found no support
+        STEP_FAIL_PENETRATION   = 0x08,  // Final pose has penetration
     };
     // Input state sampled each frame
     struct InputState
@@ -211,6 +226,10 @@ namespace Engine
         // Day3.12 Phase 4A: Y sweep config
         bool enableYSweep = true;   // Toggle for Y sweep (fallback to ResolveAxis Y)
         float sweepSkinY = 0.01f;   // Skin width for Y sweep
+
+        // Day3.12 Phase 4B: Step-up config
+        bool enableStepUp = true;   // Toggle for step-up auto-climb
+        float maxStepHeight = 0.3f; // Max obstacle height to climb
     };
 
     class WorldState
@@ -312,5 +331,18 @@ namespace Engine
         void ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY);
         // Day3.11 Phase 3 Debug: Scan max XZ penetration depth (for instrumentation)
         float ScanMaxXZPenetration(float posX, float posY, float posZ);
+
+        // Day3.12 Phase 4B: Step-up helpers
+        // Probe Y sweep at arbitrary pose (no stats mutation)
+        float ProbeY(float posX, float posY, float posZ, float reqDy, int& hitCubeIdx);
+        // Probe XZ sweep at arbitrary pose (no stats mutation)
+        float ProbeXZ(float posX, float posY, float posZ, float reqDx, float reqDz,
+                      float& outNormalX, float& outNormalZ, int& hitCubeIdx);
+        // Try step-up maneuver: up -> forward -> down settle
+        bool TryStepUp_Capsule(float startX, float startY, float startZ,
+                               float reqDx, float reqDz,
+                               float& outX, float& outY, float& outZ);
+        // Check if collision normal is wall-like (horizontal)
+        bool IsWallLike(float normalX, float normalZ) const;
     };
 }

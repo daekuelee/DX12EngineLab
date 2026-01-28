@@ -280,6 +280,12 @@ namespace Renderer
         m_worldState.sweepYHitCubeIdx = snap.sweepYHitCubeIdx;
         m_worldState.sweepYReqDy = snap.sweepYReqDy;
         m_worldState.sweepYAppliedDy = snap.sweepYAppliedDy;
+        // Day3.12 Phase 4B: Step-up
+        m_worldState.stepTry = snap.stepTry;
+        m_worldState.stepSuccess = snap.stepSuccess;
+        m_worldState.stepFailMask = snap.stepFailMask;
+        m_worldState.stepHeightUsed = snap.stepHeightUsed;
+        m_worldState.stepCubeIdx = snap.stepCubeIdx;
         m_hasWorldState = true;
     }
 
@@ -356,6 +362,24 @@ namespace Renderer
                 else
                     ImGui::Text("Clear");
                 ImGui::Text("Req:%.3f App:%.3f", m_worldState.sweepYReqDy, m_worldState.sweepYAppliedDy);
+                // Day3.12 Phase 4B: Step-up
+                ImGui::Separator();
+                ImGui::Text("-- StepUp --");
+                if (m_worldState.stepTry)
+                {
+                    if (m_worldState.stepSuccess)
+                    {
+                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "OK h=%.2f cube=%d",
+                            m_worldState.stepHeightUsed, m_worldState.stepCubeIdx);
+                    }
+                    else
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "FAIL mask=0x%02X",
+                            m_worldState.stepFailMask);
+                    }
+                }
+                else
+                    ImGui::Text("Idle");
             }
 
             // World State section (Day3) - only show in ThirdPerson mode
