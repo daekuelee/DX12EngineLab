@@ -199,6 +199,33 @@ Engine-style DX12 sandbox built with **contracts + toggles + evidence** (not tut
 
 **Contracts**: [docs/contracts/day3/](docs/contracts/day3/)
 
+---
+
+## Day 3.11: Capsule Controller (2026-01-28)
+
+**Goal**: Implement alternative controller mode using vertical capsule + sweep/slide collision.
+
+**New Features**:
+- Runtime toggle (F6) between AABB and Capsule modes
+- Vertical capsule geometry with feet-bottom anchor
+- Swept collision detection (Minkowski sum + slab method)
+- Wall sliding via velocity clipping
+- Depenetration safety net for spawn/teleport
+
+**Key Commits**:
+- `1665692` - Phase 0: Mode toggle + unified reset
+- `fdf832d` - Phase 1: Capsule SSOT + HUD proof
+- `a100801` - Phase 2: Depenetration safety net
+- `d765038` - Phase 3: XZ sweep/slide MVP
+- `cbb0794` - Fix: Radius match + escape logic
+
+**Controls**:
+- `F6` - Toggle controller mode (AABB/Capsule)
+
+**Debug Narrative**: [docs/contracts/day3/daily_note_capsule.md](docs/contracts/day3/daily_note_capsule.md)
+
+**SSOT Reference**: [docs/notes/sweep_capsule.md](docs/notes/sweep_capsule.md)
+
 **Next**: Day4 - View FX (fog, sky gradient, exposure)
 
 ## Build & Run
