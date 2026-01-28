@@ -602,6 +602,25 @@ namespace Renderer
                 OutputDebugStringA(dbgBuf);
             }
 
+            // Debug: Full T1 matrix dump to verify no corruption
+            {
+                uint16_t t1 = m_worldState->GetFixtureT1Idx();
+                float* m = transforms + t1 * 16;
+                char matBuf[512];
+                sprintf_s(matBuf,
+                    "[T1_MATRIX] idx=%u\n"
+                    "  [%.2f, %.2f, %.2f, %.2f]\n"
+                    "  [%.2f, %.2f, %.2f, %.2f]\n"
+                    "  [%.2f, %.2f, %.2f, %.2f]\n"
+                    "  [%.2f, %.2f, %.2f, %.2f]\n",
+                    t1,
+                    m[0], m[1], m[2], m[3],
+                    m[4], m[5], m[6], m[7],
+                    m[8], m[9], m[10], m[11],
+                    m[12], m[13], m[14], m[15]);
+                OutputDebugStringA(matBuf);
+            }
+
             // Append ceiling transform after grid (index 10000)
             const auto& extras = m_worldState->GetExtras();
             for (size_t i = 0; i < extras.size() && (InstanceCount + i) < (InstanceCount + MaxExtraInstances); ++i)
@@ -661,6 +680,26 @@ namespace Renderer
     {
         // Get transforms buffer from registry
         ID3D12Resource* transformsResource = m_resourceRegistry.Get(ctx.transformsHandle);
+
+        // Debug: Verify buffer offset before copy
+        if (m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures)
+        {
+            char dbgBuf[256];
+            sprintf_s(dbgBuf, "[COPY_DBG] srcOffset=%llu transformsPtr=%p allocatorBuffer=%p\n",
+                transformsAlloc.offset,
+                transformsAlloc.cpuPtr,
+                ctx.uploadAllocator.GetBuffer());
+            OutputDebugStringA(dbgBuf);
+
+            // Verify fixture transform at source location matches expected
+            // transformsAlloc.cpuPtr points to start of transforms array
+            float* srcT1 = reinterpret_cast<float*>(
+                static_cast<uint8_t*>(transformsAlloc.cpuPtr) +
+                m_worldState->GetFixtureT1Idx() * 64);
+            sprintf_s(dbgBuf, "[COPY_DBG] T1 at copy src: cy=%.2f sy=%.2f\n",
+                srcT1[13], srcT1[5]);
+            OutputDebugStringA(dbgBuf);
+        }
 
         // Transition transforms buffer to COPY_DEST via state tracker
         m_stateTracker.Transition(transformsResource, D3D12_RESOURCE_STATE_COPY_DEST);
