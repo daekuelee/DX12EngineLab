@@ -8,8 +8,8 @@ namespace Renderer
     static constexpr uint64_t CBV_ALIGNMENT = 256;
     static constexpr uint64_t CB_SIZE = (sizeof(float) * 16 + CBV_ALIGNMENT - 1) & ~(CBV_ALIGNMENT - 1);
 
-    // Transforms: 10k float4x4 = 10k * 64 bytes
-    static constexpr uint64_t TRANSFORMS_SIZE = InstanceCount * sizeof(float) * 16;
+    // Transforms: (10k + extras) float4x4 = (10k + 32) * 64 bytes
+    static constexpr uint64_t TRANSFORMS_SIZE = (InstanceCount + MaxExtraInstances) * sizeof(float) * 16;
 
     bool FrameContextRing::Initialize(ID3D12Device* device, DescriptorRingAllocator* descRing, ResourceRegistry* registry)
     {
@@ -122,7 +122,7 @@ namespace Renderer
 #else
         // StructuredBuffer SRV for production (float4x4 per element)
         srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-        srvDesc.Buffer.NumElements = InstanceCount;
+        srvDesc.Buffer.NumElements = InstanceCount + MaxExtraInstances;  // Day3.12 Phase 4B+: Include extras
         srvDesc.Buffer.StructureByteStride = sizeof(float) * 16;  // 64 bytes per matrix
         srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
 #endif

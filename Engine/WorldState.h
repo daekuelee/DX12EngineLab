@@ -35,6 +35,19 @@ namespace Engine
         float maxX, maxY, maxZ;
     };
 
+    // Day3.12 Phase 4B+: Extra collider types (future: ramps, trimesh)
+    enum class ExtraColliderType : uint8_t { AABB = 0, Ramp = 1, TriMesh = 2 };
+
+    struct ExtraCollider
+    {
+        ExtraColliderType type = ExtraColliderType::AABB;
+        AABB aabb = {};
+    };
+
+    // Day3.12 Phase 4B+: ID space for extras layer
+    static constexpr uint16_t EXTRA_BASE = 20000;
+    static constexpr uint16_t MAX_EXTRA_COLLIDERS = 32;
+
     // Day3.11: Capsule geometry helper (feet-bottom anchor)
     struct CapsulePoints { float P0y, P1y; };
 
@@ -272,6 +285,13 @@ namespace Engine
         // Part 2: Collision stats accessor
         const CollisionStats& GetCollisionStats() const { return m_collisionStats; }
 
+        // Day3.12 Phase 4B+: Fixture accessors for renderer transform overrides
+        const WorldConfig& GetConfig() const { return m_config; }
+        const std::vector<ExtraCollider>& GetExtras() const { return m_extras; }
+        uint16_t GetFixtureT1Idx() const { return m_fixtureT1Idx; }
+        uint16_t GetFixtureT2Idx() const { return m_fixtureT2Idx; }
+        uint16_t GetFixtureT3StepIdx() const { return m_fixtureT3StepIdx; }
+
     private:
         PawnState m_pawn;
         CameraState m_camera;
@@ -308,8 +328,11 @@ namespace Engine
         uint16_t m_fixtureT1Idx = 0;
         uint16_t m_fixtureT2Idx = 0;
         uint16_t m_fixtureT3StepIdx = 0;
-        static constexpr uint16_t FIXTURE_T3_CEIL_IDX = 10000;
-        AABB m_fixtureT3CeilingAABB = {};
+
+        // Day3.12 Phase 4B+: Extras layer for ceiling and future colliders
+        std::vector<ExtraCollider> m_extras;
+        void BuildExtraFixtures();
+        void RegisterAABBToSpatialGrid(uint16_t id, const AABB& aabb);
 
         // Private helpers
         void ResolveFloorCollision();

@@ -236,46 +236,30 @@ namespace Engine
         // Part 2: Build spatial grid for cube collision
         BuildSpatialGrid();
 
-        // Day3.12 Phase 4B: Compute and register test fixtures
+        // Day3.12 Phase 4B+: Compute and register test fixtures
         if (m_config.enableStepUpTestFixtures)
         {
-            OutputDebugStringA("[STEP_TEST] enabled=1\n");
-
-            // Compute indices from world coords: idx = gz*100 + gx, where gx=(x+99)/2
+            // Compute grid indices from world coords: idx = gz*100 + gx, where gx=(x+99)/2
             auto worldToIdx = [](float wx, float wz) -> uint16_t {
                 int gx = static_cast<int>((wx + 99.0f) / 2.0f);
                 int gz = static_cast<int>((wz + 99.0f) / 2.0f);
                 return static_cast<uint16_t>(gz * 100 + gx);
             };
 
-            m_fixtureT1Idx = worldToIdx(5.0f, 9.0f);      // T1 at (5, 9)
-            m_fixtureT2Idx = worldToIdx(9.0f, 9.0f);      // T2 at (9, 9)
-            m_fixtureT3StepIdx = worldToIdx(15.0f, 9.0f); // T3 step at (15, 9)
+            m_fixtureT1Idx = worldToIdx(5.0f, 9.0f);      // 5452
+            m_fixtureT2Idx = worldToIdx(9.0f, 9.0f);      // 5454
+            m_fixtureT3StepIdx = worldToIdx(15.0f, 9.0f); // 5457
 
-            // T3 ceiling AABB (same XZ as step)
-            float hxz = m_config.cubeHalfXZ;
-            m_fixtureT3CeilingAABB = {
-                15.0f - hxz, 5.1f, 9.0f - hxz,  // min
-                15.0f + hxz, 8.0f, 9.0f + hxz   // max
-            };
+            // Build extras (ceiling only)
+            BuildExtraFixtures();
 
-            // Insert ceiling into spatial grid for broadphase
-            int cellX = WorldToCellX(15.0f);
-            int cellZ = WorldToCellZ(9.0f);
-            m_spatialGrid[cellZ][cellX].push_back(FIXTURE_T3_CEIL_IDX);
-
-            // Log fixture AABBs for debug observability
+            // Log fixture info
             char buf[256];
-            sprintf_s(buf, "[STEP_TEST] T1: idx=%u world=(5,0,9) AABB Y=[0,0.2]\n", m_fixtureT1Idx);
+            sprintf_s(buf, "[FIXTURE] T1_STEP gridIdx=%u world=(5,0,9) AABB Y=[0,0.2]\n", m_fixtureT1Idx);
             OutputDebugStringA(buf);
-            sprintf_s(buf, "[STEP_TEST] T2: idx=%u world=(9,0,9) AABB Y=[0,0.6]\n", m_fixtureT2Idx);
+            sprintf_s(buf, "[FIXTURE] T2_WALL gridIdx=%u world=(9,0,9) AABB Y=[0,0.6]\n", m_fixtureT2Idx);
             OutputDebugStringA(buf);
-            sprintf_s(buf, "[STEP_TEST] T3_step: idx=%u world=(15,0,9) AABB Y=[0,0.2]\n", m_fixtureT3StepIdx);
-            OutputDebugStringA(buf);
-            sprintf_s(buf, "[STEP_TEST] T3_ceil: idx=%u AABB=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)\n",
-                FIXTURE_T3_CEIL_IDX,
-                m_fixtureT3CeilingAABB.minX, m_fixtureT3CeilingAABB.minY, m_fixtureT3CeilingAABB.minZ,
-                m_fixtureT3CeilingAABB.maxX, m_fixtureT3CeilingAABB.maxY, m_fixtureT3CeilingAABB.maxZ);
+            sprintf_s(buf, "[FIXTURE] T3_STEP gridIdx=%u world=(15,0,9) AABB Y=[0,0.2]\n", m_fixtureT3StepIdx);
             OutputDebugStringA(buf);
         }
 
@@ -727,6 +711,38 @@ namespace Engine
         return cell;
     }
 
+    void WorldState::RegisterAABBToSpatialGrid(uint16_t id, const AABB& aabb)
+    {
+        int minCX = WorldToCellX(aabb.minX);
+        int maxCX = WorldToCellX(aabb.maxX);
+        int minCZ = WorldToCellZ(aabb.minZ);
+        int maxCZ = WorldToCellZ(aabb.maxZ);
+
+        for (int gz = minCZ; gz <= maxCZ; ++gz)
+            for (int gx = minCX; gx <= maxCX; ++gx)
+                m_spatialGrid[gz][gx].push_back(id);
+    }
+
+    void WorldState::BuildExtraFixtures()
+    {
+        m_extras.clear();
+        float hxz = m_config.cubeHalfXZ;  // 0.9
+
+        // T3 Ceiling: floating at (15, 5.1..8.0, 9)
+        ExtraCollider ceil;
+        ceil.type = ExtraColliderType::AABB;
+        ceil.aabb = { 15.0f - hxz, 5.1f, 9.0f - hxz,
+                      15.0f + hxz, 8.0f, 9.0f + hxz };
+        m_extras.push_back(ceil);
+        RegisterAABBToSpatialGrid(static_cast<uint16_t>(EXTRA_BASE), ceil.aabb);
+
+        char buf[256];
+        sprintf_s(buf, "[FIXTURE] T3_CEIL id=%u AABB=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)\n",
+            EXTRA_BASE, ceil.aabb.minX, ceil.aabb.minY, ceil.aabb.minZ,
+            ceil.aabb.maxX, ceil.aabb.maxY, ceil.aabb.maxZ);
+        OutputDebugStringA(buf);
+    }
+
     AABB WorldState::BuildPawnAABB(float px, float py, float pz) const
     {
         // Pawn AABB: feet at posY, head at posY+height
@@ -743,9 +759,14 @@ namespace Engine
 
     AABB WorldState::GetCubeAABB(uint16_t cubeIdx) const
     {
-        // Day3.12 Phase 4B: T3 ceiling special collider
-        if (m_config.enableStepUpTestFixtures && cubeIdx == FIXTURE_T3_CEIL_IDX)
-            return m_fixtureT3CeilingAABB;
+        // Day3.12 Phase 4B+: Extra colliders (ID >= EXTRA_BASE)
+        if (cubeIdx >= EXTRA_BASE)
+        {
+            size_t idx = cubeIdx - EXTRA_BASE;
+            if (idx < m_extras.size())
+                return m_extras[idx].aabb;
+            return {};  // Invalid extra ID
+        }
 
         // Cube at grid (gx, gz):
         int gx = cubeIdx % GRID_SIZE;
@@ -759,7 +780,7 @@ namespace Engine
         aabb.minZ = cz - m_config.cubeHalfXZ;
         aabb.maxZ = cz + m_config.cubeHalfXZ;
 
-        // Day3.12 Phase 4B: Fixture height overrides (indices computed at init)
+        // Day3.12 Phase 4B+: Fixture height overrides (indices computed at init)
         if (m_config.enableStepUpTestFixtures)
         {
             if (cubeIdx == m_fixtureT1Idx || cubeIdx == m_fixtureT3StepIdx)

@@ -11,6 +11,7 @@
 #include "ResourceStateTracker.h"
 #include "PassOrchestrator.h"
 #include "CharacterPass.h"
+#include "../../Engine/WorldState.h"  // Day3.12 Phase 4B+: Fixture transform overrides
 #include <cstdio>
 #include <DirectXMath.h>
 
@@ -383,12 +384,13 @@ namespace Renderer
     // Initialize
     //-------------------------------------------------------------------------
 
-    bool Dx12Context::Initialize(HWND hwnd)
+    bool Dx12Context::Initialize(HWND hwnd, Engine::WorldState* worldState)
     {
         if (m_initialized)
             return false;
 
         m_hwnd = hwnd;
+        m_worldState = worldState;  // Day3.12 Phase 4B+: Store for fixture transform overrides
 
         // Get window dimensions
         RECT rect = {};
@@ -434,8 +436,8 @@ namespace Renderer
     static constexpr uint64_t CBV_ALIGNMENT = 256;
     static constexpr uint64_t CB_SIZE = (sizeof(float) * 16 + CBV_ALIGNMENT - 1) & ~(CBV_ALIGNMENT - 1);
 
-    // Transforms: 10k float4x4 = 10k * 64 bytes
-    static constexpr uint64_t TRANSFORMS_SIZE = InstanceCount * sizeof(float) * 16;
+    // Transforms: (10k + extras) float4x4 = (10k + 32) * 64 bytes
+    static constexpr uint64_t TRANSFORMS_SIZE = (InstanceCount + MaxExtraInstances) * sizeof(float) * 16;
 
     //-------------------------------------------------------------------------
     // Phase Helpers
@@ -543,8 +545,57 @@ namespace Renderer
             }
         }
 
-        // MT1: Store generated count for validation
-        m_generatedTransformCount = InstanceCount;
+        // Day3.12 Phase 4B+: Override fixture grid transforms to match collision AABBs
+        if (m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures)
+        {
+            float hxz = 0.9f;  // cubeHalfXZ
+
+            // Helper to override transform at grid index
+            auto overrideTransform = [&](uint16_t gridIdx, float height) {
+                int gx = gridIdx % 100;
+                int gz = gridIdx / 100;
+                float cx = static_cast<float>(gx) * 2.0f - 99.0f;
+                float cz = static_cast<float>(gz) * 2.0f - 99.0f;
+                float cy = height * 0.5f;  // Center Y (AABB from 0 to height)
+                float sy = height * 0.5f;  // Scale Y (half-extent)
+
+                float* m = transforms + gridIdx * 16;
+                m[0] = hxz;  m[1] = 0.0f; m[2] = 0.0f; m[3] = 0.0f;
+                m[4] = 0.0f; m[5] = sy;   m[6] = 0.0f; m[7] = 0.0f;
+                m[8] = 0.0f; m[9] = 0.0f; m[10] = hxz; m[11] = 0.0f;
+                m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
+            };
+
+            overrideTransform(m_worldState->GetFixtureT1Idx(), 0.2f);      // T1: h=0.2
+            overrideTransform(m_worldState->GetFixtureT2Idx(), 0.6f);      // T2: h=0.6
+            overrideTransform(m_worldState->GetFixtureT3StepIdx(), 0.2f);  // T3: h=0.2
+
+            // Append ceiling transform after grid (index 10000)
+            const auto& extras = m_worldState->GetExtras();
+            for (size_t i = 0; i < extras.size() && (InstanceCount + i) < (InstanceCount + MaxExtraInstances); ++i)
+            {
+                const Engine::AABB& aabb = extras[i].aabb;
+                float cx = (aabb.minX + aabb.maxX) * 0.5f;
+                float cy = (aabb.minY + aabb.maxY) * 0.5f;
+                float cz = (aabb.minZ + aabb.maxZ) * 0.5f;
+                float sx = (aabb.maxX - aabb.minX) * 0.5f;
+                float sy = (aabb.maxY - aabb.minY) * 0.5f;
+                float sz = (aabb.maxZ - aabb.minZ) * 0.5f;
+
+                uint32_t extraIdx = InstanceCount + static_cast<uint32_t>(i);
+                float* m = transforms + extraIdx * 16;
+                m[0] = sx;   m[1] = 0.0f; m[2] = 0.0f; m[3] = 0.0f;
+                m[4] = 0.0f; m[5] = sy;   m[6] = 0.0f; m[7] = 0.0f;
+                m[8] = 0.0f; m[9] = 0.0f; m[10] = sz;  m[11] = 0.0f;
+                m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
+            }
+
+            m_generatedTransformCount = InstanceCount + static_cast<uint32_t>(extras.size());
+        }
+        else
+        {
+            m_generatedTransformCount = InstanceCount;
+        }
 
         return transformsAlloc;
     }

@@ -17,6 +17,9 @@
 #include "UploadArena.h"
 #include "CharacterRenderer.h"
 
+// Forward declare Engine::WorldState
+namespace Engine { class WorldState; }
+
 namespace Renderer
 {
     // HUD data struct (no Engine types - kept in Renderer namespace)
@@ -130,7 +133,7 @@ namespace Renderer
         Dx12Context(const Dx12Context&) = delete;
         Dx12Context& operator=(const Dx12Context&) = delete;
 
-        bool Initialize(HWND hwnd);
+        bool Initialize(HWND hwnd, Engine::WorldState* worldState = nullptr);
         void Render();
         void Shutdown();
 
@@ -159,6 +162,9 @@ namespace Renderer
         HWND m_hwnd = nullptr;
         uint32_t m_width = 0;
         uint32_t m_height = 0;
+
+        // Day3.12 Phase 4B+: WorldState for fixture transform overrides
+        Engine::WorldState* m_worldState = nullptr;
 
         // Core DX12 objects
         Microsoft::WRL::ComPtr<IDXGIFactory6> m_factory;

@@ -10,6 +10,7 @@
 namespace Renderer
 {
     static constexpr uint32_t InstanceCount = 10000;
+    static constexpr uint32_t MaxExtraInstances = 32;  // Day3.12 Phase 4B+: Extra fixture instances
 
     // Per-frame resources that must be fence-gated before reuse
     struct FrameContext

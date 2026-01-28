@@ -12,14 +12,14 @@ namespace Engine
 
         m_hwnd = hwnd;
 
-        // Initialize DX12 renderer
-        if (!m_renderer.Initialize(hwnd))
+        // Initialize world state first (so renderer can get fixture data)
+        m_worldState.Initialize();
+
+        // Initialize DX12 renderer with worldState for fixture transform overrides
+        if (!m_renderer.Initialize(hwnd, &m_worldState))
         {
             return false;
         }
-
-        // Initialize world state
-        m_worldState.Initialize();
         m_accumulator = 0.0f;
         m_prevJump = false;
 
