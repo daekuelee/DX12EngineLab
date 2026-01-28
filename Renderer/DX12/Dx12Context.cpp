@@ -548,6 +548,16 @@ namespace Renderer
         // Day3.12 Phase 4B+: Override fixture grid transforms to match collision AABBs
         if (m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures)
         {
+            // Debug: Verify config flag at render time (once)
+            static bool s_cfgLogged = false;
+            if (!s_cfgLogged) {
+                char cfgBuf[128];
+                sprintf_s(cfgBuf, "[CFG_CHECK] enableStepUpTestFixtures=%d\n",
+                    m_worldState->GetConfig().enableStepUpTestFixtures ? 1 : 0);
+                OutputDebugStringA(cfgBuf);
+                s_cfgLogged = true;
+            }
+
             // Verify fixture indices are initialized (non-zero)
             if (m_worldState->GetFixtureT1Idx() == 0 ||
                 m_worldState->GetFixtureT2Idx() == 0 ||
@@ -578,6 +588,20 @@ namespace Renderer
             overrideTransform(m_worldState->GetFixtureT2Idx(), 0.6f);      // T2: h=0.6
             overrideTransform(m_worldState->GetFixtureT3StepIdx(), 0.2f);  // T3: h=0.2
 
+            // Debug: Print fixture transforms to verify override
+            {
+                char dbgBuf[256];
+                uint16_t t1 = m_worldState->GetFixtureT1Idx();
+                float* t1m = transforms + t1 * 16;
+                sprintf_s(dbgBuf, "[FIX_XFORM] T1 idx=%u cy=%.2f sy=%.2f\n", t1, t1m[13], t1m[5]);
+                OutputDebugStringA(dbgBuf);
+
+                uint16_t t3 = m_worldState->GetFixtureT3StepIdx();
+                float* t3m = transforms + t3 * 16;
+                sprintf_s(dbgBuf, "[FIX_XFORM] T3 idx=%u cy=%.2f sy=%.2f\n", t3, t3m[13], t3m[5]);
+                OutputDebugStringA(dbgBuf);
+            }
+
             // Append ceiling transform after grid (index 10000)
             const auto& extras = m_worldState->GetExtras();
             for (size_t i = 0; i < extras.size() && (InstanceCount + i) < (InstanceCount + MaxExtraInstances); ++i)
@@ -596,6 +620,15 @@ namespace Renderer
                 m[4] = 0.0f; m[5] = sy;   m[6] = 0.0f; m[7] = 0.0f;
                 m[8] = 0.0f; m[9] = 0.0f; m[10] = sz;  m[11] = 0.0f;
                 m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
+            }
+
+            // Debug: Print ceiling transform
+            if (extras.size() > 0) {
+                float* cm = transforms + InstanceCount * 16;
+                char ceilBuf[256];
+                sprintf_s(ceilBuf, "[CEIL_XFORM] idx=10000 cy=%.2f sy=%.2f (expect cy=6.55 sy=1.45)\n",
+                    cm[13], cm[5]);
+                OutputDebugStringA(ceilBuf);
             }
 
 #if defined(_DEBUG)
