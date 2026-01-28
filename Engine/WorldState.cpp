@@ -418,6 +418,28 @@ namespace Engine
             // FIX: Post-sweep XZ cleanup (single iteration)
             ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
 
+            // Day3.12+ DEBUG: Step-up gate condition logging
+#define DEBUG_STEP_GATE
+#ifdef DEBUG_STEP_GATE
+            {
+                float xzMag = sqrtf(m_collisionStats.sweepNormalX * m_collisionStats.sweepNormalX +
+                                    m_collisionStats.sweepNormalZ * m_collisionStats.sweepNormalZ);
+                static bool s_lastStepGateResult = false;
+                bool gateResult = m_config.enableStepUp && m_collisionStats.sweepHit &&
+                                  IsWallLike(m_collisionStats.sweepNormalX, m_collisionStats.sweepNormalZ) &&
+                                  m_pawn.onGround;
+                if (gateResult != s_lastStepGateResult || gateResult) {
+                    char buf[200];
+                    sprintf_s(buf, "[STEP_GATE] enable=%d hit=%d wallLike=%d (xzMag=%.3f) onGround=%d => %s\n",
+                        m_config.enableStepUp, m_collisionStats.sweepHit,
+                        IsWallLike(m_collisionStats.sweepNormalX, m_collisionStats.sweepNormalZ), xzMag,
+                        m_pawn.onGround, gateResult ? "PASS" : "FAIL");
+                    OutputDebugStringA(buf);
+                    s_lastStepGateResult = gateResult;
+                }
+            }
+#endif
+
             // Day3.12 Phase 4B: Step-up when blocked by wall-like surface
             if (m_config.enableStepUp && m_collisionStats.sweepHit &&
                 IsWallLike(m_collisionStats.sweepNormalX, m_collisionStats.sweepNormalZ) &&
@@ -432,6 +454,17 @@ namespace Engine
                     newZ = stepOutZ;
                     capsuleZeroVelX = false;  // Don't zero velocity on step success
                     capsuleZeroVelZ = false;
+
+                    // Day3.12+ DEBUG: Verify step-up integration
+#define DEBUG_STEP_INTEGRATION
+#ifdef DEBUG_STEP_INTEGRATION
+                    {
+                        char buf[160];
+                        sprintf_s(buf, "[STEP_APPLIED] prev=(%.2f,%.2f,%.2f) new=(%.2f,%.2f,%.2f) dY=%.3f\n",
+                            m_pawn.posX, m_pawn.posY, m_pawn.posZ, newX, newY, newZ, newY - m_pawn.posY);
+                        OutputDebugStringA(buf);
+                    }
+#endif
                 }
             }
 
