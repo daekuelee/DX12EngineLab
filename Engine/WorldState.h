@@ -246,6 +246,7 @@ namespace Engine
 
         // Day3.12 Phase 4B: Test fixture config
         bool enableStepUpTestFixtures = true;  // Test fixture toggle
+        bool enableStepUpGridTest = false;     // Stair grid test (disables T1/T2/T3 when true)
     };
 
     class WorldState
@@ -332,6 +333,7 @@ namespace Engine
         // Day3.12 Phase 4B+: Extras layer for ceiling and future colliders
         std::vector<ExtraCollider> m_extras;
         void BuildExtraFixtures();
+        void BuildStepUpGridTest();  // Day3.12: Stair grid test map
         void RegisterAABBToSpatialGrid(uint16_t id, const AABB& aabb);
 
         // Private helpers

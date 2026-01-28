@@ -236,8 +236,12 @@ namespace Engine
         // Part 2: Build spatial grid for cube collision
         BuildSpatialGrid();
 
-        // Day3.12 Phase 4B+: Compute and register test fixtures
-        if (m_config.enableStepUpTestFixtures)
+        // Day3.12: Mutual exclusion - StepUpGridTest overrides T1/T2/T3 fixtures
+        if (m_config.enableStepUpGridTest)
+        {
+            BuildStepUpGridTest();
+        }
+        else if (m_config.enableStepUpTestFixtures)
         {
             // Compute grid indices from world coords: idx = gz*100 + gx, where gx=(x+99)/2
             auto worldToIdx = [](float wx, float wz) -> uint16_t {
@@ -603,6 +607,36 @@ namespace Engine
 
         // 10. KillZ check (respawn if below threshold)
         CheckKillZ();
+
+        // Day3.12 StepUpGridTest: Log on state change only
+        if (m_config.enableStepUpGridTest)
+        {
+            static bool s_prevTry = false;
+            static bool s_prevOk = false;
+            static uint8_t s_prevMask = 0;
+
+            bool changed = (m_collisionStats.stepTry != s_prevTry) ||
+                           (m_collisionStats.stepSuccess != s_prevOk) ||
+                           (m_collisionStats.stepFailMask != s_prevMask);
+
+            if (changed)
+            {
+                char buf[256];
+                sprintf_s(buf, "[STEP_GRID] pos=(%.2f,%.2f,%.2f) gnd=%d hit=%d try=%d ok=%d mask=0x%02X h=%.3f\n",
+                    m_pawn.posX, m_pawn.posY, m_pawn.posZ,
+                    m_pawn.onGround ? 1 : 0,
+                    m_collisionStats.sweepHit ? 1 : 0,
+                    m_collisionStats.stepTry ? 1 : 0,
+                    m_collisionStats.stepSuccess ? 1 : 0,
+                    m_collisionStats.stepFailMask,
+                    m_collisionStats.stepHeightUsed);
+                OutputDebugStringA(buf);
+
+                s_prevTry = m_collisionStats.stepTry;
+                s_prevOk = m_collisionStats.stepSuccess;
+                s_prevMask = m_collisionStats.stepFailMask;
+            }
+        }
     }
 
     void WorldState::ResolveFloorCollision()
@@ -740,6 +774,83 @@ namespace Engine
         sprintf_s(buf, "[FIXTURE] T3_CEIL id=%u AABB=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)\n",
             EXTRA_BASE, ceil.aabb.minX, ceil.aabb.minY, ceil.aabb.minZ,
             ceil.aabb.maxX, ceil.aabb.maxY, ceil.aabb.maxZ);
+        OutputDebugStringA(buf);
+    }
+
+    void WorldState::BuildStepUpGridTest()
+    {
+        const float TREAD = 0.60f;
+        const float WIDTH_H = 1.0f;
+        const int STEPS = 5;
+        const float BASE_Y = 3.0f;
+
+        // Capacity check (5 stairs * 5 steps + 1 ceiling = 26)
+        if (m_extras.size() + 26 > MAX_EXTRA_COLLIDERS) {
+            OutputDebugStringA("[STEP_GRID] ERROR: Exceeds MAX_EXTRA_COLLIDERS!\n");
+            return;
+        }
+
+        struct StairSpec { float ox, oz; bool dirX; float riser; const char* name; };
+        StairSpec stairs[] = {
+            {  5.0f,  5.0f, true,  0.20f, "A_Valid_X" },
+            {  5.0f, 15.0f, false, 0.25f, "B_Valid_Z" },
+            { 15.0f,  5.0f, true,  0.35f, "C_TooTall_X" },
+            { 15.0f, 15.0f, false, 0.40f, "D_TooTall_Z" },
+            { 25.0f, 10.0f, true,  0.20f, "E_Ceiling_X" },
+        };
+
+        char buf[256];
+        OutputDebugStringA("[STEP_GRID] === Building Stair Grid ===\n");
+
+        for (const auto& s : stairs)
+        {
+            for (int i = 0; i < STEPS; ++i)
+            {
+                ExtraCollider ec;
+                ec.type = ExtraColliderType::AABB;
+
+                if (s.dirX) {
+                    ec.aabb.minX = s.ox + i * TREAD;
+                    ec.aabb.maxX = s.ox + (i + 1) * TREAD;
+                    ec.aabb.minZ = s.oz - WIDTH_H;
+                    ec.aabb.maxZ = s.oz + WIDTH_H;
+                } else {
+                    ec.aabb.minX = s.ox - WIDTH_H;
+                    ec.aabb.maxX = s.ox + WIDTH_H;
+                    ec.aabb.minZ = s.oz + i * TREAD;
+                    ec.aabb.maxZ = s.oz + (i + 1) * TREAD;
+                }
+                ec.aabb.minY = BASE_Y;
+                ec.aabb.maxY = BASE_Y + (i + 1) * s.riser;
+
+                uint16_t id = static_cast<uint16_t>(EXTRA_BASE + m_extras.size());
+                m_extras.push_back(ec);
+                RegisterAABBToSpatialGrid(id, ec.aabb);
+
+                sprintf_s(buf, "[STEP_GRID] %s step=%d id=%u Y=[%.2f,%.2f]\n",
+                    s.name, i, id, ec.aabb.minY, ec.aabb.maxY);
+                OutputDebugStringA(buf);
+            }
+        }
+
+        // E Ceiling (UP_BLOCKED)
+        // headY = 3 + 5 = 8, ceiling.minY = 8.1 → blocks UP probe
+        ExtraCollider ceil;
+        ceil.type = ExtraColliderType::AABB;
+        ceil.aabb = { 24.0f, 8.1f, 9.0f, 28.0f, 10.0f, 11.0f };
+        uint16_t ceilId = static_cast<uint16_t>(EXTRA_BASE + m_extras.size());
+        m_extras.push_back(ceil);
+        RegisterAABBToSpatialGrid(ceilId, ceil.aabb);
+
+        // Verification assert log
+        float headY = BASE_Y + 5.0f;  // posY=3 + totalHeight=5 = 8
+        sprintf_s(buf, "[STEP_GRID] E_Ceiling id=%u minY=%.2f headY=%.2f (pre-step no overlap: %s, blocks UP: %s)\n",
+            ceilId, ceil.aabb.minY, headY,
+            (headY < ceil.aabb.minY) ? "YES" : "NO",
+            (ceil.aabb.minY < headY + 0.3f) ? "YES" : "NO");
+        OutputDebugStringA(buf);
+
+        sprintf_s(buf, "[STEP_GRID] Total extras=%zu\n", m_extras.size());
         OutputDebugStringA(buf);
     }
 
