@@ -535,7 +535,8 @@ namespace Renderer
                 // Row-major 4x4 scale+translate matrix (scale creates gaps between cubes)
                 // Day3.12 Fix: Match collision AABB Y=[0,3] half-height
                 const float scaleXZ = 0.9f;   // Half-width (matches cubeHalfXZ)
-                const float scaleY = 1.5f;    // Half-height = (cubeMaxY - cubeMinY) / 2
+                // DEBUG: Force idx 0 to have tiny scaleY - should show as dark cube at grid corner
+                const float scaleY = (idx == 0) ? 0.1f : 1.5f;
                 transforms[idx * 16 + 0] = scaleXZ;  transforms[idx * 16 + 1] = 0.0f;  transforms[idx * 16 + 2] = 0.0f;  transforms[idx * 16 + 3] = 0.0f;
                 transforms[idx * 16 + 4] = 0.0f;  transforms[idx * 16 + 5] = scaleY;  transforms[idx * 16 + 6] = 0.0f;  transforms[idx * 16 + 7] = 0.0f;
                 transforms[idx * 16 + 8] = 0.0f;  transforms[idx * 16 + 9] = 0.0f;  transforms[idx * 16 + 10] = scaleXZ; transforms[idx * 16 + 11] = 0.0f;
@@ -681,23 +682,25 @@ namespace Renderer
         // Get transforms buffer from registry
         ID3D12Resource* transformsResource = m_resourceRegistry.Get(ctx.transformsHandle);
 
-        // Debug: Verify buffer offset before copy
-        if (m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures)
+        // Debug: Verify buffer addresses match between copy and SRV
         {
-            char dbgBuf[256];
-            sprintf_s(dbgBuf, "[COPY_DBG] srcOffset=%llu transformsPtr=%p allocatorBuffer=%p\n",
-                transformsAlloc.offset,
-                transformsAlloc.cpuPtr,
-                ctx.uploadAllocator.GetBuffer());
+            char dbgBuf[512];
+
+            // Log copy destination buffer
+            sprintf_s(dbgBuf, "[COPY_DBG] destBuffer=%p srcOffset=%llu\n",
+                transformsResource,
+                transformsAlloc.offset);
             OutputDebugStringA(dbgBuf);
 
-            // Verify fixture transform at source location matches expected
-            // transformsAlloc.cpuPtr points to start of transforms array
-            float* srcT1 = reinterpret_cast<float*>(
-                static_cast<uint8_t*>(transformsAlloc.cpuPtr) +
-                m_worldState->GetFixtureT1Idx() * 64);
-            sprintf_s(dbgBuf, "[COPY_DBG] T1 at copy src: cy=%.2f sy=%.2f\n",
-                srcT1[13], srcT1[5]);
+            // Log index 0 scaleY value being copied
+            float* src0 = static_cast<float*>(transformsAlloc.cpuPtr);
+            sprintf_s(dbgBuf, "[COPY_DBG] idx0 scaleY=%.2f (expect 0.10)\n", src0[5]);
+            OutputDebugStringA(dbgBuf);
+
+            // Log which SRV will be bound (frame index)
+            uint32_t frameIdx = static_cast<uint32_t>(m_frameId % FrameCount);
+            sprintf_s(dbgBuf, "[SRV_DBG] frameId=%llu frameIdx=%u srvSlot=%u\n",
+                m_frameId, frameIdx, frameIdx);
             OutputDebugStringA(dbgBuf);
         }
 

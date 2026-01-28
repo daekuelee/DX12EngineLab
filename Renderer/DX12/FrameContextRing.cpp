@@ -133,6 +133,12 @@ namespace Renderer
         // Get raw resource from registry
         ID3D12Resource* transformsResource = m_registry->Get(ctx.transformsHandle);
         device->CreateShaderResourceView(transformsResource, &srvDesc, cpuHandle);
+
+        // Debug: Log which buffer this SRV points to
+        char dbgBuf[128];
+        sprintf_s(dbgBuf, "[SRV_INIT] frame=%u srvSlot=%u buffer=%p\n",
+            frameIndex, ctx.srvSlot, transformsResource);
+        OutputDebugStringA(dbgBuf);
     }
 
     D3D12_GPU_DESCRIPTOR_HANDLE FrameContextRing::GetSrvGpuHandle(uint32_t frameIndex) const
