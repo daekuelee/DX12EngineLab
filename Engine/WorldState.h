@@ -81,6 +81,15 @@ namespace Engine
         float depenMaxSingleMag = 0.0f;
         uint32_t depenOverlapCount = 0;
         uint32_t depenIterations = 0;
+        // Day3.11 Phase 3: Capsule sweep diagnostics
+        bool sweepHit = false;
+        float sweepTOI = 1.0f;
+        int32_t sweepHitCubeIdx = -1;
+        uint32_t sweepCandCount = 0;
+        float sweepReqDx = 0.0f, sweepReqDz = 0.0f;
+        float sweepAppliedDx = 0.0f, sweepAppliedDz = 0.0f;
+        float sweepSlideDx = 0.0f, sweepSlideDz = 0.0f;
+        float sweepNormalX = 0.0f, sweepNormalZ = 0.0f;
     };
     // Input state sampled each frame
     struct InputState
@@ -188,9 +197,10 @@ namespace Engine
         float cubeMaxY = 3.0f;
 
         // Day3.11: Capsule SSOT (feet-bottom anchor)
-        // Total height = 2*r + 2*hh = 2*0.8 + 2*1.7 = 5.0 (matches pawnHeight)
-        float capsuleRadius = 0.8f;
-        float capsuleHalfHeight = 1.7f;
+        // Total height = 2*r + 2*hh = 2*1.4 + 2*1.1 = 5.0 (matches pawnHeight)
+        // Radius matches pawnHalfExtentX (1.4) for visual consistency
+        float capsuleRadius = 1.4f;
+        float capsuleHalfHeight = 1.1f;
     };
 
     class WorldState
@@ -283,5 +293,12 @@ namespace Engine
         void ResolveXZ_MTV(float& newX, float& newZ, float newY);
         // Day3.11 Phase 2: Capsule depenetration
         void ResolveOverlaps_Capsule();
+        // Day3.11 Phase 3: Capsule XZ sweep/slide
+        void SweepXZ_Capsule(float reqDx, float reqDz, float& outAppliedDx, float& outAppliedDz,
+                             bool& outZeroVelX, bool& outZeroVelZ);
+        // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
+        void ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY);
+        // Day3.11 Phase 3 Debug: Scan max XZ penetration depth (for instrumentation)
+        float ScanMaxXZPenetration(float posX, float posY, float posZ);
     };
 }

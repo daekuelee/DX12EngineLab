@@ -96,6 +96,15 @@ namespace Renderer
         float depenMaxSingleMag = 0.0f;
         uint32_t depenOverlapCount = 0;
         uint32_t depenIterations = 0;
+        // Day3.11 Phase 3: Capsule sweep diagnostics
+        bool sweepHit = false;
+        float sweepTOI = 1.0f;
+        int32_t sweepHitCubeIdx = -1;
+        uint32_t sweepCandCount = 0;
+        float sweepReqDx = 0.0f, sweepReqDz = 0.0f;
+        float sweepAppliedDx = 0.0f, sweepAppliedDz = 0.0f;
+        float sweepSlideDx = 0.0f, sweepSlideDz = 0.0f;
+        float sweepNormalX = 0.0f, sweepNormalZ = 0.0f;
     };
     class Dx12Context
     {

@@ -261,6 +261,19 @@ namespace Renderer
         m_worldState.depenMaxSingleMag = snap.depenMaxSingleMag;
         m_worldState.depenOverlapCount = snap.depenOverlapCount;
         m_worldState.depenIterations = snap.depenIterations;
+        // Day3.11 Phase 3: Capsule sweep
+        m_worldState.sweepHit = snap.sweepHit;
+        m_worldState.sweepTOI = snap.sweepTOI;
+        m_worldState.sweepHitCubeIdx = snap.sweepHitCubeIdx;
+        m_worldState.sweepCandCount = snap.sweepCandCount;
+        m_worldState.sweepReqDx = snap.sweepReqDx;
+        m_worldState.sweepReqDz = snap.sweepReqDz;
+        m_worldState.sweepAppliedDx = snap.sweepAppliedDx;
+        m_worldState.sweepAppliedDz = snap.sweepAppliedDz;
+        m_worldState.sweepSlideDx = snap.sweepSlideDx;
+        m_worldState.sweepSlideDz = snap.sweepSlideDz;
+        m_worldState.sweepNormalX = snap.sweepNormalX;
+        m_worldState.sweepNormalZ = snap.sweepNormalZ;
         m_hasWorldState = true;
     }
 
@@ -312,6 +325,20 @@ namespace Renderer
                 }
                 else
                     ImGui::Text("Clear");
+                ImGui::Separator();
+                ImGui::Text("-- Sweep --");
+                if (m_worldState.sweepHit)
+                {
+                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "HIT cube=%d", m_worldState.sweepHitCubeIdx);
+                    ImGui::Text("TOI:%.4f n=(%.2f,%.2f)", m_worldState.sweepTOI, m_worldState.sweepNormalX, m_worldState.sweepNormalZ);
+                }
+                else
+                    ImGui::Text("Clear");
+                ImGui::Text("Cand:%u", m_worldState.sweepCandCount);
+                ImGui::Text("Req:(%.3f,%.3f)", m_worldState.sweepReqDx, m_worldState.sweepReqDz);
+                ImGui::Text("App:(%.3f,%.3f)", m_worldState.sweepAppliedDx, m_worldState.sweepAppliedDz);
+                if (m_worldState.sweepSlideDx != 0.0f || m_worldState.sweepSlideDz != 0.0f)
+                    ImGui::Text("Slide:(%.3f,%.3f)", m_worldState.sweepSlideDx, m_worldState.sweepSlideDz);
             }
 
             // World State section (Day3) - only show in ThirdPerson mode
