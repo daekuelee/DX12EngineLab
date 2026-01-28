@@ -8,6 +8,7 @@ struct PSInput
     float3 WorldPos : TEXCOORD0;
     float3 Normal : TEXCOORD1;
     uint InstanceID : TEXCOORD2;
+    float ScaleY : TEXCOORD3;     // Day3.12: For fixture debug highlighting
 };
 
 float3 HueToRGB(float hue)
@@ -25,6 +26,14 @@ float4 PSMain(PSInput pin, uint primID : SV_PrimitiveID) : SV_Target
     }
 
     float3 color;
+
+    // Day3.12: Fixture debug highlighting - bright magenta for small scaleY (fixtures)
+    // Fixtures have scaleY <= 0.3 (h=0.2 -> sy=0.1, h=0.6 -> sy=0.3)
+    // Regular cubes have scaleY = 1.5
+    if (pin.ScaleY < 0.5)
+    {
+        return float4(1.0, 0.0, 1.0, 1.0);  // Bright magenta for fixtures
+    }
 
     if (ColorMode == COLOR_MODE_FACE_DEBUG)
     {
