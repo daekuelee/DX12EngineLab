@@ -283,6 +283,10 @@ namespace Engine
         void ToggleControllerMode();
         void RespawnResetControllerState();
 
+        // Day3.12+: Step-up grid test toggle
+        bool IsStepUpGridTestEnabled() const { return m_config.enableStepUpGridTest; }
+        void ToggleStepUpGridTest();
+
         // Part 2: Collision stats accessor
         const CollisionStats& GetCollisionStats() const { return m_collisionStats; }
 
@@ -335,6 +339,9 @@ namespace Engine
         void BuildExtraFixtures();
         void BuildStepUpGridTest();  // Day3.12: Stair grid test map
         void RegisterAABBToSpatialGrid(uint16_t id, const AABB& aabb);
+
+        // Day3.12+: Track if step grid was ever built (for safe toggle)
+        bool m_stepGridWasEverEnabled = false;
 
         // Private helpers
         void ResolveFloorCollision();

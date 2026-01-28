@@ -240,6 +240,7 @@ namespace Engine
         if (m_config.enableStepUpGridTest)
         {
             BuildStepUpGridTest();
+            m_stepGridWasEverEnabled = true;
         }
         else if (m_config.enableStepUpTestFixtures)
         {
@@ -682,6 +683,28 @@ namespace Engine
         char buf[64];
         sprintf_s(buf, "[MODE] ctrl=%s\n", name);
         OutputDebugStringA(buf);
+    }
+
+    void WorldState::ToggleStepUpGridTest()
+    {
+        bool newValue = !m_config.enableStepUpGridTest;
+        if (newValue && !m_stepGridWasEverEnabled)
+        {
+            m_config.enableStepUpGridTest = true;
+            BuildStepUpGridTest();
+            m_stepGridWasEverEnabled = true;
+            OutputDebugStringA("[STEP_GRID] Toggle => 1 (built)\n");
+        }
+        else if (newValue)
+        {
+            m_config.enableStepUpGridTest = true;
+            OutputDebugStringA("[STEP_GRID] Toggle => 1 (already built)\n");
+        }
+        else
+        {
+            m_config.enableStepUpGridTest = false;
+            OutputDebugStringA("[STEP_GRID] Toggle => 0 (restart to purge)\n");
+        }
     }
 
     void WorldState::RespawnResetControllerState()
@@ -2202,6 +2225,10 @@ namespace Engine
         snap.stepFailMask = m_collisionStats.stepFailMask;
         snap.stepHeightUsed = m_collisionStats.stepHeightUsed;
         snap.stepCubeIdx = m_collisionStats.stepCubeIdx;
+
+        // Day3.12+: Step grid test toggle state
+        snap.stepGridTestEnabled = m_config.enableStepUpGridTest;
+        snap.stepGridWasEverEnabled = m_stepGridWasEverEnabled;
 
         return snap;
     }

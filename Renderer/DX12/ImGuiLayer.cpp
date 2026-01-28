@@ -286,6 +286,9 @@ namespace Renderer
         m_worldState.stepFailMask = snap.stepFailMask;
         m_worldState.stepHeightUsed = snap.stepHeightUsed;
         m_worldState.stepCubeIdx = snap.stepCubeIdx;
+        // Day3.12+: Step grid test toggle state
+        m_worldState.stepGridTestEnabled = snap.stepGridTestEnabled;
+        m_worldState.stepGridWasEverEnabled = snap.stepGridWasEverEnabled;
         m_hasWorldState = true;
     }
 
@@ -319,6 +322,17 @@ namespace Renderer
             ImGui::Text("CamMode: %s [V]", ToggleSystem::GetCameraModeName());
             const char* ctrlMode = (m_worldState.controllerMode == 0) ? "AABB" : "Capsule";
             ImGui::Text("Ctrl: %s [F6]", ctrlMode);
+            // GridTest indicator
+            if (m_worldState.stepGridWasEverEnabled)
+            {
+                if (m_worldState.stepGridTestEnabled)
+                    ImGui::Text("GridTest: ON [F7]");
+                else
+                    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "GridTest: OFF* [F7]");
+            }
+            else
+                ImGui::Text("GridTest: OFF [F7]");
+            ImGui::Text("Verbose: %s [F8]", ToggleSystem::IsHudVerboseEnabled() ? "ON" : "OFF");
             if (m_worldState.controllerMode == 1)
             {
                 ImGui::Text("  r=%.2f hh=%.2f", m_worldState.capsuleRadius, m_worldState.capsuleHalfHeight);
@@ -421,15 +435,18 @@ namespace Renderer
                     ImGui::Text("LastHit: cube=%d axis=%s", m_worldState.lastHitCubeId, axisName);
                 }
 
-                // Day3.4: Iteration solver diagnostics
-                ImGui::Separator();
-                ImGui::Text("-- Solver --");
-                if (m_worldState.hitMaxIter)
-                    ImGui::TextColored(ImVec4(1,0.3f,0,1), "Solver: HIT_MAX_ITER (%u/8)", m_worldState.iterationsUsed);
-                else
-                    ImGui::Text("SolverIter: %u/8", m_worldState.iterationsUsed);
-                if (m_worldState.maxPenetrationAbs > 0.001f)
-                    ImGui::TextColored(ImVec4(1,0.5f,0,1), "MaxPenAbs: %.4f", m_worldState.maxPenetrationAbs);
+                // Day3.4: Iteration solver diagnostics (verbose)
+                if (ToggleSystem::IsHudVerboseEnabled())
+                {
+                    ImGui::Separator();
+                    ImGui::Text("-- Solver --");
+                    if (m_worldState.hitMaxIter)
+                        ImGui::TextColored(ImVec4(1,0.3f,0,1), "Solver: HIT_MAX_ITER (%u/8)", m_worldState.iterationsUsed);
+                    else
+                        ImGui::Text("SolverIter: %u/8", m_worldState.iterationsUsed);
+                    if (m_worldState.maxPenetrationAbs > 0.001f)
+                        ImGui::TextColored(ImVec4(1,0.5f,0,1), "MaxPenAbs: %.4f", m_worldState.maxPenetrationAbs);
+                }
 
                 // Day3.5: Support diagnostics
                 ImGui::Separator();
@@ -444,54 +461,73 @@ namespace Renderer
                 ImGui::Text("Snapped: %s  Gap: %.4f", m_worldState.snappedThisTick ? "YES" : "NO", m_worldState.supportGap);
                 ImGui::Text("contacts: %u", m_worldState.contacts);
 
-                // Floor bounds reference
-                ImGui::Separator();
-                ImGui::Text("-- Floor Bounds --");
-                ImGui::Text("posX: %.2f  posZ: %.2f", m_worldState.posX, m_worldState.posZ);
-                ImGui::Text("posY (feet): %.3f", m_worldState.posY);
-                ImGui::Text("velY: %.2f", m_worldState.velY);
-                ImGui::Text("inBounds: %s", m_worldState.inFloorBounds ? "YES" : "NO");
-                ImGui::Text("Bounds: X[%.0f,%.0f] Z[%.0f,%.0f]",
-                    m_worldState.floorMinX, m_worldState.floorMaxX,
-                    m_worldState.floorMinZ, m_worldState.floorMaxZ);
+                // Floor bounds reference (verbose)
+                if (ToggleSystem::IsHudVerboseEnabled())
+                {
+                    ImGui::Separator();
+                    ImGui::Text("-- Floor Bounds --");
+                    ImGui::Text("posX: %.2f  posZ: %.2f", m_worldState.posX, m_worldState.posZ);
+                    ImGui::Text("posY (feet): %.3f", m_worldState.posY);
+                    ImGui::Text("velY: %.2f", m_worldState.velY);
+                    ImGui::Text("inBounds: %s", m_worldState.inFloorBounds ? "YES" : "NO");
+                    ImGui::Text("Bounds: X[%.0f,%.0f] Z[%.0f,%.0f]",
+                        m_worldState.floorMinX, m_worldState.floorMaxX,
+                        m_worldState.floorMinZ, m_worldState.floorMaxZ);
+                }
 
-                // Day3.7: Camera basis proof (Bug A)
-                ImGui::Separator();
-                ImGui::Text("-- Camera Basis --");
-                ImGui::Text("Fwd: (%.2f, %.2f)", m_worldState.camFwdX, m_worldState.camFwdZ);
-                ImGui::Text("Right: (%.2f, %.2f)", m_worldState.camRightX, m_worldState.camRightZ);
-                ImGui::Text("Dot: %.4f", m_worldState.camDot);
+                // Day3.7: Camera basis proof (Bug A) (verbose)
+                if (ToggleSystem::IsHudVerboseEnabled())
+                {
+                    ImGui::Separator();
+                    ImGui::Text("-- Camera Basis --");
+                    ImGui::Text("Fwd: (%.2f, %.2f)", m_worldState.camFwdX, m_worldState.camFwdZ);
+                    ImGui::Text("Right: (%.2f, %.2f)", m_worldState.camRightX, m_worldState.camRightZ);
+                    ImGui::Text("Dot: %.4f", m_worldState.camDot);
+                }
 
-                // Day3.7: Collision extent proof (Bug C)
-                ImGui::Separator();
-                ImGui::Text("-- Collision Extent --");
-                ImGui::Text("Extent: X=%.2f Z=%.2f", m_worldState.pawnExtentX, m_worldState.pawnExtentZ);
+                // Day3.7: Collision extent proof (Bug C) (verbose)
+                if (ToggleSystem::IsHudVerboseEnabled())
+                {
+                    ImGui::Separator();
+                    ImGui::Text("-- Collision Extent --");
+                    ImGui::Text("Extent: X=%.2f Z=%.2f", m_worldState.pawnExtentX, m_worldState.pawnExtentZ);
+                }
 
-                // Day3.8: MTV debug (Issue A proof)
-                ImGui::Separator();
-                ImGui::Text("-- MTV Debug --");
-                const char* mtvAxisName = (m_worldState.mtvAxis == 0) ? "X" : "Z";
-                ImGui::Text("penX=%.3f penZ=%.3f", m_worldState.mtvPenX, m_worldState.mtvPenZ);
-                ImGui::Text("MTV: axis=%s mag=%.3f", mtvAxisName, m_worldState.mtvMagnitude);
-                ImGui::Text("centerDiff: X=%.2f Z=%.2f", m_worldState.mtvCenterDiffX, m_worldState.mtvCenterDiffZ);
+                // Day3.8: MTV debug (Issue A proof) (verbose)
+                if (ToggleSystem::IsHudVerboseEnabled())
+                {
+                    ImGui::Separator();
+                    ImGui::Text("-- MTV Debug --");
+                    const char* mtvAxisName = (m_worldState.mtvAxis == 0) ? "X" : "Z";
+                    ImGui::Text("penX=%.3f penZ=%.3f", m_worldState.mtvPenX, m_worldState.mtvPenZ);
+                    ImGui::Text("MTV: axis=%s mag=%.3f", mtvAxisName, m_worldState.mtvMagnitude);
+                    ImGui::Text("centerDiff: X=%.2f Z=%.2f", m_worldState.mtvCenterDiffX, m_worldState.mtvCenterDiffZ);
+                }
 
-                // Day3.9: Separation proof
-                ImGui::Separator();
-                ImGui::Text("-- Day3.9 Debug --");
-                ImGui::Text("xzStillOverlap: %s", m_worldState.xzStillOverlapping ? "YES" : "NO");
-                ImGui::Text("yStepUpSkip: %s  yDelta: %.3f",
-                    m_worldState.yStepUpSkipped ? "YES" : "NO", m_worldState.yDeltaApplied);
+                // Day3.9: Separation proof (verbose)
+                if (ToggleSystem::IsHudVerboseEnabled())
+                {
+                    ImGui::Separator();
+                    ImGui::Text("-- Day3.9 Debug --");
+                    ImGui::Text("xzStillOverlap: %s", m_worldState.xzStillOverlapping ? "YES" : "NO");
+                    ImGui::Text("yStepUpSkip: %s  yDelta: %.3f",
+                        m_worldState.yStepUpSkipped ? "YES" : "NO", m_worldState.yDeltaApplied);
+                }
 
-                ImGui::Separator();
-                ImGui::Text("-- Render Passes --");
-                // Character pass is always active in ThirdPerson mode
-                bool gridActive = ToggleSystem::IsGridEnabled();
-                bool charActive = (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson);
-                ImGui::Text("Passes: Grid=%s Char=%s",
-                    gridActive ? "ON" : "OFF",
-                    charActive ? "ON" : "OFF");
-                if (charActive)
-                    ImGui::Text("Character Parts: 6");
+                // Render Passes (verbose)
+                if (ToggleSystem::IsHudVerboseEnabled())
+                {
+                    ImGui::Separator();
+                    ImGui::Text("-- Render Passes --");
+                    // Character pass is always active in ThirdPerson mode
+                    bool gridActive = ToggleSystem::IsGridEnabled();
+                    bool charActive = (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson);
+                    ImGui::Text("Passes: Grid=%s Char=%s",
+                        gridActive ? "ON" : "OFF",
+                        charActive ? "ON" : "OFF");
+                    if (charActive)
+                        ImGui::Text("Character Parts: 6");
+                }
             }
 
             // Upload diagnostics section (Day2) - only show when diag mode enabled AND metrics valid
@@ -535,6 +571,9 @@ namespace Renderer
                 ImGui::BulletText("C: Cycle Color Mode");
                 ImGui::BulletText("G: Toggle Grid");
                 ImGui::BulletText("U: Upload Diagnostics");
+                ImGui::BulletText("F6: Controller Mode");
+                ImGui::BulletText("F7: Toggle GridTest");
+                ImGui::BulletText("F8: Toggle HUD Verbose");
                 if (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson)
                 {
                     ImGui::BulletText("WASD: Move (cam-relative)");

@@ -115,6 +115,10 @@ namespace Renderer
         static void SetOpaquePSO(bool enabled) { s_opaquePSO = enabled; }
         static void ToggleOpaquePSO() { s_opaquePSO = !s_opaquePSO; }
 
+        // Day3.12+: HUD verbose toggle (F8 key) - show/hide detailed debug sections
+        static bool IsHudVerboseEnabled() { return s_hudVerbose; }
+        static void ToggleHudVerbose() { s_hudVerbose = !s_hudVerbose; }
+
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
         static inline ColorMode s_colorMode = ColorMode::FaceDebug;
@@ -140,5 +144,8 @@ namespace Renderer
 
         // Task B: Opaque PSO toggle - OFF by default (uses normal PSO)
         static inline bool s_opaquePSO = false;
+
+        // Day3.12+: HUD verbose toggle - OFF by default (decluttered HUD)
+        static inline bool s_hudVerbose = false;
     };
 }

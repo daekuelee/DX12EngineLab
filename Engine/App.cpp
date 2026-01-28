@@ -140,4 +140,9 @@ namespace Engine
     {
         m_worldState.ToggleControllerMode();
     }
+
+    void App::ToggleStepUpGridTest()
+    {
+        m_worldState.ToggleStepUpGridTest();
+    }
 }

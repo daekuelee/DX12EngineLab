@@ -135,6 +135,9 @@ namespace Renderer
             uint8_t stepFailMask = 0;
             float stepHeightUsed = 0.0f;
             int32_t stepCubeIdx = -1;
+            // Day3.12+: Step grid test toggle state
+            bool stepGridTestEnabled = false;
+            bool stepGridWasEverEnabled = false;
         } m_worldState;
         bool m_hasWorldState = false;
     };
