@@ -230,6 +230,9 @@ namespace Engine
         // Day3.12 Phase 4B: Step-up config
         bool enableStepUp = true;   // Toggle for step-up auto-climb
         float maxStepHeight = 0.3f; // Max obstacle height to climb
+
+        // Day3.12 Phase 4B: Test fixture config
+        bool enableStepUpTestFixtures = true;  // Test fixture toggle
     };
 
     class WorldState
@@ -300,6 +303,13 @@ namespace Engine
         static constexpr int GRID_SIZE = 100;
         std::vector<uint16_t> m_spatialGrid[GRID_SIZE][GRID_SIZE];
         bool m_spatialGridBuilt = false;
+
+        // Day3.12 Phase 4B: Test fixture indices (computed from world coords)
+        uint16_t m_fixtureT1Idx = 0;
+        uint16_t m_fixtureT2Idx = 0;
+        uint16_t m_fixtureT3StepIdx = 0;
+        static constexpr uint16_t FIXTURE_T3_CEIL_IDX = 10000;
+        AABB m_fixtureT3CeilingAABB = {};
 
         // Private helpers
         void ResolveFloorCollision();
