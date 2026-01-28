@@ -197,9 +197,10 @@ namespace Engine
         float cubeMaxY = 3.0f;
 
         // Day3.11: Capsule SSOT (feet-bottom anchor)
-        // Total height = 2*r + 2*hh = 2*0.8 + 2*1.7 = 5.0 (matches pawnHeight)
-        float capsuleRadius = 0.8f;
-        float capsuleHalfHeight = 1.7f;
+        // Total height = 2*r + 2*hh = 2*1.4 + 2*1.1 = 5.0 (matches pawnHeight)
+        // Radius matches pawnHalfExtentX (1.4) for visual consistency
+        float capsuleRadius = 1.4f;
+        float capsuleHalfHeight = 1.1f;
     };
 
     class WorldState
@@ -297,5 +298,7 @@ namespace Engine
                              bool& outZeroVelX, bool& outZeroVelZ);
         // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
         void ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY);
+        // Day3.11 Phase 3 Debug: Scan max XZ penetration depth (for instrumentation)
+        float ScanMaxXZPenetration(float posX, float posY, float posZ);
     };
 }

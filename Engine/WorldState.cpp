@@ -5,6 +5,9 @@
 #include <algorithm>  // For std::sort, std::unique
 #include <Windows.h>  // For OutputDebugStringA
 
+// Day3.11 Debug: Uncomment to log when Y-resolve introduces XZ penetration
+// #define DEBUG_Y_XZ_PEN
+
 using namespace DirectX;
 
 // Day3.11 Phase 2: Capsule geometry helpers
@@ -61,6 +64,15 @@ namespace
         ClosestPointsSegmentAABB(segA, segB, box, onSeg, onBox);
         float dx = onSeg.x - onBox.x, dy = onSeg.y - onBox.y, dz = onSeg.z - onBox.z;
         float distSq = dx * dx + dy * dy + dz * dz;
+#ifdef DEBUG_Y_XZ_PEN
+        {
+            float dist = sqrtf(distSq);
+            char buf[200];
+            sprintf_s(buf, "[OVERLAP_DETAIL] onSeg=(%.3f,%.3f,%.3f) onBox=(%.3f,%.3f,%.3f) dist=%.4f r=%.4f diff=%.6f\n",
+                onSeg.x, onSeg.y, onSeg.z, onBox.x, onBox.y, onBox.z, dist, r, r - dist);
+            OutputDebugStringA(buf);
+        }
+#endif
         if (distSq > r * r) return res;
         res.hit = true;
         float dist = sqrtf(distSq);
@@ -111,6 +123,21 @@ namespace
 
         if (tEnter > tExit || tExit < 0.0f || tEnter > 1.0f)
             return res;
+
+        // FIX: If starting inside/at boundary (tEnter <= 0), only block if moving deeper
+        // Allow escape if movement takes us toward the exit face
+        if (tEnter <= 0.0f)
+        {
+            // We're inside or at boundary. Check if movement is toward exit.
+            // tExit > 0 means we'll exit eventually, but we need to check direction.
+            // If the "entering" axis has tNear < 0, we're already past that face.
+            // Only block if we're moving toward a face we haven't crossed yet.
+
+            // Simple heuristic: if BOTH tNearX and tNearZ are negative (fully inside),
+            // allow movement (let cleanup handle any resulting penetration)
+            if (tNearX < -0.001f && tNearZ < -0.001f)
+                return res;  // Fully inside, allow escape
+        }
 
         res.hit = true;
         res.t = fmaxf(tEnter, 0.0f);
@@ -387,8 +414,36 @@ namespace Engine
 
             // Y axis (both modes)
             float prevY = newY;
+#ifdef DEBUG_Y_XZ_PEN
+            float preYPenXZ = (m_controllerMode == ControllerMode::Capsule)
+                ? ScanMaxXZPenetration(newX, newY, newZ) : 0.0f;
+#endif
             ResolveAxis(newY, newX, newY, newZ, Axis::Y, prevPawnBottom);
             totalDelta += fabsf(newY - prevY);
+
+#ifdef DEBUG_Y_XZ_PEN
+            if (m_controllerMode == ControllerMode::Capsule)
+            {
+                float postYPenXZ = ScanMaxXZPenetration(newX, newY, newZ);
+                if (postYPenXZ > preYPenXZ + 0.001f)
+                {
+                    char buf[128];
+                    sprintf_s(buf, "[POST_Y_PEN] Y-resolve introduced XZ pen: pre=%.4f post=%.4f\n",
+                        preYPenXZ, postYPenXZ);
+                    OutputDebugStringA(buf);
+                }
+            }
+#endif
+
+            // Day3.11 Fix: Post-Y XZ cleanup for Capsule mode
+            // Y-resolve can push capsule into walls, creating new XZ penetration
+            // Must run cleanup AFTER Y-resolve to maintain XZ invariant
+            if (m_controllerMode == ControllerMode::Capsule)
+            {
+                float prevX2 = newX, prevZ2 = newZ;
+                ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
+                totalDelta += fabsf(newX - prevX2) + fabsf(newZ - prevZ2);
+            }
 
             m_collisionStats.iterationsUsed = static_cast<uint8_t>(iter + 1);
 
@@ -1172,7 +1227,7 @@ namespace Engine
     // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
     void WorldState::ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY)
     {
-        const float MAX_XZ_CLEANUP = 1.0f;  // Must cover capsuleRadius (0.8f) + margin
+        const float MAX_XZ_CLEANUP = 1.6f;  // Must cover capsuleRadius (1.4f) + margin
         const float MIN_CLEANUP_DIST = 0.001f;
 
         float r = m_config.capsuleRadius;
@@ -1187,12 +1242,31 @@ namespace Engine
         std::sort(candidates.begin(), candidates.end());
         candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
 
+#ifdef DEBUG_Y_XZ_PEN
+        if (!candidates.empty())
+        {
+            char buf[128];
+            sprintf_s(buf, "[CLEANUP_QUERY] pos=(%.2f,%.2f,%.2f) cand=%zu\n",
+                newX, newY, newZ, candidates.size());
+            OutputDebugStringA(buf);
+        }
+#endif
+
         float pushX = 0.0f, pushZ = 0.0f;
 
         for (uint16_t idx : candidates)
         {
             AABB cube = GetCubeAABB(idx);
             CapsuleOverlapResult ov = CapsuleAABBOverlap(newY, newX, newZ, r, hh, cube);
+#ifdef DEBUG_Y_XZ_PEN
+            {
+                char buf[180];
+                sprintf_s(buf, "[CLEANUP_TEST] idx=%d hit=%d depth=%.4f n=(%.2f,%.2f,%.2f) cube=(%.1f-%.1f,%.1f-%.1f,%.1f-%.1f)\n",
+                    idx, ov.hit ? 1 : 0, ov.depth, ov.normal.x, ov.normal.y, ov.normal.z,
+                    cube.minX, cube.maxX, cube.minY, cube.maxY, cube.minZ, cube.maxZ);
+                OutputDebugStringA(buf);
+            }
+#endif
             if (ov.hit && ov.depth > MIN_CLEANUP_DIST)
             {
                 char buf[160];
@@ -1221,6 +1295,38 @@ namespace Engine
             sprintf_s(buf, "[XZ_CLEANUP] push=(%.4f,%.4f)\n", pushX, pushZ);
             OutputDebugStringA(buf);
         }
+    }
+
+    // Day3.11 Phase 3 Debug: Scan max XZ penetration depth (for instrumentation)
+    float WorldState::ScanMaxXZPenetration(float posX, float posY, float posZ)
+    {
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+
+        AABB capAABB;
+        capAABB.minX = posX - r;  capAABB.maxX = posX + r;
+        capAABB.minY = posY;       capAABB.maxY = posY + 2.0f * r + 2.0f * hh;
+        capAABB.minZ = posZ - r;  capAABB.maxZ = posZ + r;
+
+        std::vector<uint16_t> candidates = QuerySpatialHash(capAABB);
+
+        float maxPen = 0.0f;
+        for (uint16_t idx : candidates)
+        {
+            AABB cube = GetCubeAABB(idx);
+            CapsuleOverlapResult ov = CapsuleAABBOverlap(posY, posX, posZ, r, hh, cube);
+            if (ov.hit)
+            {
+                // XZ component of penetration (ignore Y-dominant contacts)
+                float xzNormalMag = sqrtf(ov.normal.x * ov.normal.x + ov.normal.z * ov.normal.z);
+                if (xzNormalMag > 0.3f)  // Wall-like contact
+                {
+                    float xzPen = ov.depth * xzNormalMag;
+                    if (xzPen > maxPen) maxPen = xzPen;
+                }
+            }
+        }
+        return maxPen;
     }
 
     void WorldState::TickFrame(float frameDt)
