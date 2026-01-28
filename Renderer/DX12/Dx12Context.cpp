@@ -521,7 +521,7 @@ namespace Renderer
             {
                 // Identity matrix with translation
                 float tx = static_cast<float>(x) * 2.0f - 99.0f; // Center grid
-                float ty = 0.0f;
+                float ty = 1.5f;  // Day3.12 Fix: Match collision AABB Y=[0,3] center
                 float tz = static_cast<float>(z) * 2.0f - 99.0f;
 
                 // S7 Proof: sentinel_Instance0 - move instance 0 to distinct position
@@ -533,9 +533,9 @@ namespace Renderer
                 }
 
                 // Row-major 4x4 scale+translate matrix (scale creates gaps between cubes)
-                // TEMP: Tall boxes to verify volumetric depth (side faces visible)
-                const float scaleXZ = 0.9f;   // Wider for visibility
-                const float scaleY = 3.0f;    // Tall boxes to show side faces
+                // Day3.12 Fix: Match collision AABB Y=[0,3] half-height
+                const float scaleXZ = 0.9f;   // Half-width (matches cubeHalfXZ)
+                const float scaleY = 1.5f;    // Half-height = (cubeMaxY - cubeMinY) / 2
                 transforms[idx * 16 + 0] = scaleXZ;  transforms[idx * 16 + 1] = 0.0f;  transforms[idx * 16 + 2] = 0.0f;  transforms[idx * 16 + 3] = 0.0f;
                 transforms[idx * 16 + 4] = 0.0f;  transforms[idx * 16 + 5] = scaleY;  transforms[idx * 16 + 6] = 0.0f;  transforms[idx * 16 + 7] = 0.0f;
                 transforms[idx * 16 + 8] = 0.0f;  transforms[idx * 16 + 9] = 0.0f;  transforms[idx * 16 + 10] = scaleXZ; transforms[idx * 16 + 11] = 0.0f;
