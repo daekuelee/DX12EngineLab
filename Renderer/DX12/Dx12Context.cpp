@@ -651,7 +651,17 @@ namespace Renderer
         inputs.geoInputs.colorMode = ToggleSystem::GetColorMode();
         inputs.geoInputs.gridEnabled = ToggleSystem::IsGridEnabled();
         inputs.geoInputs.markersEnabled = ToggleSystem::IsMarkersEnabled();
-        inputs.geoInputs.instanceCount = InstanceCount;
+        // Day3.12 Phase 4B+ Fix: Use generated count with safety clamp
+        uint32_t maxDrawCount = InstanceCount + MaxExtraInstances;
+        uint32_t drawCount = m_generatedTransformCount;
+        if (drawCount > maxDrawCount)
+        {
+            char buf[128];
+            sprintf_s(buf, "[MT1] CLAMP: gen=%u > max=%u, clamping\n", drawCount, maxDrawCount);
+            OutputDebugStringA(buf);
+            drawCount = maxDrawCount;
+        }
+        inputs.geoInputs.instanceCount = drawCount;
         // MT1: Pass generated transform count and frame ID for validation
         inputs.geoInputs.generatedTransformCount = m_generatedTransformCount;
         inputs.geoInputs.frameId = m_frameId;
