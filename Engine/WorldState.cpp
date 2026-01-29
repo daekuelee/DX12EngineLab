@@ -162,13 +162,13 @@ namespace
         float expMinZ = cube.minZ - r;
         float expMaxZ = cube.maxZ + r;
 
-        // FIX: When grounded, use capsule BODY (excluding bottom hemisphere) for Y-overlap.
-        // This prevents floor-level hemisphere from causing false wall hits.
+        // FIX: When grounded, include bottom hemisphere for step-height obstacle detection.
+        // The SUPPORT_EPS check below (line 188) prevents false hits on cubes we're standing ON.
         float capMinY, capMaxY;
         if (onGround)
         {
-            // Grounded: only check body (above bottom hemisphere)
-            capMinY = feetY + r;   // Start at center of bottom sphere
+            // Grounded: include full capsule so we detect step-height obstacles
+            capMinY = feetY;
             capMaxY = feetY + 2.0f * r + 2.0f * hh;
         }
         else
