@@ -747,6 +747,15 @@ namespace Engine
                 OutputDebugStringA("[STEP_GRID] Toggle => 0 (no fixtures)\n");
             }
         }
+
+        // MODE_SNAPSHOT: Log exact state after toggle
+        char snap[256];
+        sprintf_s(snap, "[MODE_SNAPSHOT] fixtures=%d gridTest=%d stepUp=%d extrasCount=%zu\n",
+            m_config.enableStepUpTestFixtures ? 1 : 0,
+            m_config.enableStepUpGridTest ? 1 : 0,
+            m_config.enableStepUp ? 1 : 0,
+            m_extras.size());
+        OutputDebugStringA(snap);
     }
 
     void WorldState::RespawnResetControllerState()
@@ -843,21 +852,7 @@ namespace Engine
     void WorldState::BuildExtraFixtures()
     {
         m_extras.clear();
-        float hxz = m_config.cubeHalfXZ;  // 0.9
-
-        // T3 Ceiling: floating at (15, 5.1..8.0, 9)
-        ExtraCollider ceil;
-        ceil.type = ExtraColliderType::AABB;
-        ceil.aabb = { 15.0f - hxz, 5.1f, 9.0f - hxz,
-                      15.0f + hxz, 8.0f, 9.0f + hxz };
-        m_extras.push_back(ceil);
-        RegisterAABBToSpatialGrid(static_cast<uint16_t>(EXTRA_BASE), ceil.aabb);
-
-        char buf[256];
-        sprintf_s(buf, "[FIXTURE] T3_CEIL id=%u AABB=(%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f)\n",
-            EXTRA_BASE, ceil.aabb.minX, ceil.aabb.minY, ceil.aabb.minZ,
-            ceil.aabb.maxX, ceil.aabb.maxY, ceil.aabb.maxZ);
-        OutputDebugStringA(buf);
+        // No extra fixtures in fixture mode (T1/T2/T3 are grid cubes, not extras)
     }
 
     void WorldState::BuildStepUpGridTest()
@@ -870,8 +865,8 @@ namespace Engine
         // Clear any existing extras (e.g., T3_CEIL from fixtures mode)
         m_extras.clear();
 
-        // Capacity check (5 stairs * 5 steps + 1 ceiling = 26)
-        if (26 > MAX_EXTRA_COLLIDERS) {
+        // Capacity check (5 stairs * 5 steps = 25)
+        if (25 > MAX_EXTRA_COLLIDERS) {
             OutputDebugStringA("[STEP_GRID] ERROR: Exceeds MAX_EXTRA_COLLIDERS!\n");
             return;
         }
@@ -882,7 +877,7 @@ namespace Engine
             {  5.0f, 15.0f, false, 0.25f, "B_Valid_Z" },
             { 15.0f,  5.0f, true,  0.35f, "C_TooTall_X" },
             { 15.0f, 15.0f, false, 0.40f, "D_TooTall_Z" },
-            { 25.0f, 10.0f, true,  0.20f, "E_Ceiling_X" },
+            { 25.0f, 10.0f, true,  0.20f, "E_X" },
         };
 
         char buf[256];
@@ -918,23 +913,6 @@ namespace Engine
                 OutputDebugStringA(buf);
             }
         }
-
-        // E Ceiling (UP_BLOCKED)
-        // headY = 3 + 5 = 8, ceiling.minY = 8.1 → blocks UP probe
-        ExtraCollider ceil;
-        ceil.type = ExtraColliderType::AABB;
-        ceil.aabb = { 24.0f, 8.1f, 9.0f, 28.0f, 10.0f, 11.0f };
-        uint16_t ceilId = static_cast<uint16_t>(EXTRA_BASE + m_extras.size());
-        m_extras.push_back(ceil);
-        RegisterAABBToSpatialGrid(ceilId, ceil.aabb);
-
-        // Verification assert log
-        float headY = BASE_Y + 5.0f;  // posY=3 + totalHeight=5 = 8
-        sprintf_s(buf, "[STEP_GRID] E_Ceiling id=%u minY=%.2f headY=%.2f (pre-step no overlap: %s, blocks UP: %s)\n",
-            ceilId, ceil.aabb.minY, headY,
-            (headY < ceil.aabb.minY) ? "YES" : "NO",
-            (ceil.aabb.minY < headY + 0.3f) ? "YES" : "NO");
-        OutputDebugStringA(buf);
 
         sprintf_s(buf, "[STEP_GRID] Total extras=%zu\n", m_extras.size());
         OutputDebugStringA(buf);
