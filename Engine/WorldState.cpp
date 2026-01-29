@@ -258,13 +258,13 @@ namespace Engine
             // Build extras (ceiling only)
             BuildExtraFixtures();
 
-            // Log fixture info
+            // Log fixture info (collision Y = cubeMaxY + stepHeight)
             char buf[256];
-            sprintf_s(buf, "[FIXTURE] T1_STEP gridIdx=%u world=(5,0,9) AABB Y=[0,0.2]\n", m_fixtureT1Idx);
+            sprintf_s(buf, "[FIXTURE] T1_STEP gridIdx=%u world=(5,0,9) AABB Y=[0,3.3]\n", m_fixtureT1Idx);
             OutputDebugStringA(buf);
-            sprintf_s(buf, "[FIXTURE] T2_WALL gridIdx=%u world=(9,0,9) AABB Y=[0,0.6]\n", m_fixtureT2Idx);
+            sprintf_s(buf, "[FIXTURE] T2_WALL gridIdx=%u world=(9,0,9) AABB Y=[0,3.6]\n", m_fixtureT2Idx);
             OutputDebugStringA(buf);
-            sprintf_s(buf, "[FIXTURE] T3_STEP gridIdx=%u world=(15,0,9) AABB Y=[0,0.2]\n", m_fixtureT3StepIdx);
+            sprintf_s(buf, "[FIXTURE] T3_STEP gridIdx=%u world=(15,0,9) AABB Y=[0,3.5]\n", m_fixtureT3StepIdx);
             OutputDebugStringA(buf);
         }
 
@@ -948,18 +948,27 @@ namespace Engine
         aabb.maxZ = cz + m_config.cubeHalfXZ;
 
         // Day3.12 Phase 4B+: Fixture height overrides (indices computed at init)
+        // Collision Y must match render: CUBE_TOP (3.0) + stepHeight
         if (m_config.enableStepUpTestFixtures)
         {
-            if (cubeIdx == m_fixtureT1Idx || cubeIdx == m_fixtureT3StepIdx)
+            const float CUBE_TOP = m_config.cubeMaxY;  // 3.0
+
+            if (cubeIdx == m_fixtureT1Idx)
             {
                 aabb.minY = 0.0f;
-                aabb.maxY = 0.2f;  // Short step
+                aabb.maxY = CUBE_TOP + 0.3f;  // 3.3 - matches render
                 return aabb;
             }
             if (cubeIdx == m_fixtureT2Idx)
             {
                 aabb.minY = 0.0f;
-                aabb.maxY = 0.6f;  // Too tall
+                aabb.maxY = CUBE_TOP + 0.6f;  // 3.6 - matches render
+                return aabb;
+            }
+            if (cubeIdx == m_fixtureT3StepIdx)
+            {
+                aabb.minY = 0.0f;
+                aabb.maxY = CUBE_TOP + 0.5f;  // 3.5 - matches render
                 return aabb;
             }
         }
