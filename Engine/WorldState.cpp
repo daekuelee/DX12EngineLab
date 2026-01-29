@@ -162,13 +162,13 @@ namespace
         float expMinZ = cube.minZ - r;
         float expMaxZ = cube.maxZ + r;
 
-        // FIX: When grounded, use capsule BODY (excluding bottom hemisphere) for Y-overlap.
-        // This prevents floor-level hemisphere from causing false wall hits.
+        // FIX: When grounded, include bottom hemisphere for step-height obstacle detection.
+        // The SUPPORT_EPS check below (line 188) prevents false hits on cubes we're standing ON.
         float capMinY, capMaxY;
         if (onGround)
         {
-            // Grounded: only check body (above bottom hemisphere)
-            capMinY = feetY + r;   // Start at center of bottom sphere
+            // Grounded: include full capsule so we detect step-height obstacles
+            capMinY = feetY;
             capMaxY = feetY + 2.0f * r + 2.0f * hh;
         }
         else
@@ -235,6 +235,38 @@ namespace Engine
 
         // Part 2: Build spatial grid for cube collision
         BuildSpatialGrid();
+
+        // Day3.12: Mutual exclusion - StepUpGridTest overrides T1/T2/T3 fixtures
+        if (m_config.enableStepUpGridTest)
+        {
+            BuildStepUpGridTest();
+            m_stepGridWasEverEnabled = true;
+        }
+        else if (m_config.enableStepUpTestFixtures)
+        {
+            // Compute grid indices from world coords: idx = gz*100 + gx, where gx=(x+99)/2
+            auto worldToIdx = [](float wx, float wz) -> uint16_t {
+                int gx = static_cast<int>((wx + 99.0f) / 2.0f);
+                int gz = static_cast<int>((wz + 99.0f) / 2.0f);
+                return static_cast<uint16_t>(gz * 100 + gx);
+            };
+
+            m_fixtureT1Idx = worldToIdx(5.0f, 9.0f);      // 5452
+            m_fixtureT2Idx = worldToIdx(9.0f, 9.0f);      // 5454
+            m_fixtureT3StepIdx = worldToIdx(15.0f, 9.0f); // 5457
+
+            // Build extras (ceiling only)
+            BuildExtraFixtures();
+
+            // Log fixture info (collision Y = cubeMaxY + stepHeight)
+            char buf[256];
+            sprintf_s(buf, "[FIXTURE] T1_STEP gridIdx=%u world=(5,0,9) AABB Y=[0,3.3]\n", m_fixtureT1Idx);
+            OutputDebugStringA(buf);
+            sprintf_s(buf, "[FIXTURE] T2_WALL gridIdx=%u world=(9,0,9) AABB Y=[0,3.6]\n", m_fixtureT2Idx);
+            OutputDebugStringA(buf);
+            sprintf_s(buf, "[FIXTURE] T3_STEP gridIdx=%u world=(15,0,9) AABB Y=[0,3.5]\n", m_fixtureT3StepIdx);
+            OutputDebugStringA(buf);
+        }
 
         // Day3.4: Collision geometry derivation proof log
         OutputDebugStringA("[CollisionInit] CubeLocalHalf=1.0\n");
@@ -357,7 +389,20 @@ namespace Engine
 
         // Day3.4: Apply velocity to get proposed position
         float newX, newZ;
-        float newY = m_pawn.posY + m_pawn.velY * fixedDt;
+        float newY;
+
+        // Day3.12 Phase 4A: Capsule Y uses sweep when enabled
+        if (m_controllerMode == ControllerMode::Capsule && m_config.enableYSweep)
+        {
+            float reqDy = m_pawn.velY * fixedDt;
+            float appliedDy = 0.0f;
+            SweepY_Capsule(reqDy, appliedDy);
+            newY = m_pawn.posY + appliedDy;
+        }
+        else
+        {
+            newY = m_pawn.posY + m_pawn.velY * fixedDt;
+        }
 
         // Day3.11 Phase 3: Capsule XZ uses sweep/slide
         bool capsuleZeroVelX = false, capsuleZeroVelZ = false;
@@ -372,6 +417,56 @@ namespace Engine
 
             // FIX: Post-sweep XZ cleanup (single iteration)
             ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
+
+            // Day3.12+ DEBUG: Step-up gate condition logging
+#define DEBUG_STEP_GATE
+#ifdef DEBUG_STEP_GATE
+            {
+                float xzMag = sqrtf(m_collisionStats.sweepNormalX * m_collisionStats.sweepNormalX +
+                                    m_collisionStats.sweepNormalZ * m_collisionStats.sweepNormalZ);
+                static bool s_lastStepGateResult = false;
+                bool gateResult = m_config.enableStepUp && m_collisionStats.sweepHit &&
+                                  IsWallLike(m_collisionStats.sweepNormalX, m_collisionStats.sweepNormalZ) &&
+                                  m_pawn.onGround;
+                if (gateResult != s_lastStepGateResult || gateResult) {
+                    char buf[200];
+                    sprintf_s(buf, "[STEP_GATE] enable=%d hit=%d wallLike=%d (xzMag=%.3f) onGround=%d => %s\n",
+                        m_config.enableStepUp, m_collisionStats.sweepHit,
+                        IsWallLike(m_collisionStats.sweepNormalX, m_collisionStats.sweepNormalZ), xzMag,
+                        m_pawn.onGround, gateResult ? "PASS" : "FAIL");
+                    OutputDebugStringA(buf);
+                    s_lastStepGateResult = gateResult;
+                }
+            }
+#endif
+
+            // Day3.12 Phase 4B: Step-up when blocked by wall-like surface
+            if (m_config.enableStepUp && m_collisionStats.sweepHit &&
+                IsWallLike(m_collisionStats.sweepNormalX, m_collisionStats.sweepNormalZ) &&
+                m_pawn.onGround)
+            {
+                float stepOutX, stepOutY, stepOutZ;
+                if (TryStepUp_Capsule(m_pawn.posX, newY, m_pawn.posZ, reqDx, reqDz,
+                                      stepOutX, stepOutY, stepOutZ))
+                {
+                    newX = stepOutX;
+                    newY = stepOutY;
+                    newZ = stepOutZ;
+                    capsuleZeroVelX = false;  // Don't zero velocity on step success
+                    capsuleZeroVelZ = false;
+
+                    // Day3.12+ DEBUG: Verify step-up integration
+#define DEBUG_STEP_INTEGRATION
+#ifdef DEBUG_STEP_INTEGRATION
+                    {
+                        char buf[160];
+                        sprintf_s(buf, "[STEP_APPLIED] prev=(%.2f,%.2f,%.2f) new=(%.2f,%.2f,%.2f) dY=%.3f\n",
+                            m_pawn.posX, m_pawn.posY, m_pawn.posZ, newX, newY, newZ, newY - m_pawn.posY);
+                        OutputDebugStringA(buf);
+                    }
+#endif
+                }
+            }
 
             // FIX: Higher-level velocity zeroing (after all sweep/slide logic)
             if (capsuleZeroVelX) m_pawn.velX = 0.0f;
@@ -546,6 +641,36 @@ namespace Engine
 
         // 10. KillZ check (respawn if below threshold)
         CheckKillZ();
+
+        // Day3.12 StepUpGridTest: Log on state change only
+        if (m_config.enableStepUpGridTest)
+        {
+            static bool s_prevTry = false;
+            static bool s_prevOk = false;
+            static uint8_t s_prevMask = 0;
+
+            bool changed = (m_collisionStats.stepTry != s_prevTry) ||
+                           (m_collisionStats.stepSuccess != s_prevOk) ||
+                           (m_collisionStats.stepFailMask != s_prevMask);
+
+            if (changed)
+            {
+                char buf[256];
+                sprintf_s(buf, "[STEP_GRID] pos=(%.2f,%.2f,%.2f) gnd=%d hit=%d try=%d ok=%d mask=0x%02X h=%.3f\n",
+                    m_pawn.posX, m_pawn.posY, m_pawn.posZ,
+                    m_pawn.onGround ? 1 : 0,
+                    m_collisionStats.sweepHit ? 1 : 0,
+                    m_collisionStats.stepTry ? 1 : 0,
+                    m_collisionStats.stepSuccess ? 1 : 0,
+                    m_collisionStats.stepFailMask,
+                    m_collisionStats.stepHeightUsed);
+                OutputDebugStringA(buf);
+
+                s_prevTry = m_collisionStats.stepTry;
+                s_prevOk = m_collisionStats.stepSuccess;
+                s_prevMask = m_collisionStats.stepFailMask;
+            }
+        }
     }
 
     void WorldState::ResolveFloorCollision()
@@ -591,6 +716,46 @@ namespace Engine
         char buf[64];
         sprintf_s(buf, "[MODE] ctrl=%s\n", name);
         OutputDebugStringA(buf);
+    }
+
+    void WorldState::ToggleStepUpGridTest()
+    {
+        bool newValue = !m_config.enableStepUpGridTest;
+
+        // Clear existing extras from spatial grid before switching modes
+        ClearExtrasFromSpatialGrid();
+
+        if (newValue)
+        {
+            // Toggle ON: Build stair grid test
+            m_config.enableStepUpGridTest = true;
+            BuildStepUpGridTest();
+            m_stepGridWasEverEnabled = true;
+            OutputDebugStringA("[STEP_GRID] Toggle => 1 (stairs built)\n");
+        }
+        else
+        {
+            // Toggle OFF: Rebuild fixtures mode (T1/T2/T3 + ceiling)
+            m_config.enableStepUpGridTest = false;
+            if (m_config.enableStepUpTestFixtures)
+            {
+                BuildExtraFixtures();
+                OutputDebugStringA("[STEP_GRID] Toggle => 0 (fixtures rebuilt)\n");
+            }
+            else
+            {
+                OutputDebugStringA("[STEP_GRID] Toggle => 0 (no fixtures)\n");
+            }
+        }
+
+        // MODE_SNAPSHOT: Log exact state after toggle
+        char snap[256];
+        sprintf_s(snap, "[MODE_SNAPSHOT] fixtures=%d gridTest=%d stepUp=%d extrasCount=%zu\n",
+            m_config.enableStepUpTestFixtures ? 1 : 0,
+            m_config.enableStepUpGridTest ? 1 : 0,
+            m_config.enableStepUp ? 1 : 0,
+            m_extras.size());
+        OutputDebugStringA(snap);
     }
 
     void WorldState::RespawnResetControllerState()
@@ -654,6 +819,105 @@ namespace Engine
         return cell;
     }
 
+    void WorldState::RegisterAABBToSpatialGrid(uint16_t id, const AABB& aabb)
+    {
+        int minCX = WorldToCellX(aabb.minX);
+        int maxCX = WorldToCellX(aabb.maxX);
+        int minCZ = WorldToCellZ(aabb.minZ);
+        int maxCZ = WorldToCellZ(aabb.maxZ);
+
+        for (int gz = minCZ; gz <= maxCZ; ++gz)
+            for (int gx = minCX; gx <= maxCX; ++gx)
+                m_spatialGrid[gz][gx].push_back(id);
+    }
+
+    void WorldState::ClearExtrasFromSpatialGrid()
+    {
+        // Remove all IDs >= EXTRA_BASE from spatial grid
+        for (int gz = 0; gz < GRID_SIZE; ++gz)
+        {
+            for (int gx = 0; gx < GRID_SIZE; ++gx)
+            {
+                auto& cell = m_spatialGrid[gz][gx];
+                cell.erase(
+                    std::remove_if(cell.begin(), cell.end(),
+                        [](uint16_t id) { return id >= EXTRA_BASE; }),
+                    cell.end());
+            }
+        }
+        m_extras.clear();
+        OutputDebugStringA("[SPATIAL] Cleared all extras from grid\n");
+    }
+
+    void WorldState::BuildExtraFixtures()
+    {
+        m_extras.clear();
+        // No extra fixtures in fixture mode (T1/T2/T3 are grid cubes, not extras)
+    }
+
+    void WorldState::BuildStepUpGridTest()
+    {
+        const float TREAD = 0.60f;
+        const float WIDTH_H = 1.0f;
+        const int STEPS = 5;
+        const float BASE_Y = 3.0f;
+
+        // Clear any existing extras (e.g., T3_CEIL from fixtures mode)
+        m_extras.clear();
+
+        // Capacity check (5 stairs * 5 steps = 25)
+        if (25 > MAX_EXTRA_COLLIDERS) {
+            OutputDebugStringA("[STEP_GRID] ERROR: Exceeds MAX_EXTRA_COLLIDERS!\n");
+            return;
+        }
+
+        struct StairSpec { float ox, oz; bool dirX; float riser; const char* name; };
+        StairSpec stairs[] = {
+            {  5.0f,  5.0f, true,  0.20f, "A_Valid_X" },
+            {  5.0f, 15.0f, false, 0.25f, "B_Valid_Z" },
+            { 15.0f,  5.0f, true,  0.35f, "C_TooTall_X" },
+            { 15.0f, 15.0f, false, 0.40f, "D_TooTall_Z" },
+            { 25.0f, 10.0f, true,  0.20f, "E_X" },
+        };
+
+        char buf[256];
+        OutputDebugStringA("[STEP_GRID] === Building Stair Grid ===\n");
+
+        for (const auto& s : stairs)
+        {
+            for (int i = 0; i < STEPS; ++i)
+            {
+                ExtraCollider ec;
+                ec.type = ExtraColliderType::AABB;
+
+                if (s.dirX) {
+                    ec.aabb.minX = s.ox + i * TREAD;
+                    ec.aabb.maxX = s.ox + (i + 1) * TREAD;
+                    ec.aabb.minZ = s.oz - WIDTH_H;
+                    ec.aabb.maxZ = s.oz + WIDTH_H;
+                } else {
+                    ec.aabb.minX = s.ox - WIDTH_H;
+                    ec.aabb.maxX = s.ox + WIDTH_H;
+                    ec.aabb.minZ = s.oz + i * TREAD;
+                    ec.aabb.maxZ = s.oz + (i + 1) * TREAD;
+                }
+                ec.aabb.minY = BASE_Y;
+                ec.aabb.maxY = BASE_Y + (i + 1) * s.riser;
+
+                uint16_t id = static_cast<uint16_t>(EXTRA_BASE + m_extras.size());
+                m_extras.push_back(ec);
+                RegisterAABBToSpatialGrid(id, ec.aabb);
+
+                sprintf_s(buf, "[STEP_GRID] %s step=%d id=%u Y=[%.2f,%.2f]\n",
+                    s.name, i, id, ec.aabb.minY, ec.aabb.maxY);
+                OutputDebugStringA(buf);
+            }
+        }
+
+        sprintf_s(buf, "[STEP_GRID] Total extras=%zu\n", m_extras.size());
+        OutputDebugStringA(buf);
+    }
+
     AABB WorldState::BuildPawnAABB(float px, float py, float pz) const
     {
         // Pawn AABB: feet at posY, head at posY+height
@@ -670,6 +934,15 @@ namespace Engine
 
     AABB WorldState::GetCubeAABB(uint16_t cubeIdx) const
     {
+        // Day3.12 Phase 4B+: Extra colliders (ID >= EXTRA_BASE)
+        if (cubeIdx >= EXTRA_BASE)
+        {
+            size_t idx = cubeIdx - EXTRA_BASE;
+            if (idx < m_extras.size())
+                return m_extras[idx].aabb;
+            return {};  // Invalid extra ID
+        }
+
         // Cube at grid (gx, gz):
         int gx = cubeIdx % GRID_SIZE;
         int gz = cubeIdx / GRID_SIZE;
@@ -679,10 +952,37 @@ namespace Engine
         AABB aabb;
         aabb.minX = cx - m_config.cubeHalfXZ;
         aabb.maxX = cx + m_config.cubeHalfXZ;
-        aabb.minY = m_config.cubeMinY;
-        aabb.maxY = m_config.cubeMaxY;
         aabb.minZ = cz - m_config.cubeHalfXZ;
         aabb.maxZ = cz + m_config.cubeHalfXZ;
+
+        // Day3.12 Phase 4B+: Fixture height overrides (indices computed at init)
+        // Collision Y must match render: CUBE_TOP (3.0) + stepHeight
+        if (m_config.enableStepUpTestFixtures)
+        {
+            const float CUBE_TOP = m_config.cubeMaxY;  // 3.0
+
+            if (cubeIdx == m_fixtureT1Idx)
+            {
+                aabb.minY = 0.0f;
+                aabb.maxY = CUBE_TOP + 0.3f;  // 3.3 - matches render
+                return aabb;
+            }
+            if (cubeIdx == m_fixtureT2Idx)
+            {
+                aabb.minY = 0.0f;
+                aabb.maxY = CUBE_TOP + 0.6f;  // 3.6 - matches render
+                return aabb;
+            }
+            if (cubeIdx == m_fixtureT3StepIdx)
+            {
+                aabb.minY = 0.0f;
+                aabb.maxY = CUBE_TOP + 0.5f;  // 3.5 - matches render
+                return aabb;
+            }
+        }
+
+        aabb.minY = m_config.cubeMinY;
+        aabb.maxY = m_config.cubeMaxY;
         return aabb;
     }
 
@@ -916,8 +1216,14 @@ namespace Engine
             if (!Intersects(pawn, cube)) continue;
 
             // Day3.9: Anti-step-up guard for Y axis
+            // Day3.12 Phase 4A: Skip this guard for Capsule mode when Y sweep is enabled
+            // (Y is already handled by SweepY_Capsule, so we don't need penetration-based Y resolution)
             if (axis == Axis::Y)
             {
+                // When Capsule + enableYSweep, Y is handled by sweep - skip Y resolution entirely
+                if (m_controllerMode == ControllerMode::Capsule && m_config.enableYSweep)
+                    continue;
+
                 float cubeTop = cube.maxY;
 
                 // Compute what the Y delta would be
@@ -1224,6 +1530,170 @@ namespace Engine
         outAppliedDz = totalAppliedDz;
     }
 
+    // Day3.12 Phase 4A: Capsule Y sweep for vertical movement (falling/jumping)
+    void WorldState::SweepY_Capsule(float reqDy, float& outAppliedDy)
+    {
+        const float SKIN_WIDTH = m_config.sweepSkinY;
+
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+        float feetY = m_pawn.posY;
+        float totalHeight = 2.0f * r + 2.0f * hh;
+
+        // Reset Y sweep stats
+        m_collisionStats.sweepYHit = false;
+        m_collisionStats.sweepYTOI = 1.0f;
+        m_collisionStats.sweepYHitCubeIdx = -1;
+        m_collisionStats.sweepYReqDy = reqDy;
+        m_collisionStats.sweepYAppliedDy = 0.0f;
+
+        // Early-out for no movement
+        if (fabsf(reqDy) < 0.0001f)
+        {
+            outAppliedDy = 0.0f;
+            return;
+        }
+
+        // Build swept AABB for broadphase (capsule footprint + Y sweep range)
+        float curX = m_pawn.posX;
+        float curZ = m_pawn.posZ;
+        AABB sweptAABB;
+        sweptAABB.minX = curX - r;
+        sweptAABB.maxX = curX + r;
+        sweptAABB.minZ = curZ - r;
+        sweptAABB.maxZ = curZ + r;
+        if (reqDy < 0.0f)
+        {
+            // Falling: sweep from current bottom to proposed bottom
+            sweptAABB.minY = feetY + reqDy;
+            sweptAABB.maxY = feetY + totalHeight;
+        }
+        else
+        {
+            // Rising: sweep from current top to proposed top
+            sweptAABB.minY = feetY;
+            sweptAABB.maxY = feetY + totalHeight + reqDy;
+        }
+
+        std::vector<uint16_t> candidates = QuerySpatialHash(sweptAABB);
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+        // Find earliest Y hit
+        float earliestTOI = 1.0f;
+        int earliestCubeIdx = -1;
+
+        for (uint16_t cubeIdx : candidates)
+        {
+            AABB cube = GetCubeAABB(cubeIdx);
+
+            // XZ overlap check (capsule footprint vs cube)
+            float expMinX = cube.minX - r;
+            float expMaxX = cube.maxX + r;
+            float expMinZ = cube.minZ - r;
+            float expMaxZ = cube.maxZ + r;
+            if (curX < expMinX || curX > expMaxX || curZ < expMinZ || curZ > expMaxZ)
+                continue;  // No XZ overlap
+
+            float toi = 1.0f;
+            bool hit = false;
+
+            if (reqDy < 0.0f)
+            {
+                // Falling: capsule bottom (feetY) sweeps toward cube.maxY
+                // TOI = (cube.maxY - feetY) / reqDy (reqDy is negative)
+                // Hit occurs when feetY + reqDy*t = cube.maxY
+                // t = (cube.maxY - feetY) / reqDy
+                if (feetY > cube.maxY)  // Currently above cube top
+                {
+                    float dist = feetY - cube.maxY;
+                    toi = dist / (-reqDy);  // reqDy is negative, so -reqDy is positive
+                    if (toi >= 0.0f && toi <= 1.0f)
+                        hit = true;
+                }
+            }
+            else
+            {
+                // Rising: capsule top (feetY + totalHeight) sweeps toward cube.minY
+                // Hit occurs when (feetY + totalHeight) + reqDy*t = cube.minY
+                // t = (cube.minY - (feetY + totalHeight)) / reqDy
+                float headY = feetY + totalHeight;
+                if (headY < cube.minY)  // Currently below cube bottom
+                {
+                    float dist = cube.minY - headY;
+                    toi = dist / reqDy;
+                    if (toi >= 0.0f && toi <= 1.0f)
+                        hit = true;
+                }
+            }
+
+            if (hit && toi < earliestTOI)
+            {
+                earliestTOI = toi;
+                earliestCubeIdx = cubeIdx;
+            }
+            else if (hit && fabsf(toi - earliestTOI) < 1e-6f && cubeIdx < earliestCubeIdx)
+            {
+                earliestCubeIdx = cubeIdx;  // Tie-break by ID for determinism
+            }
+        }
+
+        // Also check floor collision when falling
+        if (reqDy < 0.0f)
+        {
+            // Floor is at Y = floorY. Feet landing on floor.
+            if (feetY > m_config.floorY &&
+                curX >= m_config.floorMinX && curX <= m_config.floorMaxX &&
+                curZ >= m_config.floorMinZ && curZ <= m_config.floorMaxZ)
+            {
+                float dist = feetY - m_config.floorY;
+                float floorTOI = dist / (-reqDy);
+                if (floorTOI >= 0.0f && floorTOI <= 1.0f && floorTOI < earliestTOI)
+                {
+                    earliestTOI = floorTOI;
+                    earliestCubeIdx = -2;  // Special marker for floor
+                }
+            }
+        }
+
+        if (earliestCubeIdx == -1 && earliestTOI >= 1.0f)
+        {
+            // No collision, apply full delta
+            outAppliedDy = reqDy;
+            m_collisionStats.sweepYAppliedDy = reqDy;
+
+            char buf[128];
+            sprintf_s(buf, "[SWEEP_Y] req=%.3f cand=%zu hit=0\n", reqDy, candidates.size());
+            OutputDebugStringA(buf);
+        }
+        else
+        {
+            // Hit detected
+            m_collisionStats.sweepYHit = true;
+            m_collisionStats.sweepYTOI = earliestTOI;
+            m_collisionStats.sweepYHitCubeIdx = earliestCubeIdx;
+
+            // Move to contact with skin offset
+            float deltaMag = fabsf(reqDy);
+            float skinParam = SKIN_WIDTH / deltaMag;
+            float clampedSkin = fminf(skinParam, earliestTOI * 0.5f);
+            float safeT = fmaxf(0.0f, earliestTOI - clampedSkin);
+            outAppliedDy = reqDy * safeT;
+            m_collisionStats.sweepYAppliedDy = outAppliedDy;
+
+            // Zero velocity on collision
+            if (reqDy < 0.0f && m_pawn.velY < 0.0f)
+                m_pawn.velY = 0.0f;  // Landing
+            if (reqDy > 0.0f && m_pawn.velY > 0.0f)
+                m_pawn.velY = 0.0f;  // Ceiling bump
+
+            char buf[128];
+            sprintf_s(buf, "[SWEEP_Y] req=%.3f cand=%zu hit=1 toi=%.4f cube=%d applied=%.3f\n",
+                reqDy, candidates.size(), earliestTOI, earliestCubeIdx, outAppliedDy);
+            OutputDebugStringA(buf);
+        }
+    }
+
     // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
     void WorldState::ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY)
     {
@@ -1327,6 +1797,311 @@ namespace Engine
             }
         }
         return maxPen;
+    }
+
+    // Day3.12 Phase 4B: Check if collision normal is wall-like (horizontal)
+    bool WorldState::IsWallLike(float normalX, float normalZ) const
+    {
+        // Wall-like = normal is mostly horizontal (Y component small)
+        // Since we only have XZ components from sweep, check magnitude
+        float xzMag = sqrtf(normalX * normalX + normalZ * normalZ);
+        return xzMag > 0.8f;  // Normal is >80% horizontal
+    }
+
+    // Day3.12 Phase 4B: Probe Y sweep at arbitrary pose (no stats mutation)
+    float WorldState::ProbeY(float posX, float posY, float posZ, float reqDy, int& hitCubeIdx)
+    {
+        const float SKIN_WIDTH = m_config.sweepSkinY;
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+        float totalHeight = 2.0f * r + 2.0f * hh;
+
+        hitCubeIdx = -1;
+
+        if (fabsf(reqDy) < 0.0001f)
+            return 0.0f;
+
+        // Build swept AABB for broadphase
+        AABB sweptAABB;
+        sweptAABB.minX = posX - r;
+        sweptAABB.maxX = posX + r;
+        sweptAABB.minZ = posZ - r;
+        sweptAABB.maxZ = posZ + r;
+        if (reqDy < 0.0f)
+        {
+            sweptAABB.minY = posY + reqDy;
+            sweptAABB.maxY = posY + totalHeight;
+        }
+        else
+        {
+            sweptAABB.minY = posY;
+            sweptAABB.maxY = posY + totalHeight + reqDy;
+        }
+
+        std::vector<uint16_t> candidates = QuerySpatialHash(sweptAABB);
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+        float earliestTOI = 1.0f;
+        int earliestCube = -1;
+
+        for (uint16_t cubeIdx : candidates)
+        {
+            AABB cube = GetCubeAABB(cubeIdx);
+
+            // XZ overlap check
+            float expMinX = cube.minX - r;
+            float expMaxX = cube.maxX + r;
+            float expMinZ = cube.minZ - r;
+            float expMaxZ = cube.maxZ + r;
+            if (posX < expMinX || posX > expMaxX || posZ < expMinZ || posZ > expMaxZ)
+                continue;
+
+            float toi = 1.0f;
+            bool hit = false;
+
+            if (reqDy < 0.0f)
+            {
+                // Falling
+                if (posY > cube.maxY)
+                {
+                    float dist = posY - cube.maxY;
+                    toi = dist / (-reqDy);
+                    if (toi >= 0.0f && toi <= 1.0f)
+                        hit = true;
+                }
+            }
+            else
+            {
+                // Rising
+                float headY = posY + totalHeight;
+                if (headY < cube.minY)
+                {
+                    float dist = cube.minY - headY;
+                    toi = dist / reqDy;
+                    if (toi >= 0.0f && toi <= 1.0f)
+                        hit = true;
+                }
+            }
+
+            if (hit && toi < earliestTOI)
+            {
+                earliestTOI = toi;
+                earliestCube = cubeIdx;
+            }
+            else if (hit && fabsf(toi - earliestTOI) < 1e-6f && cubeIdx < earliestCube)
+            {
+                earliestCube = cubeIdx;
+            }
+        }
+
+        // Also check floor when falling
+        if (reqDy < 0.0f && posY > m_config.floorY &&
+            posX >= m_config.floorMinX && posX <= m_config.floorMaxX &&
+            posZ >= m_config.floorMinZ && posZ <= m_config.floorMaxZ)
+        {
+            float dist = posY - m_config.floorY;
+            float floorTOI = dist / (-reqDy);
+            if (floorTOI >= 0.0f && floorTOI <= 1.0f && floorTOI < earliestTOI)
+            {
+                earliestTOI = floorTOI;
+                earliestCube = -2;  // Floor marker
+            }
+        }
+
+        if (earliestCube == -1 && earliestTOI >= 1.0f)
+        {
+            hitCubeIdx = -1;
+            return reqDy;
+        }
+
+        hitCubeIdx = earliestCube;
+        float deltaMag = fabsf(reqDy);
+        float skinParam = SKIN_WIDTH / deltaMag;
+        float clampedSkin = fminf(skinParam, earliestTOI * 0.5f);
+        float safeT = fmaxf(0.0f, earliestTOI - clampedSkin);
+        return reqDy * safeT;
+    }
+
+    // Day3.12 Phase 4B: Probe XZ sweep at arbitrary pose (no stats mutation)
+    float WorldState::ProbeXZ(float posX, float posY, float posZ, float reqDx, float reqDz,
+                              float& outNormalX, float& outNormalZ, int& hitCubeIdx)
+    {
+        const float SKIN_WIDTH = 0.01f;
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+
+        outNormalX = 0.0f;
+        outNormalZ = 0.0f;
+        hitCubeIdx = -1;
+
+        float deltaMag = sqrtf(reqDx * reqDx + reqDz * reqDz);
+        if (deltaMag < 0.0001f)
+            return 1.0f;  // Return TOI=1 for no movement
+
+        // Build swept AABB for broadphase
+        AABB sweptAABB;
+        sweptAABB.minX = fminf(posX - r, posX - r + reqDx);
+        sweptAABB.maxX = fmaxf(posX + r, posX + r + reqDx);
+        sweptAABB.minY = posY;
+        sweptAABB.maxY = posY + 2.0f * r + 2.0f * hh;
+        sweptAABB.minZ = fminf(posZ - r, posZ - r + reqDz);
+        sweptAABB.maxZ = fmaxf(posZ + r, posZ + r + reqDz);
+
+        std::vector<uint16_t> candidates = QuerySpatialHash(sweptAABB);
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+        SweepResult earliest = { false, 1.0f, 0.0f, 0.0f };
+        int earliestCube = -1;
+
+        for (uint16_t cubeIdx : candidates)
+        {
+            AABB cube = GetCubeAABB(cubeIdx);
+            // Use body-only Y overlap (not grounded for probe)
+            SweepResult hit = SweepCapsuleVsCubeXZ(posX, posZ, posY, r, hh, reqDx, reqDz, cube, false);
+            if (hit.hit)
+            {
+                if (hit.t < earliest.t || (!earliest.hit))
+                {
+                    earliest = hit;
+                    earliestCube = cubeIdx;
+                }
+                else if (fabsf(hit.t - earliest.t) < 1e-6f && cubeIdx < earliestCube)
+                {
+                    earliest = hit;
+                    earliestCube = cubeIdx;
+                }
+            }
+        }
+
+        if (!earliest.hit)
+        {
+            return 1.0f;  // Full travel, no hit
+        }
+
+        hitCubeIdx = earliestCube;
+        outNormalX = earliest.normalX;
+        outNormalZ = earliest.normalZ;
+
+        // Return TOI with skin offset
+        float skinParam = SKIN_WIDTH / deltaMag;
+        float clampedSkin = fminf(skinParam, earliest.t * 0.5f);
+        return fmaxf(0.0f, earliest.t - clampedSkin);
+    }
+
+    // Day3.12 Phase 4B: Try step-up maneuver
+    bool WorldState::TryStepUp_Capsule(float startX, float startY, float startZ,
+                                        float reqDx, float reqDz,
+                                        float& outX, float& outY, float& outZ)
+    {
+        float maxStep = m_config.maxStepHeight;
+        float r = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+        const float SETTLE_EXTRA = 2.0f * m_config.sweepSkinY;
+
+        // Reset step diagnostics
+        m_collisionStats.stepTry = true;
+        m_collisionStats.stepSuccess = false;
+        m_collisionStats.stepFailMask = STEP_FAIL_NONE;
+        m_collisionStats.stepHeightUsed = 0.0f;
+        m_collisionStats.stepCubeIdx = -1;
+
+        // Phase 1: Probe UP by maxStepHeight
+        int upHitCube = -1;
+        float appliedUpDy = ProbeY(startX, startY, startZ, maxStep, upHitCube);
+
+        if (upHitCube != -1 && appliedUpDy < maxStep * 0.9f)
+        {
+            // Ceiling blocked us before reaching step height
+            m_collisionStats.stepFailMask |= STEP_FAIL_UP_BLOCKED;
+            char buf[128];
+            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (UP_BLOCKED appliedUp=%.3f)\n",
+                m_collisionStats.stepFailMask, appliedUpDy);
+            OutputDebugStringA(buf);
+            return false;
+        }
+
+        float raisedY = startY + appliedUpDy;
+
+        // Phase 2: Probe FORWARD at raised height
+        float fwdNormalX = 0.0f, fwdNormalZ = 0.0f;
+        int fwdHitCube = -1;
+        float fwdTOI = ProbeXZ(startX, raisedY, startZ, reqDx, reqDz, fwdNormalX, fwdNormalZ, fwdHitCube);
+
+        // Check if forward is still blocked (same obstacle or minimal progress)
+        if (fwdHitCube != -1 && fwdTOI < 0.1f)
+        {
+            // Still blocked - obstacle is too tall
+            m_collisionStats.stepFailMask |= STEP_FAIL_FWD_BLOCKED;
+            char buf[128];
+            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (FWD_BLOCKED toi=%.3f cube=%d)\n",
+                m_collisionStats.stepFailMask, fwdTOI, fwdHitCube);
+            OutputDebugStringA(buf);
+            return false;
+        }
+
+        float fwdX = startX + reqDx * fwdTOI;
+        float fwdZ = startZ + reqDz * fwdTOI;
+
+        // Phase 3: Settle DOWN to find ground
+        float settleMax = maxStep + SETTLE_EXTRA;
+        int downHitCube = -1;
+        float appliedDownDy = ProbeY(fwdX, raisedY, fwdZ, -settleMax, downHitCube);
+
+        if (downHitCube == -1)
+        {
+            // No ground found within settle range
+            m_collisionStats.stepFailMask |= STEP_FAIL_NO_GROUND;
+            char buf[128];
+            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (NO_GROUND settleMax=%.3f)\n",
+                m_collisionStats.stepFailMask, settleMax);
+            OutputDebugStringA(buf);
+            return false;
+        }
+
+        float settledY = raisedY + appliedDownDy;
+
+        // Phase 4: Validate - don't step into holes (settledY >= startY - epsilon)
+        const float HOLE_EPSILON = 0.05f;
+        if (settledY < startY - HOLE_EPSILON)
+        {
+            // This would be stepping down into a hole, not up onto a step
+            m_collisionStats.stepFailMask |= STEP_FAIL_NO_GROUND;
+            char buf[128];
+            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (HOLE settledY=%.3f < startY=%.3f)\n",
+                m_collisionStats.stepFailMask, settledY, startY);
+            OutputDebugStringA(buf);
+            return false;
+        }
+
+        // Optional: Check for residual penetration at final pose
+        float penCheck = ScanMaxXZPenetration(fwdX, settledY, fwdZ);
+        if (penCheck > 0.01f)
+        {
+            m_collisionStats.stepFailMask |= STEP_FAIL_PENETRATION;
+            char buf[128];
+            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (PENETRATION pen=%.4f)\n",
+                m_collisionStats.stepFailMask, penCheck);
+            OutputDebugStringA(buf);
+            return false;
+        }
+
+        // Success! Commit the step-up
+        outX = fwdX;
+        outY = settledY;
+        outZ = fwdZ;
+
+        m_collisionStats.stepSuccess = true;
+        m_collisionStats.stepHeightUsed = settledY - startY;
+        m_collisionStats.stepCubeIdx = downHitCube;
+
+        char buf[160];
+        sprintf_s(buf, "[STEP_UP] try=1 ok=1 mask=0x00 h=%.3f cube=%d pos=(%.2f,%.2f,%.2f)\n",
+            m_collisionStats.stepHeightUsed, downHitCube, outX, outY, outZ);
+        OutputDebugStringA(buf);
+
+        return true;
     }
 
     void WorldState::TickFrame(float frameDt)
@@ -1486,6 +2261,24 @@ namespace Engine
         snap.sweepSlideDz = m_collisionStats.sweepSlideDz;
         snap.sweepNormalX = m_collisionStats.sweepNormalX;
         snap.sweepNormalZ = m_collisionStats.sweepNormalZ;
+
+        // Day3.12 Phase 4A: Y sweep diagnostics
+        snap.sweepYHit = m_collisionStats.sweepYHit;
+        snap.sweepYTOI = m_collisionStats.sweepYTOI;
+        snap.sweepYHitCubeIdx = m_collisionStats.sweepYHitCubeIdx;
+        snap.sweepYReqDy = m_collisionStats.sweepYReqDy;
+        snap.sweepYAppliedDy = m_collisionStats.sweepYAppliedDy;
+
+        // Day3.12 Phase 4B: Step-up diagnostics
+        snap.stepTry = m_collisionStats.stepTry;
+        snap.stepSuccess = m_collisionStats.stepSuccess;
+        snap.stepFailMask = m_collisionStats.stepFailMask;
+        snap.stepHeightUsed = m_collisionStats.stepHeightUsed;
+        snap.stepCubeIdx = m_collisionStats.stepCubeIdx;
+
+        // Day3.12+: Step grid test toggle state
+        snap.stepGridTestEnabled = m_config.enableStepUpGridTest;
+        snap.stepGridWasEverEnabled = m_stepGridWasEverEnabled;
 
         return snap;
     }

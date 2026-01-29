@@ -35,6 +35,19 @@ namespace Engine
         float maxX, maxY, maxZ;
     };
 
+    // Day3.12 Phase 4B+: Extra collider types (future: ramps, trimesh)
+    enum class ExtraColliderType : uint8_t { AABB = 0, Ramp = 1, TriMesh = 2 };
+
+    struct ExtraCollider
+    {
+        ExtraColliderType type = ExtraColliderType::AABB;
+        AABB aabb = {};
+    };
+
+    // Day3.12 Phase 4B+: ID space for extras layer
+    static constexpr uint16_t EXTRA_BASE = 20000;
+    static constexpr uint16_t MAX_EXTRA_COLLIDERS = 32;
+
     // Day3.11: Capsule geometry helper (feet-bottom anchor)
     struct CapsulePoints { float P0y, P1y; };
 
@@ -90,6 +103,27 @@ namespace Engine
         float sweepAppliedDx = 0.0f, sweepAppliedDz = 0.0f;
         float sweepSlideDx = 0.0f, sweepSlideDz = 0.0f;
         float sweepNormalX = 0.0f, sweepNormalZ = 0.0f;
+        // Day3.12 Phase 4A: Y sweep diagnostics
+        bool sweepYHit = false;
+        float sweepYTOI = 1.0f;
+        int32_t sweepYHitCubeIdx = -1;
+        float sweepYReqDy = 0.0f;
+        float sweepYAppliedDy = 0.0f;
+        // Day3.12 Phase 4B: Step-up diagnostics
+        bool stepTry = false;           // Did we attempt step-up?
+        bool stepSuccess = false;       // Did step-up succeed?
+        uint8_t stepFailMask = 0;       // Failure reason bits (StepFailMask enum)
+        float stepHeightUsed = 0.0f;    // Actual height stepped
+        int32_t stepCubeIdx = -1;       // Cube we stepped onto
+    };
+
+    // Day3.12 Phase 4B: Step-up failure reason bits
+    enum StepFailMask : uint8_t {
+        STEP_FAIL_NONE          = 0x00,
+        STEP_FAIL_UP_BLOCKED    = 0x01,  // Ceiling within step height
+        STEP_FAIL_FWD_BLOCKED   = 0x02,  // Forward probe still blocked
+        STEP_FAIL_NO_GROUND     = 0x04,  // Down settle found no support
+        STEP_FAIL_PENETRATION   = 0x08,  // Final pose has penetration
     };
     // Input state sampled each frame
     struct InputState
@@ -201,6 +235,18 @@ namespace Engine
         // Radius matches pawnHalfExtentX (1.4) for visual consistency
         float capsuleRadius = 1.4f;
         float capsuleHalfHeight = 1.1f;
+
+        // Day3.12 Phase 4A: Y sweep config
+        bool enableYSweep = true;   // Toggle for Y sweep (fallback to ResolveAxis Y)
+        float sweepSkinY = 0.01f;   // Skin width for Y sweep
+
+        // Day3.12 Phase 4B: Step-up config
+        bool enableStepUp = true;   // Toggle for step-up auto-climb
+        float maxStepHeight = 0.3f; // Max obstacle height to climb
+
+        // Day3.12 Phase 4B: Test fixture config
+        bool enableStepUpTestFixtures = true;  // Test fixture toggle
+        bool enableStepUpGridTest = false;     // Stair grid test (disables T1/T2/T3 when true)
     };
 
     class WorldState
@@ -237,8 +283,19 @@ namespace Engine
         void ToggleControllerMode();
         void RespawnResetControllerState();
 
+        // Day3.12+: Step-up grid test toggle
+        bool IsStepUpGridTestEnabled() const { return m_config.enableStepUpGridTest; }
+        void ToggleStepUpGridTest();
+
         // Part 2: Collision stats accessor
         const CollisionStats& GetCollisionStats() const { return m_collisionStats; }
+
+        // Day3.12 Phase 4B+: Fixture accessors for renderer transform overrides
+        const WorldConfig& GetConfig() const { return m_config; }
+        const std::vector<ExtraCollider>& GetExtras() const { return m_extras; }
+        uint16_t GetFixtureT1Idx() const { return m_fixtureT1Idx; }
+        uint16_t GetFixtureT2Idx() const { return m_fixtureT2Idx; }
+        uint16_t GetFixtureT3StepIdx() const { return m_fixtureT3StepIdx; }
 
     private:
         PawnState m_pawn;
@@ -272,6 +329,21 @@ namespace Engine
         std::vector<uint16_t> m_spatialGrid[GRID_SIZE][GRID_SIZE];
         bool m_spatialGridBuilt = false;
 
+        // Day3.12 Phase 4B: Test fixture indices (computed from world coords)
+        uint16_t m_fixtureT1Idx = 0;
+        uint16_t m_fixtureT2Idx = 0;
+        uint16_t m_fixtureT3StepIdx = 0;
+
+        // Day3.12 Phase 4B+: Extras layer for ceiling and future colliders
+        std::vector<ExtraCollider> m_extras;
+        void BuildExtraFixtures();
+        void BuildStepUpGridTest();  // Day3.12: Stair grid test map
+        void RegisterAABBToSpatialGrid(uint16_t id, const AABB& aabb);
+        void ClearExtrasFromSpatialGrid();
+
+        // Day3.12+: Track if step grid was ever built (for safe toggle)
+        bool m_stepGridWasEverEnabled = false;
+
         // Private helpers
         void ResolveFloorCollision();
         void CheckKillZ();
@@ -296,9 +368,24 @@ namespace Engine
         // Day3.11 Phase 3: Capsule XZ sweep/slide
         void SweepXZ_Capsule(float reqDx, float reqDz, float& outAppliedDx, float& outAppliedDz,
                              bool& outZeroVelX, bool& outZeroVelZ);
+        // Day3.12 Phase 4A: Capsule Y sweep
+        void SweepY_Capsule(float reqDy, float& outAppliedDy);
         // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
         void ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY);
         // Day3.11 Phase 3 Debug: Scan max XZ penetration depth (for instrumentation)
         float ScanMaxXZPenetration(float posX, float posY, float posZ);
+
+        // Day3.12 Phase 4B: Step-up helpers
+        // Probe Y sweep at arbitrary pose (no stats mutation)
+        float ProbeY(float posX, float posY, float posZ, float reqDy, int& hitCubeIdx);
+        // Probe XZ sweep at arbitrary pose (no stats mutation)
+        float ProbeXZ(float posX, float posY, float posZ, float reqDx, float reqDz,
+                      float& outNormalX, float& outNormalZ, int& hitCubeIdx);
+        // Try step-up maneuver: up -> forward -> down settle
+        bool TryStepUp_Capsule(float startX, float startY, float startZ,
+                               float reqDx, float reqDz,
+                               float& outX, float& outY, float& outZ);
+        // Check if collision normal is wall-like (horizontal)
+        bool IsWallLike(float normalX, float normalZ) const;
     };
 }

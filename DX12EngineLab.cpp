@@ -262,6 +262,25 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             {
                 g_app.ToggleControllerMode();
             }
+            // F7 key toggles step-up grid test (Day3.12+)
+            else if (wParam == VK_F7)
+            {
+                g_app.ToggleStepUpGridTest();
+            }
+            // F8 key toggles HUD verbose mode (Day3.12+)
+            else if (wParam == VK_F8)
+            {
+                Renderer::ToggleSystem::ToggleHudVerbose();
+                OutputDebugStringA(Renderer::ToggleSystem::IsHudVerboseEnabled()
+                    ? "[HUD] Verbose: ON\n" : "[HUD] Verbose: OFF\n");
+            }
+            // 'O' key toggles opaque PSO (Task B: blend/depth sanity test)
+            else if (wParam == 'O')
+            {
+                Renderer::ToggleSystem::ToggleOpaquePSO();
+                OutputDebugStringA(Renderer::ToggleSystem::IsOpaquePSOEnabled()
+                    ? "OpaquePSO: ON\n" : "OpaquePSO: OFF\n");
+            }
         }
         break;
     case WM_MOUSEMOVE:

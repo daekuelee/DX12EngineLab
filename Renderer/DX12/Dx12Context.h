@@ -17,6 +17,9 @@
 #include "UploadArena.h"
 #include "CharacterRenderer.h"
 
+// Forward declare Engine::WorldState
+namespace Engine { class WorldState; }
+
 namespace Renderer
 {
     // HUD data struct (no Engine types - kept in Renderer namespace)
@@ -105,6 +108,21 @@ namespace Renderer
         float sweepAppliedDx = 0.0f, sweepAppliedDz = 0.0f;
         float sweepSlideDx = 0.0f, sweepSlideDz = 0.0f;
         float sweepNormalX = 0.0f, sweepNormalZ = 0.0f;
+        // Day3.12 Phase 4A: Y sweep diagnostics
+        bool sweepYHit = false;
+        float sweepYTOI = 1.0f;
+        int32_t sweepYHitCubeIdx = -1;
+        float sweepYReqDy = 0.0f;
+        float sweepYAppliedDy = 0.0f;
+        // Day3.12 Phase 4B: Step-up diagnostics
+        bool stepTry = false;
+        bool stepSuccess = false;
+        uint8_t stepFailMask = 0;
+        float stepHeightUsed = 0.0f;
+        int32_t stepCubeIdx = -1;
+        // Day3.12+: Step grid test toggle state
+        bool stepGridTestEnabled = false;
+        bool stepGridWasEverEnabled = false;
     };
     class Dx12Context
     {
@@ -118,7 +136,7 @@ namespace Renderer
         Dx12Context(const Dx12Context&) = delete;
         Dx12Context& operator=(const Dx12Context&) = delete;
 
-        bool Initialize(HWND hwnd);
+        bool Initialize(HWND hwnd, Engine::WorldState* worldState = nullptr);
         void Render();
         void Shutdown();
 
@@ -147,6 +165,9 @@ namespace Renderer
         HWND m_hwnd = nullptr;
         uint32_t m_width = 0;
         uint32_t m_height = 0;
+
+        // Day3.12 Phase 4B+: WorldState for fixture transform overrides
+        Engine::WorldState* m_worldState = nullptr;
 
         // Core DX12 objects
         Microsoft::WRL::ComPtr<IDXGIFactory6> m_factory;

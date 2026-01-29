@@ -25,6 +25,9 @@ namespace Engine
         // Day3.11: Controller mode toggle (forwarded from WndProc)
         void ToggleControllerMode();
 
+        // Day3.12+: Step-up grid test toggle (forwarded from WndProc)
+        void ToggleStepUpGridTest();
+
     private:
         HWND m_hwnd = nullptr;
         Renderer::Dx12Context m_renderer;

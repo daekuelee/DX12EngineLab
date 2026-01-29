@@ -11,6 +11,7 @@
 #include "ResourceStateTracker.h"
 #include "PassOrchestrator.h"
 #include "CharacterPass.h"
+#include "../../Engine/WorldState.h"  // Day3.12 Phase 4B+: Fixture transform overrides
 #include <cstdio>
 #include <DirectXMath.h>
 
@@ -383,12 +384,13 @@ namespace Renderer
     // Initialize
     //-------------------------------------------------------------------------
 
-    bool Dx12Context::Initialize(HWND hwnd)
+    bool Dx12Context::Initialize(HWND hwnd, Engine::WorldState* worldState)
     {
         if (m_initialized)
             return false;
 
         m_hwnd = hwnd;
+        m_worldState = worldState;  // Day3.12 Phase 4B+: Store for fixture transform overrides
 
         // Get window dimensions
         RECT rect = {};
@@ -434,8 +436,8 @@ namespace Renderer
     static constexpr uint64_t CBV_ALIGNMENT = 256;
     static constexpr uint64_t CB_SIZE = (sizeof(float) * 16 + CBV_ALIGNMENT - 1) & ~(CBV_ALIGNMENT - 1);
 
-    // Transforms: 10k float4x4 = 10k * 64 bytes
-    static constexpr uint64_t TRANSFORMS_SIZE = InstanceCount * sizeof(float) * 16;
+    // Transforms: (10k + extras) float4x4 = (10k + 32) * 64 bytes
+    static constexpr uint64_t TRANSFORMS_SIZE = (InstanceCount + MaxExtraInstances) * sizeof(float) * 16;
 
     //-------------------------------------------------------------------------
     // Phase Helpers
@@ -519,7 +521,7 @@ namespace Renderer
             {
                 // Identity matrix with translation
                 float tx = static_cast<float>(x) * 2.0f - 99.0f; // Center grid
-                float ty = 0.0f;
+                float ty = 1.5f;  // Day3.12 Fix: Match collision AABB Y=[0,3] center
                 float tz = static_cast<float>(z) * 2.0f - 99.0f;
 
                 // S7 Proof: sentinel_Instance0 - move instance 0 to distinct position
@@ -531,9 +533,9 @@ namespace Renderer
                 }
 
                 // Row-major 4x4 scale+translate matrix (scale creates gaps between cubes)
-                // TEMP: Tall boxes to verify volumetric depth (side faces visible)
-                const float scaleXZ = 0.9f;   // Wider for visibility
-                const float scaleY = 3.0f;    // Tall boxes to show side faces
+                // Day3.12 Fix: Match collision AABB Y=[0,3] half-height
+                const float scaleXZ = 0.9f;   // Half-width (matches cubeHalfXZ)
+                const float scaleY = 1.5f;    // Half-height = (cubeMaxY - cubeMinY) / 2
                 transforms[idx * 16 + 0] = scaleXZ;  transforms[idx * 16 + 1] = 0.0f;  transforms[idx * 16 + 2] = 0.0f;  transforms[idx * 16 + 3] = 0.0f;
                 transforms[idx * 16 + 4] = 0.0f;  transforms[idx * 16 + 5] = scaleY;  transforms[idx * 16 + 6] = 0.0f;  transforms[idx * 16 + 7] = 0.0f;
                 transforms[idx * 16 + 8] = 0.0f;  transforms[idx * 16 + 9] = 0.0f;  transforms[idx * 16 + 10] = scaleXZ; transforms[idx * 16 + 11] = 0.0f;
@@ -543,8 +545,84 @@ namespace Renderer
             }
         }
 
-        // MT1: Store generated count for validation
-        m_generatedTransformCount = InstanceCount;
+        // Day3.12 Phase 4B+: Override fixture grid transforms to match collision AABBs
+        // Skip when StepUpGridTest is active (mutual exclusion with T1/T2/T3 fixtures)
+        bool fixtureOverrideActive = m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures
+            && !m_worldState->GetConfig().enableStepUpGridTest;
+
+        // MODE_SNAPSHOT: Log renderer branch once per second
+        static int s_frameCount = 0;
+        if (m_worldState && (++s_frameCount % 60 == 1)) {
+            char snap[256];
+            sprintf_s(snap, "[RENDER_SNAP] fixtureOverride=%d fixtures=%d gridTest=%d extras=%zu\n",
+                fixtureOverrideActive ? 1 : 0,
+                m_worldState->GetConfig().enableStepUpTestFixtures ? 1 : 0,
+                m_worldState->GetConfig().enableStepUpGridTest ? 1 : 0,
+                m_worldState->GetExtras().size());
+            OutputDebugStringA(snap);
+        }
+
+        if (fixtureOverrideActive)
+        {
+            float hxz = 0.9f;  // cubeHalfXZ
+
+            // Override cube to include both cube + step height
+            auto overrideWithStep = [&](uint16_t gridIdx, float stepHeight) {
+                int gx = gridIdx % 100;
+                int gz = gridIdx / 100;
+                float cx = static_cast<float>(gx) * 2.0f - 99.0f;
+                float cz = static_cast<float>(gz) * 2.0f - 99.0f;
+
+                // Total height = cube (3.0) + step
+                float totalHeight = 3.0f + stepHeight;
+                float cy = totalHeight * 0.5f;  // Center Y
+                float sy = totalHeight * 0.5f;  // Scale Y
+
+                float* m = transforms + gridIdx * 16;
+                m[0] = hxz;  m[1] = 0.0f; m[2] = 0.0f; m[3] = 0.0f;
+                m[4] = 0.0f; m[5] = sy;   m[6] = 0.0f; m[7] = 0.0f;
+                m[8] = 0.0f; m[9] = 0.0f; m[10] = hxz; m[11] = 0.0f;
+                m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
+            };
+
+            overrideWithStep(m_worldState->GetFixtureT1Idx(), 0.3f);      // T1: step h=0.3
+            overrideWithStep(m_worldState->GetFixtureT2Idx(), 0.6f);      // T2: step h=0.6
+            overrideWithStep(m_worldState->GetFixtureT3StepIdx(), 0.5f);  // T3: step h=0.5
+        }
+
+        // Render extras in BOTH modes (fixture mode: ceiling, grid test mode: 26 stairs)
+        const auto& extras = m_worldState ? m_worldState->GetExtras()
+                                          : std::vector<Engine::ExtraCollider>{};
+        for (size_t i = 0; i < extras.size() && i < MaxExtraInstances; ++i)
+        {
+            const Engine::AABB& aabb = extras[i].aabb;
+            float cx = (aabb.minX + aabb.maxX) * 0.5f;
+            float cy = (aabb.minY + aabb.maxY) * 0.5f;
+            float cz = (aabb.minZ + aabb.maxZ) * 0.5f;
+            float sx = (aabb.maxX - aabb.minX) * 0.5f;
+            float sy = (aabb.maxY - aabb.minY) * 0.5f;
+            float sz = (aabb.maxZ - aabb.minZ) * 0.5f;
+
+            uint32_t extraIdx = InstanceCount + static_cast<uint32_t>(i);
+            float* m = transforms + extraIdx * 16;
+            m[0] = sx;   m[1] = 0.0f; m[2] = 0.0f; m[3] = 0.0f;
+            m[4] = 0.0f; m[5] = sy;   m[6] = 0.0f; m[7] = 0.0f;
+            m[8] = 0.0f; m[9] = 0.0f; m[10] = sz;  m[11] = 0.0f;
+            m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
+        }
+
+#if defined(_DEBUG)
+        // Sentinel: Zero out unused extra slots to catch over-draw
+        for (uint32_t i = static_cast<uint32_t>(extras.size()); i < MaxExtraInstances; ++i)
+        {
+            uint32_t extraIdx = InstanceCount + i;
+            float* m = transforms + extraIdx * 16;
+            memset(m, 0, sizeof(float) * 16);  // All zeros = degenerate (invisible)
+        }
+#endif
+
+        // Always include extras in count (works for both fixture and grid test modes)
+        m_generatedTransformCount = InstanceCount + static_cast<uint32_t>(extras.size());
 
         return transformsAlloc;
     }
@@ -600,13 +678,25 @@ namespace Renderer
         inputs.geoInputs.colorMode = ToggleSystem::GetColorMode();
         inputs.geoInputs.gridEnabled = ToggleSystem::IsGridEnabled();
         inputs.geoInputs.markersEnabled = ToggleSystem::IsMarkersEnabled();
-        inputs.geoInputs.instanceCount = InstanceCount;
+        // Day3.12 Phase 4B+ Fix: Use generated count with safety clamp
+        uint32_t maxDrawCount = InstanceCount + MaxExtraInstances;
+        uint32_t drawCount = m_generatedTransformCount;
+        if (drawCount > maxDrawCount)
+        {
+            char buf[128];
+            sprintf_s(buf, "[MT1] CLAMP: gen=%u > max=%u, clamping\n", drawCount, maxDrawCount);
+            OutputDebugStringA(buf);
+            drawCount = maxDrawCount;
+        }
+        inputs.geoInputs.instanceCount = drawCount;
         // MT1: Pass generated transform count and frame ID for validation
         inputs.geoInputs.generatedTransformCount = m_generatedTransformCount;
         inputs.geoInputs.frameId = m_frameId;
         // MT2: Debug single instance mode
         inputs.geoInputs.debugSingleInstance = ToggleSystem::IsDebugSingleInstanceEnabled();
         inputs.geoInputs.debugInstanceIndex = ToggleSystem::GetDebugInstanceIndex();
+        // Task B: Opaque PSO toggle
+        inputs.geoInputs.useOpaquePSO = ToggleSystem::IsOpaquePSOEnabled();
 
         // Check if we need to record character pass (ThirdPerson mode)
         bool recordCharacter = (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson);

@@ -57,6 +57,7 @@ namespace Renderer
     {
         // Clear non-owning PSO pointers first
         m_pso = nullptr;
+        m_cubesOpaquePso = nullptr;
         m_floorPso = nullptr;
         m_markerPso = nullptr;
 
@@ -271,6 +272,19 @@ namespace Renderer
         // Pre-warm cube PSO via cache
         m_pso = m_psoCache.GetOrCreate(psoDesc, "cube_main");
         if (!m_pso)
+            return false;
+
+        // Task B: Create explicit opaque PSO for sanity test
+        // Force BlendEnable=false, DepthEnable=true, DepthWriteMask=ALL
+        // (Note: The main PSO already has these settings, but this is for explicit verification)
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC opaquePsoDesc = psoDesc;  // Copy from cube PSO
+        opaquePsoDesc.BlendState.RenderTarget[0].BlendEnable = FALSE;
+        opaquePsoDesc.DepthStencilState.DepthEnable = TRUE;
+        opaquePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        opaquePsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+
+        m_cubesOpaquePso = m_psoCache.GetOrCreate(opaquePsoDesc, "cube_opaque");
+        if (!m_cubesOpaquePso)
             return false;
 
         // Create floor PSO with floor-specific VS (no transforms read) and floor PS

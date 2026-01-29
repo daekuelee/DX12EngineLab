@@ -123,6 +123,21 @@ namespace Renderer
             float sweepAppliedDx = 0.0f, sweepAppliedDz = 0.0f;
             float sweepSlideDx = 0.0f, sweepSlideDz = 0.0f;
             float sweepNormalX = 0.0f, sweepNormalZ = 0.0f;
+            // Day3.12 Phase 4A: Y sweep diagnostics
+            bool sweepYHit = false;
+            float sweepYTOI = 1.0f;
+            int32_t sweepYHitCubeIdx = -1;
+            float sweepYReqDy = 0.0f;
+            float sweepYAppliedDy = 0.0f;
+            // Day3.12 Phase 4B: Step-up diagnostics
+            bool stepTry = false;
+            bool stepSuccess = false;
+            uint8_t stepFailMask = 0;
+            float stepHeightUsed = 0.0f;
+            int32_t stepCubeIdx = -1;
+            // Day3.12+: Step grid test toggle state
+            bool stepGridTestEnabled = false;
+            bool stepGridWasEverEnabled = false;
         } m_worldState;
         bool m_hasWorldState = false;
     };
