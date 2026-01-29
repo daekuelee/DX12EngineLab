@@ -721,22 +721,31 @@ namespace Engine
     void WorldState::ToggleStepUpGridTest()
     {
         bool newValue = !m_config.enableStepUpGridTest;
-        if (newValue && !m_stepGridWasEverEnabled)
+
+        // Clear existing extras from spatial grid before switching modes
+        ClearExtrasFromSpatialGrid();
+
+        if (newValue)
         {
+            // Toggle ON: Build stair grid test
             m_config.enableStepUpGridTest = true;
             BuildStepUpGridTest();
             m_stepGridWasEverEnabled = true;
-            OutputDebugStringA("[STEP_GRID] Toggle => 1 (built)\n");
-        }
-        else if (newValue)
-        {
-            m_config.enableStepUpGridTest = true;
-            OutputDebugStringA("[STEP_GRID] Toggle => 1 (already built)\n");
+            OutputDebugStringA("[STEP_GRID] Toggle => 1 (stairs built)\n");
         }
         else
         {
+            // Toggle OFF: Rebuild fixtures mode (T1/T2/T3 + ceiling)
             m_config.enableStepUpGridTest = false;
-            OutputDebugStringA("[STEP_GRID] Toggle => 0 (restart to purge)\n");
+            if (m_config.enableStepUpTestFixtures)
+            {
+                BuildExtraFixtures();
+                OutputDebugStringA("[STEP_GRID] Toggle => 0 (fixtures rebuilt)\n");
+            }
+            else
+            {
+                OutputDebugStringA("[STEP_GRID] Toggle => 0 (no fixtures)\n");
+            }
         }
     }
 
@@ -811,6 +820,24 @@ namespace Engine
         for (int gz = minCZ; gz <= maxCZ; ++gz)
             for (int gx = minCX; gx <= maxCX; ++gx)
                 m_spatialGrid[gz][gx].push_back(id);
+    }
+
+    void WorldState::ClearExtrasFromSpatialGrid()
+    {
+        // Remove all IDs >= EXTRA_BASE from spatial grid
+        for (int gz = 0; gz < GRID_SIZE; ++gz)
+        {
+            for (int gx = 0; gx < GRID_SIZE; ++gx)
+            {
+                auto& cell = m_spatialGrid[gz][gx];
+                cell.erase(
+                    std::remove_if(cell.begin(), cell.end(),
+                        [](uint16_t id) { return id >= EXTRA_BASE; }),
+                    cell.end());
+            }
+        }
+        m_extras.clear();
+        OutputDebugStringA("[SPATIAL] Cleared all extras from grid\n");
     }
 
     void WorldState::BuildExtraFixtures()

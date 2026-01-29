@@ -339,6 +339,7 @@ namespace Engine
         void BuildExtraFixtures();
         void BuildStepUpGridTest();  // Day3.12: Stair grid test map
         void RegisterAABBToSpatialGrid(uint16_t id, const AABB& aabb);
+        void ClearExtrasFromSpatialGrid();
 
         // Day3.12+: Track if step grid was ever built (for safe toggle)
         bool m_stepGridWasEverEnabled = false;
