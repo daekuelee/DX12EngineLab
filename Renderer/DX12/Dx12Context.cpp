@@ -546,7 +546,9 @@ namespace Renderer
         }
 
         // Day3.12 Phase 4B+: Override fixture grid transforms to match collision AABBs
-        if (m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures)
+        // Skip when StepUpGridTest is active (mutual exclusion with T1/T2/T3 fixtures)
+        if (m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures
+            && !m_worldState->GetConfig().enableStepUpGridTest)
         {
             float hxz = 0.9f;  // cubeHalfXZ
 

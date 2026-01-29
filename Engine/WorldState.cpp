@@ -840,8 +840,11 @@ namespace Engine
         const int STEPS = 5;
         const float BASE_Y = 3.0f;
 
+        // Clear any existing extras (e.g., T3_CEIL from fixtures mode)
+        m_extras.clear();
+
         // Capacity check (5 stairs * 5 steps + 1 ceiling = 26)
-        if (m_extras.size() + 26 > MAX_EXTRA_COLLIDERS) {
+        if (26 > MAX_EXTRA_COLLIDERS) {
             OutputDebugStringA("[STEP_GRID] ERROR: Exceeds MAX_EXTRA_COLLIDERS!\n");
             return;
         }
