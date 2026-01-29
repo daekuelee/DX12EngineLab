@@ -547,8 +547,22 @@ namespace Renderer
 
         // Day3.12 Phase 4B+: Override fixture grid transforms to match collision AABBs
         // Skip when StepUpGridTest is active (mutual exclusion with T1/T2/T3 fixtures)
-        if (m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures
-            && !m_worldState->GetConfig().enableStepUpGridTest)
+        bool fixtureOverrideActive = m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures
+            && !m_worldState->GetConfig().enableStepUpGridTest;
+
+        // MODE_SNAPSHOT: Log renderer branch once per second
+        static int s_frameCount = 0;
+        if (m_worldState && (++s_frameCount % 60 == 1)) {
+            char snap[256];
+            sprintf_s(snap, "[RENDER_SNAP] fixtureOverride=%d fixtures=%d gridTest=%d extras=%zu\n",
+                fixtureOverrideActive ? 1 : 0,
+                m_worldState->GetConfig().enableStepUpTestFixtures ? 1 : 0,
+                m_worldState->GetConfig().enableStepUpGridTest ? 1 : 0,
+                m_worldState->GetExtras().size());
+            OutputDebugStringA(snap);
+        }
+
+        if (fixtureOverrideActive)
         {
             float hxz = 0.9f;  // cubeHalfXZ
 
@@ -574,43 +588,41 @@ namespace Renderer
             overrideWithStep(m_worldState->GetFixtureT1Idx(), 0.3f);      // T1: step h=0.3
             overrideWithStep(m_worldState->GetFixtureT2Idx(), 0.6f);      // T2: step h=0.6
             overrideWithStep(m_worldState->GetFixtureT3StepIdx(), 0.5f);  // T3: step h=0.5
+        }
 
-            // Append ceiling transform after grid (index 10000)
-            const auto& extras = m_worldState->GetExtras();
-            for (size_t i = 0; i < extras.size() && (InstanceCount + i) < (InstanceCount + MaxExtraInstances); ++i)
-            {
-                const Engine::AABB& aabb = extras[i].aabb;
-                float cx = (aabb.minX + aabb.maxX) * 0.5f;
-                float cy = (aabb.minY + aabb.maxY) * 0.5f;
-                float cz = (aabb.minZ + aabb.maxZ) * 0.5f;
-                float sx = (aabb.maxX - aabb.minX) * 0.5f;
-                float sy = (aabb.maxY - aabb.minY) * 0.5f;
-                float sz = (aabb.maxZ - aabb.minZ) * 0.5f;
+        // Render extras in BOTH modes (fixture mode: ceiling, grid test mode: 26 stairs)
+        const auto& extras = m_worldState ? m_worldState->GetExtras()
+                                          : std::vector<Engine::ExtraCollider>{};
+        for (size_t i = 0; i < extras.size() && i < MaxExtraInstances; ++i)
+        {
+            const Engine::AABB& aabb = extras[i].aabb;
+            float cx = (aabb.minX + aabb.maxX) * 0.5f;
+            float cy = (aabb.minY + aabb.maxY) * 0.5f;
+            float cz = (aabb.minZ + aabb.maxZ) * 0.5f;
+            float sx = (aabb.maxX - aabb.minX) * 0.5f;
+            float sy = (aabb.maxY - aabb.minY) * 0.5f;
+            float sz = (aabb.maxZ - aabb.minZ) * 0.5f;
 
-                uint32_t extraIdx = InstanceCount + static_cast<uint32_t>(i);
-                float* m = transforms + extraIdx * 16;
-                m[0] = sx;   m[1] = 0.0f; m[2] = 0.0f; m[3] = 0.0f;
-                m[4] = 0.0f; m[5] = sy;   m[6] = 0.0f; m[7] = 0.0f;
-                m[8] = 0.0f; m[9] = 0.0f; m[10] = sz;  m[11] = 0.0f;
-                m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
-            }
+            uint32_t extraIdx = InstanceCount + static_cast<uint32_t>(i);
+            float* m = transforms + extraIdx * 16;
+            m[0] = sx;   m[1] = 0.0f; m[2] = 0.0f; m[3] = 0.0f;
+            m[4] = 0.0f; m[5] = sy;   m[6] = 0.0f; m[7] = 0.0f;
+            m[8] = 0.0f; m[9] = 0.0f; m[10] = sz;  m[11] = 0.0f;
+            m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
+        }
 
 #if defined(_DEBUG)
-            // Sentinel: Zero out unused extra slots to catch over-draw
-            for (uint32_t i = static_cast<uint32_t>(extras.size()); i < MaxExtraInstances; ++i)
-            {
-                uint32_t extraIdx = InstanceCount + i;
-                float* m = transforms + extraIdx * 16;
-                memset(m, 0, sizeof(float) * 16);  // All zeros = degenerate (invisible)
-            }
+        // Sentinel: Zero out unused extra slots to catch over-draw
+        for (uint32_t i = static_cast<uint32_t>(extras.size()); i < MaxExtraInstances; ++i)
+        {
+            uint32_t extraIdx = InstanceCount + i;
+            float* m = transforms + extraIdx * 16;
+            memset(m, 0, sizeof(float) * 16);  // All zeros = degenerate (invisible)
+        }
 #endif
 
-            m_generatedTransformCount = InstanceCount + static_cast<uint32_t>(extras.size());
-        }
-        else
-        {
-            m_generatedTransformCount = InstanceCount;
-        }
+        // Always include extras in count (works for both fixture and grid test modes)
+        m_generatedTransformCount = InstanceCount + static_cast<uint32_t>(extras.size());
 
         return transformsAlloc;
     }
