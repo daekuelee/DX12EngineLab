@@ -153,6 +153,8 @@
     <ClInclude Include="Renderer\DX12\CharacterPass.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
+    <ClInclude Include="Scene\SceneTypes.h" />
+    <ClInclude Include="Scene\SceneContract.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp" />
@@ -179,6 +181,8 @@
     <ClCompile Include="third_party\imgui\imgui_widgets.cpp" />
     <ClCompile Include="third_party\imgui\backends\imgui_impl_win32.cpp" />
     <ClCompile Include="third_party\imgui\backends\imgui_impl_dx12.cpp" />
+    <ClCompile Include="Scene\SceneTypes.cpp" />
+    <ClCompile Include="Scene\SceneContract.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="DX12EngineLab.rc" />
