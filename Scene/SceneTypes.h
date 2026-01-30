@@ -93,16 +93,22 @@ struct StaticObject {
 // Overlay operations
 //------------------------------------------------------------------------------
 enum class OverlayOpType {
-    Add,
-    Remove,
-    Modify
+    Disable,
+    ModifyTopY,
+    ReplacePreset
+};
+
+struct OverlayOpPayload {
+    float topYAbs = 0.0f;   // Used by ModifyTopY
+    int presetId = 0;       // Used by ReplacePreset (T1=1, T2=2, T3=3)
 };
 
 struct OverlayOp {
     CellKey key;
-    OverlayOpType type = OverlayOpType::Add;
-    std::string source;  // Source identifier for debugging
-    // Future: payload for Add/Modify
+    OverlayOpType type = OverlayOpType::Disable;
+    OverlayOpPayload payload;
+    std::string source;     // Source identifier for debugging
+    int sourceLine = 0;     // Line number in source file
 };
 
 //------------------------------------------------------------------------------
