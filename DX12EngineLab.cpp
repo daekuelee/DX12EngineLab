@@ -6,6 +6,7 @@
 #include "Engine/App.h"
 #include "Renderer/DX12/ToggleSystem.h"
 #include "Renderer/DX12/ImGuiLayer.h"
+#include "Scene/SceneContract.h"
 #include <cstdio>
 #include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM
 
@@ -140,6 +141,9 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    {
       return FALSE;
    }
+
+   // Run Scene contract self-test (Debug-only)
+   Scene::RunContractSelfTest();
 
    ShowWindow(hWnd, nCmdShow);
    UpdateWindow(hWnd);
