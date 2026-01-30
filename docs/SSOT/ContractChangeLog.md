@@ -23,7 +23,32 @@ Append-only log of SSOT contract changes.
 - Single `TryAdd()` API (no test variant)
 
 **Deferred:**
-- `CellKey::FromWorld()` (PR#2)
-- Loader implementation (PR#2)
+- `CellKey::FromWorld()` (PR#3)
 - Resolve function (PR#3)
+- Consumer switching (PR#4-5)
+
+---
+
+## 2026-01-30: Day4 P0 PR#2 - Scene Loader + Grammar
+
+**Added:**
+- `SceneIO.h/cpp` with `LoadBaseSceneFromFile` and `LoadOverlayOpsFromFile` APIs
+- `LoadStatus` enum (OK, FILE_NOT_FOUND, PARSE_ERROR)
+- `LoadResult` struct with error details and line number
+- `OverlayOpPayload` struct (topYAbs, presetId)
+- Asset files: `base/default.txt`, `overlay/empty.txt`, `overlay/fixtures_test.txt`
+- Loader Contract section in self-test
+
+**Modified:**
+- `OverlayOpType` enum: Add/Remove/Modify -> Disable/ModifyTopY/ReplacePreset
+- `OverlayOp`: Added `payload` and `sourceLine` fields
+- `TryAdd()`: Now logs BOTH first and second sources on duplicate
+
+**Grammar:**
+- Base: GRID (7 params), FLOOR (3 params), KILLZONE (1 param)
+- Overlay: DISABLE, MODIFY_TOP_Y, REPLACE_PRESET (all cell-keyed with tag)
+- Preset mapping: T1=1, T2=2, T3=3
+
+**Deferred:**
+- Resolve(base, overlay) -> ResolvedViews (PR#3)
 - Consumer switching (PR#4-5)
