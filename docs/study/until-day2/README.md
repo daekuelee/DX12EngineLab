@@ -190,3 +190,27 @@ Each module (A-F) follows this structure:
 | `docs/contracts/` | Phase contracts, must-haves | Facts extracted from contracts |
 | `docs/study/until-day2/` | **This pack** - formal understanding | Canonical source |
 | `docs/study/until-day3/` | Future - extends without duplicating | References this pack |
+
+---
+
+## Day3+ Study Track (Entry Points)
+
+This study pack covers rendering through Day2. For Day3+ (simulation, physics, collision), see:
+
+| Topic | Entry Point (symbol) | Purpose |
+|-------|---------------------|---------|
+| Simulation pipeline | `Engine/App.cpp::Tick()` | Fixed-step loop, input handling |
+| World state | `Engine/WorldState.h::struct PawnState` | Position/velocity/flags |
+| Collision config | `Engine/WorldState.h::struct WorldConfig` | Physics constants |
+| Collision stats | `Engine/WorldState.h::struct CollisionStats` | Per-tick metrics |
+| AABB resolution | `Engine/WorldState.cpp::ResolveXZ_MTV()` | MTV-based discrete |
+| Capsule sweep | `Engine/WorldState.cpp::SweepXZ_Capsule()` | Continuous sweep+slide |
+| Step-up mechanics | `Engine/WorldState.cpp::TryStepUp_Capsule()` | Stair climbing |
+
+### Future Study Packs
+A future `docs/study/until-day3/` pack (PR#DOCS-3) will provide:
+- Formal model of capsule-AABB sweep intersection
+- Depenetration convergence proof
+- Step-up geometry constraints
+
+> Until then, refer to `docs/onboarding/pass/` for practical onboarding.
