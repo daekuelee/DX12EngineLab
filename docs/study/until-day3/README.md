@@ -10,6 +10,7 @@ Bridge docs for Day3+ debugging. References `until-day2/` as SSOT (Single Source
 |------|---------|--------|
 | [01_frame_lifetime_quick_ref.md](01_frame_lifetime_quick_ref.md) | Frame sync checklist | [D_resource_lifetime.md](../until-day2/D_resource_lifetime.md) |
 | [02_binding_abi_quick_ref.md](02_binding_abi_quick_ref.md) | Binding checklist | [C_binding_abi.md](../until-day2/C_binding_abi.md) |
+| [03_fixedstep_pipeline_deep.md](03_fixedstep_pipeline_deep.md) | Fixed-step simulation contracts | None |
 
 ## SSOT (Do NOT Duplicate)
 
