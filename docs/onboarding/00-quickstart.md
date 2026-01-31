@@ -156,5 +156,7 @@ Starting from Day3, the engine includes simulation, physics, and collision syste
 | 1 | [pass/01_day3_quickstart.md](pass/01_day3_quickstart.md) | Run baseline, explore toggles/HUD/logs |
 | 2 | [pass/02_day3_system_map.md](pass/02_day3_system_map.md) | Ownership + dataflow diagram |
 | 3 | [99_proof_template.md](99_proof_template.md) | Evidence bundle template |
+| 4 | [pass/03_day3_contracts_map.md](pass/03_day3_contracts_map.md) | Contract reference (8 categories) |
+| 5 | [pass/04_day3_failure_cookbook.md](pass/04_day3_failure_cookbook.md) | Failure patterns + proof steps |
 
 > **Source-of-Truth**: `Engine/App.cpp::Tick()` is the Day3 simulation entry point.
