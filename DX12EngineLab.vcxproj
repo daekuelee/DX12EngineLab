@@ -134,6 +134,11 @@
     <ClInclude Include="Engine\WorldState.h" />
     <ClInclude Include="Engine\InputSampler.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="Input\HotkeyRouter.h" />
+    <ClInclude Include="Input\GameplayInputSystem.h" />
+    <ClInclude Include="Input\GameplayActionSystem.h" />
+    <ClInclude Include="Engine\FrameInput.h" />
+    <ClInclude Include="Engine\InputState.h" />
     <ClInclude Include="Renderer\DX12\DescriptorRingAllocator.h" />
     <ClInclude Include="Renderer\DX12\Dx12Context.h" />
     <ClInclude Include="Renderer\DX12\Dx12Debug.h" />
@@ -161,6 +166,9 @@
     <ClCompile Include="DX12EngineLab.cpp" />
     <ClCompile Include="Engine\App.cpp" />
     <ClCompile Include="Engine\WorldState.cpp" />
+    <ClCompile Include="Input\HotkeyRouter.cpp" />
+    <ClCompile Include="Input\GameplayInputSystem.cpp" />
+    <ClCompile Include="Input\GameplayActionSystem.cpp" />
     <ClCompile Include="Renderer\DX12\DescriptorRingAllocator.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Context.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Debug.cpp" />

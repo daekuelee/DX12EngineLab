@@ -289,6 +289,15 @@ namespace Renderer
         // Day3.12+: Step grid test toggle state
         m_worldState.stepGridTestEnabled = snap.stepGridTestEnabled;
         m_worldState.stepGridWasEverEnabled = snap.stepGridWasEverEnabled;
+        // Day4 PR2.2: Action system diagnostics
+        m_worldState.actionJumpBuffered = snap.actionJumpBuffered;
+        m_worldState.actionJumpBufferTimer = snap.actionJumpBufferTimer;
+        m_worldState.actionCoyoteActive = snap.actionCoyoteActive;
+        m_worldState.actionCoyoteTimer = snap.actionCoyoteTimer;
+        m_worldState.actionStepsThisFrame = snap.actionStepsThisFrame;
+        m_worldState.actionJumpFiredThisFrame = snap.actionJumpFiredThisFrame;
+        m_worldState.actionBlockedByImGui = snap.actionBlockedByImGui;
+        m_worldState.actionBufferFlushedByBlock = snap.actionBufferFlushedByBlock;
         m_hasWorldState = true;
     }
 
@@ -412,6 +421,35 @@ namespace Renderer
                 ImGui::Text("FOV: %.1f deg", m_worldState.fovDeg);
                 if (m_worldState.jumpQueued)
                     ImGui::TextColored(ImVec4(0,1,0,1), "JUMP!");
+
+                // Day4 PR2.2: Action system diagnostics
+                ImGui::Separator();
+                ImGui::Text("-- Action System --");
+                ImGui::Text("Steps/Frame: %u", m_worldState.actionStepsThisFrame);
+
+                // Jump buffer
+                if (m_worldState.actionJumpBuffered)
+                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "JumpBuffer: YES (%.3fs)", m_worldState.actionJumpBufferTimer);
+                else
+                    ImGui::Text("JumpBuffer: no");
+
+                // Coyote time
+                if (m_worldState.actionCoyoteActive)
+                    ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Coyote: YES (%.3fs)", m_worldState.actionCoyoteTimer);
+                else
+                    ImGui::Text("Coyote: no");
+
+                // Jump fired
+                if (m_worldState.actionJumpFiredThisFrame)
+                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "JumpFired: YES");
+                else
+                    ImGui::Text("JumpFired: no");
+
+                // ImGui blocking
+                if (m_worldState.actionBlockedByImGui)
+                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Blocked: YES");
+                if (m_worldState.actionBufferFlushedByBlock)
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.0f, 1.0f), "[FLUSH]");
 
                 // Part 1: Respawn tracking
                 if (m_worldState.respawnCount > 0)

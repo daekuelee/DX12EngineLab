@@ -138,6 +138,15 @@ namespace Renderer
             // Day3.12+: Step grid test toggle state
             bool stepGridTestEnabled = false;
             bool stepGridWasEverEnabled = false;
+            // Day4 PR2.2: Action system diagnostics
+            bool actionJumpBuffered = false;
+            float actionJumpBufferTimer = 0.0f;
+            bool actionCoyoteActive = false;
+            float actionCoyoteTimer = 0.0f;
+            uint32_t actionStepsThisFrame = 0;
+            bool actionJumpFiredThisFrame = false;
+            bool actionBlockedByImGui = false;
+            bool actionBufferFlushedByBlock = false;
         } m_worldState;
         bool m_hasWorldState = false;
     };
