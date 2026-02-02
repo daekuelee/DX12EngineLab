@@ -6,13 +6,14 @@
 #include "Engine/App.h"
 #include "Renderer/DX12/ToggleSystem.h"
 #include "Renderer/DX12/ImGuiLayer.h"
-#include "Input/InputRouter.h"
+#include "Input/HotkeyRouter.h"
+#include "Input/GameplayInputSystem.h"
+#include "Input/GameplayActionSystem.h"
 #include "Scene/SceneContract.h"
 #include <cstdio>
-#include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM
 
 /******************************************************************************
- * FILE CONTRACT — DX12EngineLab.cpp (PR1: Input Routing Refactor)
+ * FILE CONTRACT — DX12EngineLab.cpp (PR2: GameplayInputSystem)
  *
  * THREAD MODEL
  *   Single UI thread owns window, message pump, WndProc, and App::Tick.
@@ -27,19 +28,21 @@
  * INPUT OWNERSHIP PRIORITY (highest to lowest)
  *   1. TranslateAccelerator — menu accelerators (Alt+F4, etc.)
  *   2. ImGui forwarding     — unconditional, before engine checks
- *   3. ImGui capture check  — blocks engine hotkeys if WantsKeyboard()
- *   4. InputRouter          — engine hotkeys (edge-gated), mouse forwarding
+ *   3. GameplayInputSystem  — observes all input (NEVER consumes)
+ *   4. HotkeyRouter         — engine hotkeys (edge-gated, may consume) [PR-A]
  *   5. DefWindowProc        — unhandled messages
  *
- * PR1 SCOPE
- *   Hotkey edge gating + mouse forward only.
- *   WASD movement remains polled in App::Tick via GetAsyncKeyState.
+ * INVARIANTS
+ *   - GameplayInputSystem::OnWin32Message called BEFORE HotkeyRouter
+ *   - GameplayInputSystem NEVER consumes messages (returns void)
+ *   - HotkeyRouter MAY consume WM_KEYDOWN for registered bindings
  *
  * PROOF POINTS
- *   [PROOF-KEYEDGE] — Hold T: one toggle, repeats show isRepeat=1
- *   [PROOF-IMGUI]   — Focus ImGui text, press T: blocked, log shows captured=1
- *   [PROOF-ACCEL]   — Alt+F4 closes window (TranslateAccelerator path)
- *   [PROOF-MOUSE-SMOKE] — Mouse look works in 3P mode
+ *   [PROOF-STUCK-KEY]   — Hold W -> ImGui capture -> release W -> unfocus -> no movement
+ *   [PROOF-HOLD-KEY]    — Hold W through capture -> unfocus -> movement resumes
+ *   [PROOF-MOUSE-SPIKE] — Drag ImGui -> unfocus -> no camera spike
+ *   [PROOF-JUMP-ONCE]   — Multiple fixed steps -> jump triggers once
+ *   [PROOF-HOTKEYS]     — T/F7 edge-gated, blocked by ImGui WantsKeyboard
  ******************************************************************************/
 
 #define MAX_LOADSTRING 100
@@ -178,8 +181,11 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
       return FALSE;
    }
 
-   // Initialize InputRouter (PR1: table-driven hotkey routing)
-   InputRouter::Initialize(&g_app);
+   // Initialize HotkeyRouter (PR-A: table-driven hotkey routing)
+   HotkeyRouter::Initialize(&g_app);
+
+   // Initialize GameplayInputSystem (PR2: centralized input state)
+   GameplayInputSystem::Initialize();
 
    // Run Scene contract self-test (Debug-only)
    Scene::RunContractSelfTest();
@@ -191,18 +197,33 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 }
 
 /******************************************************************************
- * WndProc CONTRACT
- *   - ImGui forwarding FIRST and UNCONDITIONALLY.
- *   - Input messages (WM_KEYDOWN/UP, WM_MOUSEMOVE, WM_KILLFOCUS) -> InputRouter.
- *   - If InputRouter returns true, message is consumed; return 0.
- *   - If InputRouter returns false, fall through to DefWindowProc.
- *   - lParam bit30 = previous key state, used for edge detection.
- *   - FORBIDDEN: blocking I/O, heavy computation, frame-rate logic.
+ * FUNCTION CONTRACT — WndProc
+ *
+ * PRECONDITIONS
+ *   - Called from UI thread via DispatchMessage
+ *   - ImGui initialized before first call
+ *
+ * DISPATCH ORDER (must follow exactly)
+ *   1. ImGuiLayer::WndProcHandler — always, unconditional
+ *   2. GameplayInputSystem::OnWin32Message — observe, never consume
+ *   3. HotkeyRouter::OnWin32Message — may consume hotkeys
+ *   4. DefWindowProc — unhandled
+ *
+ * POSTCONDITIONS
+ *   - Returns 0 if message consumed, DefWindowProc result otherwise
+ *
+ * FORBIDDEN
+ *   - Blocking I/O
+ *   - Heavy computation
+ *   - Frame-rate logic
  ******************************************************************************/
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    // CONTRACT: ImGui forwarding FIRST, unconditionally
+    // 1. ImGui FIRST, unconditional
     Renderer::ImGuiLayer::WndProcHandler(hWnd, message, wParam, lParam);
+
+    // 2. GameplayInputSystem observes (never consumes)
+    GameplayInputSystem::OnWin32Message(hWnd, message, wParam, lParam);
 
     switch (message)
     {
@@ -236,12 +257,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_KEYDOWN:
     case WM_KEYUP:
-    case WM_MOUSEMOVE:
     case WM_KILLFOCUS:
-        // Delegate to InputRouter; correct fallthrough if not handled
-        if (InputRouter::OnWin32Message(hWnd, message, wParam, lParam))
+        /******************************************************************************
+         * WM_KILLFOCUS CONTRACT (Day4 PR2.2)
+         *   - GameplayInputSystem already observed (line 226, before switch)
+         *   - GameplayActionSystem::ResetAllState flushes jump buffer, coyote
+         *   - Both RAW and ACTION layers reset on focus loss
+         *   - No stale buffers trigger actions on refocus
+         ******************************************************************************/
+        if (message == WM_KILLFOCUS)
+            GameplayActionSystem::ResetAllState();
+        // 3. HotkeyRouter may consume
+        if (HotkeyRouter::OnWin32Message(hWnd, message, wParam, lParam))
             return 0;
         return DefWindowProc(hWnd, message, wParam, lParam);
+
+    // WM_MOUSEMOVE: GameplayInputSystem already observed; no HotkeyRouter handling
 
     case WM_DESTROY:
         PostQuitMessage(0);

@@ -69,8 +69,20 @@
     <ClInclude Include="Scene\SceneIO.h">
       <Filter>Scene</Filter>
     </ClInclude>
-    <ClInclude Include="Input\InputRouter.h">
+    <ClInclude Include="Input\HotkeyRouter.h">
       <Filter>Input</Filter>
+    </ClInclude>
+    <ClInclude Include="Input\GameplayInputSystem.h">
+      <Filter>Input</Filter>
+    </ClInclude>
+    <ClInclude Include="Input\GameplayActionSystem.h">
+      <Filter>Input</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\FrameInput.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\InputState.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -110,7 +122,13 @@
     <ClCompile Include="Scene\SceneIO.cpp">
       <Filter>Scene</Filter>
     </ClCompile>
-    <ClCompile Include="Input\InputRouter.cpp">
+    <ClCompile Include="Input\HotkeyRouter.cpp">
+      <Filter>Input</Filter>
+    </ClCompile>
+    <ClCompile Include="Input\GameplayInputSystem.cpp">
+      <Filter>Input</Filter>
+    </ClCompile>
+    <ClCompile Include="Input\GameplayActionSystem.cpp">
       <Filter>Input</Filter>
     </ClCompile>
   </ItemGroup>

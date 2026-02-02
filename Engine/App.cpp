@@ -1,5 +1,38 @@
+/******************************************************************************
+ * FILE CONTRACT — App.cpp (Day4 PR2.2)
+ *
+ * SCOPE
+ *   Owns application lifecycle, fixed-step simulation loop, camera injection.
+ *   Orchestrates RAW input -> Action layer -> Physics flow.
+ *   Injects action debug state into HUD snapshot.
+ *
+ * TICK CONTRACT
+ *   1. ConsumeFrameInput exactly once per frame (RAW snapshot)
+ *   2. GameplayActionSystem::BeginFrame (latch jump, cache movement)
+ *   3. ApplyMouseLook once per frame (orientation only)
+ *   4. WorldState::BeginFrame (reset per-frame flags)
+ *   5. Fixed-step loop:
+ *      - onGround = IsOnGround() [state from PREVIOUS step]
+ *      - InputState from GameplayActionSystem::ConsumeForFixedStep
+ *      - WorldState::TickFixed consumes InputState
+ *   6. GameplayActionSystem::EndFrame (handle stepCount==0 timer decay)
+ *   7. Inject action debug into HUD snapshot (at App level, not WorldState)
+ *
+ * INVARIANTS
+ *   - onGround passed to ConsumeForFixedStep is state BEFORE step executes
+ *   - Jump fires on first step only (allowJumpThisStep=true)
+ *   - Action debug injection happens HERE (not WorldState::BuildSnapshot)
+ *
+ * PROOF POINTS
+ *   [PROOF-JUMP-ONCE]         — isFirstStep flag controls allowJumpThisStep
+ *   [PROOF-STEP0-LATCH]       — Action layer handles stepCount==0
+ *   [PROOF-IMGUI-BLOCK-FLUSH] — Action layer flushes on ImGui capture
+ ******************************************************************************/
+
 #include "App.h"
-#include "InputSampler.h"
+#include "FrameInput.h"
+#include "../Input/GameplayInputSystem.h"
+#include "../Input/GameplayActionSystem.h"
 #include "../Renderer/DX12/ToggleSystem.h"
 #include "../Renderer/DX12/ImGuiLayer.h"
 
@@ -15,18 +48,45 @@ namespace Engine
         // Initialize world state first (so renderer can get fixture data)
         m_worldState.Initialize();
 
+        // Initialize action system (Day4 PR2.2)
+        GameplayActionSystem::Initialize();
+
         // Initialize DX12 renderer with worldState for fixture transform overrides
         if (!m_renderer.Initialize(hwnd, &m_worldState))
         {
             return false;
         }
         m_accumulator = 0.0f;
-        m_prevJump = false;
 
         m_initialized = true;
         return true;
     }
 
+    /******************************************************************************
+     * FUNCTION CONTRACT — App::Tick (ThirdPerson branch, Day4 PR2.2)
+     *
+     * PRECONDITIONS
+     *   - m_initialized == true
+     *   - GameplayInputSystem initialized
+     *   - GameplayActionSystem initialized
+     *
+     * INPUT CONSUMPTION (Day4 PR2.2 flow)
+     *   1. ConsumeFrameInput exactly once (RAW snapshot, clears edges)
+     *   2. GameplayActionSystem::BeginFrame (latch jump, cache movement)
+     *   3. ApplyMouseLook (already masked if imguiMouse)
+     *   4. WorldState::BeginFrame (reset m_jumpConsumedThisFrame)
+     *   5. Fixed-step loop:
+     *      - onGround = IsOnGround() [state from PREVIOUS step]
+     *      - InputState from GameplayActionSystem::ConsumeForFixedStep
+     *      - WorldState::TickFixed consumes InputState
+     *   6. GameplayActionSystem::EndFrame (stepCount==0 timer decay)
+     *   7. Inject action debug into HUD snapshot
+     *
+     * POSTCONDITIONS
+     *   - WorldState updated via TickFixed/TickFrame
+     *   - Camera injected to renderer
+     *   - HUD snapshot with action debug sent to renderer
+     ******************************************************************************/
     void App::Tick()
     {
         if (!m_initialized)
@@ -44,42 +104,52 @@ namespace Engine
         // Check camera mode
         if (Renderer::ToggleSystem::GetCameraMode() == Renderer::CameraMode::ThirdPerson)
         {
-            // 1. Apply mouse look ONCE per frame (before fixed-step loop)
-            if (!Renderer::ImGuiLayer::WantsMouse())
-            {
-                m_worldState.ApplyMouseLook(m_pendingMouseDeltaX, m_pendingMouseDeltaY);
-            }
-            m_pendingMouseDeltaX = 0.0f;
-            m_pendingMouseDeltaY = 0.0f;
+            // 1. Consume RAW input (exactly once)
+            // [PROOF-STUCK-KEY], [PROOF-HOLD-KEY], [PROOF-MOUSE-SPIKE]
+            bool imguiKeyboard = Renderer::ImGuiLayer::WantsKeyboard();
+            bool imguiMouse = Renderer::ImGuiLayer::WantsMouse();
+            bool imguiBlocksGameplay = imguiKeyboard || imguiMouse;
 
-            // 2. Sample jump input with edge detection (must be on ground to trigger)
-            bool spaceDown = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
-            bool jumpEdge = spaceDown && !m_prevJump && m_worldState.IsOnGround();
-            m_prevJump = spaceDown;
+            FrameInput frame = GameplayInputSystem::ConsumeFrameInput(
+                frameDt, imguiKeyboard, imguiMouse
+            );
 
-            // 3. Sample keyboard inputs (may be blocked by ImGui)
-            InputState input;
-            if (Renderer::ImGuiLayer::WantsKeyboard())
-            {
-                // Zero pawn inputs when ImGui has keyboard focus
-                input = InputState{};
-                m_prevJump = false;  // Reset when ImGui has focus
-            }
-            else
-            {
-                input = InputSampler::Sample();
-                input.jump = jumpEdge;
-            }
+            // 2. Latch actions (jump buffer, movement cache)
+            // [PROOF-IMGUI-BLOCK-FLUSH] - flushes buffers if imguiBlocksGameplay
+            GameplayActionSystem::BeginFrame(frame, imguiBlocksGameplay);
 
-            // Reset per-frame flags
+            // 3. Apply mouse look ONCE (already masked if imguiMouse)
+            m_worldState.ApplyMouseLook(frame.mouseDX, frame.mouseDY);
+
+            // 4. Reset per-frame flags (does NOT touch m_pawn.onGround)
             m_worldState.BeginFrame();
 
-            // Fixed-step physics simulation
+            // 5. Fixed-step loop with action system
+            // [PROOF-JUMP-ONCE] — jump fires only when allowJumpThisStep=true
+            // [PROOF-STEP0-LATCH] — buffer persists if stepCount==0
+            uint32_t stepCount = 0;
+            bool isFirstStep = true;
+
             while (m_accumulator >= FIXED_DT)
             {
+                // onGround is state from PREVIOUS step (or last frame's final step)
+                bool onGround = m_worldState.IsOnGround();
+
+                // Get InputState from action layer
+                InputState input = GameplayActionSystem::ConsumeForFixedStep(
+                    onGround,
+                    FIXED_DT,
+                    isFirstStep  // allowJumpThisStep
+                );
+
                 m_worldState.TickFixed(input, FIXED_DT);
                 m_accumulator -= FIXED_DT;
+                isFirstStep = false;
+                stepCount++;
             }
+
+            // 6. End frame (handle stepCount==0 timer decay)
+            GameplayActionSystem::EndFrame(stepCount, frameDt);
 
             // Variable-rate camera smoothing
             m_worldState.TickFrame(frameDt);
@@ -89,8 +159,21 @@ namespace Engine
             DirectX::XMFLOAT4X4 viewProj = m_worldState.BuildViewProj(aspect);
             m_renderer.SetFrameCamera(viewProj);
 
-            // Build and send HUD snapshot
-            m_renderer.SetHUDSnapshot(m_worldState.BuildSnapshot());
+            // 7. Build HUD snapshot and inject action debug state
+            Renderer::HUDSnapshot snap = m_worldState.BuildSnapshot();
+
+            // Inject action debug at orchestration layer (not WorldState::BuildSnapshot)
+            const auto& actionDebug = GameplayActionSystem::GetDebugState();
+            snap.actionJumpBuffered = actionDebug.jumpBuffered;
+            snap.actionJumpBufferTimer = actionDebug.jumpBufferTimer;
+            snap.actionCoyoteActive = actionDebug.coyoteActive;
+            snap.actionCoyoteTimer = actionDebug.coyoteTimer;
+            snap.actionStepsThisFrame = actionDebug.stepsThisFrame;
+            snap.actionJumpFiredThisFrame = actionDebug.jumpFiredThisFrame;
+            snap.actionBlockedByImGui = actionDebug.blockedThisFrame;
+            snap.actionBufferFlushedByBlock = actionDebug.bufferFlushedByBlock;
+
+            m_renderer.SetHUDSnapshot(snap);
 
             // Send pawn transform for character rendering
             m_renderer.SetPawnTransform(
@@ -116,24 +199,6 @@ namespace Engine
 
         m_hwnd = nullptr;
         m_initialized = false;
-    }
-
-    void App::OnMouseMove(int x, int y)
-    {
-        if (!m_mouseInitialized)
-        {
-            // First mouse event - just record position, no delta
-            m_lastMouseX = x;
-            m_lastMouseY = y;
-            m_mouseInitialized = true;
-            return;
-        }
-
-        // Accumulate delta for this frame
-        m_pendingMouseDeltaX += static_cast<float>(x - m_lastMouseX);
-        m_pendingMouseDeltaY += static_cast<float>(y - m_lastMouseY);
-        m_lastMouseX = x;
-        m_lastMouseY = y;
     }
 
     void App::ToggleControllerMode()

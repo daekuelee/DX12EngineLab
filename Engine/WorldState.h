@@ -3,6 +3,7 @@
 #include <DirectXMath.h>
 #include <cstdint>
 #include <vector>
+#include "InputState.h"
 
 // Forward declare HUDSnapshot from Renderer namespace
 namespace Renderer { struct HUDSnapshot; }
@@ -125,16 +126,9 @@ namespace Engine
         STEP_FAIL_NO_GROUND     = 0x04,  // Down settle found no support
         STEP_FAIL_PENETRATION   = 0x08,  // Final pose has penetration
     };
-    // Input state sampled each frame
-    struct InputState
-    {
-        float moveX = 0.0f;       // Axis: -1 to +1 (strafe)
-        float moveZ = 0.0f;       // Axis: -1 to +1 (forward/back)
-        float yawAxis = 0.0f;     // Axis: -1 to +1 (rotation)
-        float pitchAxis = 0.0f;   // Axis: -1 to +1 (look up/down)
-        bool sprint = false;
-        bool jump = false;        // True if jump triggered this frame
-    };
+
+    // Day4 PR2.2: InputState moved to Engine/InputState.h (lightweight header)
+    // Used by GameplayActionSystem (producer) and WorldState::TickFixed (consumer)
 
     // Pawn physics state
     struct PawnState
