@@ -1,22 +1,24 @@
 /******************************************************************************
- * InputRouter.cpp — Table-driven engine hotkey routing (PR1)
+ * HotkeyRouter.cpp — Table-driven engine hotkey routing (PR-A)
  *
  * CONTRACT
  *   - OnWin32Message() returns true if message consumed by engine.
  *   - Edge gating: toggles fire once per physical press (lParam bit30 + s_keyWasDown).
  *   - ImGui capture: if WantsKeyboard() true, hotkey is blocked.
- *   - Mouse: forwards to App::OnMouseMove unchanged.
  *   - WM_KILLFOCUS: resets all key states (prevents stuck keys after Alt-Tab).
+ *   - Does NOT handle WM_MOUSEMOVE (GameplayInputSystem owns mouse).
+ *
+ * PROOF POINTS
+ *   [PROOF-HOTKEY-EDGE] — T/F7 blocked on repeat, blocked when ImGui captures
  ******************************************************************************/
 
-#include "InputRouter.h"
+#include "HotkeyRouter.h"
 #include "../Engine/App.h"
 #include "../Renderer/DX12/ToggleSystem.h"
 #include "../Renderer/DX12/ImGuiLayer.h"
-#include <windowsx.h>  // GET_X_LPARAM, GET_Y_LPARAM
 #include <cstdio>
 
-namespace InputRouter
+namespace HotkeyRouter
 {
     //-------------------------------------------------------------------------
     // Forward declarations for handler functions
@@ -35,7 +37,7 @@ namespace InputRouter
     static void HandleToggleDebugSingleInstance();
 
     //-------------------------------------------------------------------------
-    // Binding table: vk + handler + name (no policy enum needed for PR1)
+    // Binding table: vk + handler + name
     //-------------------------------------------------------------------------
     struct Binding
     {
@@ -82,7 +84,6 @@ namespace InputRouter
 
     static bool OnKeyDown(UINT vk, LPARAM lParam);
     static void OnKeyUp(UINT vk);
-    static void OnMouseMove(LPARAM lParam);
 
     //-------------------------------------------------------------------------
     // Public API
@@ -104,13 +105,9 @@ namespace InputRouter
             OnKeyUp(static_cast<UINT>(wParam));
             return false;  // Don't claim exclusively
 
-        case WM_MOUSEMOVE:
-            OnMouseMove(lParam);
-            return false;  // Don't claim exclusively
-
         case WM_KILLFOCUS:
 #if defined(_DEBUG)
-            OutputDebugStringA("[InputRouter] WM_KILLFOCUS -> ResetKeyStates\n");
+            OutputDebugStringA("[HotkeyRouter] WM_KILLFOCUS -> ResetKeyStates\n");
 #endif
             ResetKeyStates();
             return false;
@@ -146,17 +143,16 @@ namespace InputRouter
         if (vk == 'T' || vk == VK_F7)
         {
             char buf[128];
-            const char* keyName = (vk < 256 && vk >= ' ') ? nullptr : "Fn";
             if (vk >= ' ' && vk <= 'Z')
             {
-                sprintf_s(buf, "[InputRouter] %c (%s) isRepeat=%d captured=%d -> %s\n",
+                sprintf_s(buf, "[HotkeyRouter] %c (%s) isRepeat=%d captured=%d -> %s\n",
                           static_cast<char>(vk), b->name,
                           isRepeat ? 1 : 0, captured ? 1 : 0,
                           (captured || isRepeat) ? "BLOCKED" : "FIRE");
             }
             else
             {
-                sprintf_s(buf, "[InputRouter] F%d (%s) isRepeat=%d captured=%d -> %s\n",
+                sprintf_s(buf, "[HotkeyRouter] F%d (%s) isRepeat=%d captured=%d -> %s\n",
                           vk - VK_F1 + 1, b->name,
                           isRepeat ? 1 : 0, captured ? 1 : 0,
                           (captured || isRepeat) ? "BLOCKED" : "FIRE");
@@ -183,16 +179,6 @@ namespace InputRouter
     {
         if (vk < 256)
             s_keyWasDown[vk] = false;
-    }
-
-    static void OnMouseMove(LPARAM lParam)
-    {
-        if (!s_app)
-            return;
-
-        int xPos = GET_X_LPARAM(lParam);
-        int yPos = GET_Y_LPARAM(lParam);
-        s_app->OnMouseMove(xPos, yPos);
     }
 
     //-------------------------------------------------------------------------
@@ -285,4 +271,4 @@ namespace InputRouter
         OutputDebugStringA(buf);
     }
 
-}  // namespace InputRouter
+}  // namespace HotkeyRouter
