@@ -6,9 +6,41 @@
 #include "Engine/App.h"
 #include "Renderer/DX12/ToggleSystem.h"
 #include "Renderer/DX12/ImGuiLayer.h"
+#include "Input/InputRouter.h"
 #include "Scene/SceneContract.h"
 #include <cstdio>
 #include <windowsx.h>  // For GET_X_LPARAM, GET_Y_LPARAM
+
+/******************************************************************************
+ * FILE CONTRACT — DX12EngineLab.cpp (PR1: Input Routing Refactor)
+ *
+ * THREAD MODEL
+ *   Single UI thread owns window, message pump, WndProc, and App::Tick.
+ *
+ * PUMP MODEL
+ *   PeekMessage (non-blocking) -> TranslateAccelerator -> TranslateMessage -> DispatchMessage.
+ *   When queue is empty, App::Tick is called for game logic and rendering.
+ *
+ * DISPATCH BOUNDARY
+ *   WndProc must return quickly. No blocking I/O, no heavy computation.
+ *
+ * INPUT OWNERSHIP PRIORITY (highest to lowest)
+ *   1. TranslateAccelerator — menu accelerators (Alt+F4, etc.)
+ *   2. ImGui forwarding     — unconditional, before engine checks
+ *   3. ImGui capture check  — blocks engine hotkeys if WantsKeyboard()
+ *   4. InputRouter          — engine hotkeys (edge-gated), mouse forwarding
+ *   5. DefWindowProc        — unhandled messages
+ *
+ * PR1 SCOPE
+ *   Hotkey edge gating + mouse forward only.
+ *   WASD movement remains polled in App::Tick via GetAsyncKeyState.
+ *
+ * PROOF POINTS
+ *   [PROOF-KEYEDGE] — Hold T: one toggle, repeats show isRepeat=1
+ *   [PROOF-IMGUI]   — Focus ImGui text, press T: blocked, log shows captured=1
+ *   [PROOF-ACCEL]   — Alt+F4 closes window (TranslateAccelerator path)
+ *   [PROOF-MOUSE-SMOKE] — Mouse look works in 3P mode
+ ******************************************************************************/
 
 #define MAX_LOADSTRING 100
 
@@ -27,6 +59,12 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
+/******************************************************************************
+ * wWinMain CONTRACT
+ *   - PeekMessage (non-blocking) allows Tick when queue is empty.
+ *   - TranslateAccelerator called before DispatchMessage for menu shortcuts.
+ *   - WM_QUIT terminates loop; exactly-once g_app.Shutdown() on exit.
+ ******************************************************************************/
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
                      _In_ LPWSTR    lpCmdLine,
@@ -34,8 +72,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
-
-    // TODO: Place code here.
 
     // Initialize global strings
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
@@ -142,6 +178,9 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
       return FALSE;
    }
 
+   // Initialize InputRouter (PR1: table-driven hotkey routing)
+   InputRouter::Initialize(&g_app);
+
    // Run Scene contract self-test (Debug-only)
    Scene::RunContractSelfTest();
 
@@ -151,19 +190,18 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    return TRUE;
 }
 
-//
-//  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
-//
-//  PURPOSE: Processes messages for the main window.
-//
-//  WM_COMMAND  - process the application menu
-//  WM_PAINT    - Paint the main window
-//  WM_DESTROY  - post a quit message and return
-//
-//
+/******************************************************************************
+ * WndProc CONTRACT
+ *   - ImGui forwarding FIRST and UNCONDITIONALLY.
+ *   - Input messages (WM_KEYDOWN/UP, WM_MOUSEMOVE, WM_KILLFOCUS) -> InputRouter.
+ *   - If InputRouter returns true, message is consumed; return 0.
+ *   - If InputRouter returns false, fall through to DefWindowProc.
+ *   - lParam bit30 = previous key state, used for edge detection.
+ *   - FORBIDDEN: blocking I/O, heavy computation, frame-rate logic.
+ ******************************************************************************/
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    // Forward all messages to ImGui (ignore return value, do not early-return)
+    // CONTRACT: ImGui forwarding FIRST, unconditionally
     Renderer::ImGuiLayer::WndProcHandler(hWnd, message, wParam, lParam);
 
     switch (message)
@@ -185,118 +223,30 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
         }
         break;
+
     case WM_PAINT:
         {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hWnd, &ps);
-            // TODO: Add any drawing code that uses hdc here...
+            // Rendering is handled by Dx12Context, not GDI
+            (void)hdc;
             EndPaint(hWnd, &ps);
         }
         break;
-    case WM_KEYDOWN:
-        {
-            // Skip engine key handling if ImGui wants keyboard
-            if (Renderer::ImGuiLayer::WantsKeyboard())
-            {
-                break;
-            }
 
-            // 'T' key toggles draw mode (instanced <-> naive)
-            if (wParam == 'T')
-            {
-                Renderer::ToggleSystem::ToggleDrawMode();
-                Renderer::ToggleSystem::RequestDiagnosticLog(); // Trigger diagnostic log on next frame
-                OutputDebugStringA("Draw mode toggled\n");
-            }
-            // F1 key toggles sentinel_Instance0 proof (moved from '1' to avoid camera preset collision)
-            else if (wParam == VK_F1)
-            {
-                bool current = Renderer::ToggleSystem::IsSentinelInstance0Enabled();
-                Renderer::ToggleSystem::SetSentinelInstance0(!current);
-                OutputDebugStringA(current ? "sentinel_Instance0: OFF\n" : "sentinel_Instance0: ON\n");
-            }
-            // F2 key toggles stomp_Lifetime proof (moved from '2' to avoid camera preset collision)
-            else if (wParam == VK_F2)
-            {
-                bool current = Renderer::ToggleSystem::IsStompLifetimeEnabled();
-                Renderer::ToggleSystem::SetStompLifetime(!current);
-                OutputDebugStringA(current ? "stomp_Lifetime: OFF\n" : "stomp_Lifetime: ON\n");
-            }
-            // 'G' key toggles grid (cubes) visibility for floor debugging
-            else if (wParam == 'G')
-            {
-                Renderer::ToggleSystem::ToggleGrid();
-                OutputDebugStringA(Renderer::ToggleSystem::IsGridEnabled() ? "Grid: ON\n" : "Grid: OFF\n");
-            }
-            // 'C' key cycles color mode (FaceDebug -> InstanceID -> Lambert)
-            else if (wParam == 'C')
-            {
-                Renderer::ToggleSystem::CycleColorMode();
-                char buf[64];
-                sprintf_s(buf, "ColorMode = %s\n", Renderer::ToggleSystem::GetColorModeName());
-                OutputDebugStringA(buf);
-            }
-            // 'U' key toggles upload diagnostic mode (Day2)
-            else if (wParam == 'U')
-            {
-                Renderer::ToggleSystem::ToggleUploadDiag();
-                OutputDebugStringA(Renderer::ToggleSystem::IsUploadDiagEnabled()
-                    ? "UploadDiag: ON\n" : "UploadDiag: OFF\n");
-            }
-            // 'V' key toggles camera mode (Day3)
-            else if (wParam == 'V')
-            {
-                Renderer::ToggleSystem::ToggleCameraMode();
-                char buf[64];
-                sprintf_s(buf, "CameraMode: %s\n", Renderer::ToggleSystem::GetCameraModeName());
-                OutputDebugStringA(buf);
-            }
-            // F9 key toggles debug single instance mode (MT2)
-            else if (wParam == VK_F9)
-            {
-                Renderer::ToggleSystem::ToggleDebugSingleInstance();
-                char buf[64];
-                sprintf_s(buf, "DebugSingleInstance: %s (idx=%u)\n",
-                    Renderer::ToggleSystem::IsDebugSingleInstanceEnabled() ? "ON" : "OFF",
-                    Renderer::ToggleSystem::GetDebugInstanceIndex());
-                OutputDebugStringA(buf);
-            }
-            // F6 key toggles controller mode (Day3.11)
-            else if (wParam == VK_F6)
-            {
-                g_app.ToggleControllerMode();
-            }
-            // F7 key toggles step-up grid test (Day3.12+)
-            else if (wParam == VK_F7)
-            {
-                g_app.ToggleStepUpGridTest();
-            }
-            // F8 key toggles HUD verbose mode (Day3.12+)
-            else if (wParam == VK_F8)
-            {
-                Renderer::ToggleSystem::ToggleHudVerbose();
-                OutputDebugStringA(Renderer::ToggleSystem::IsHudVerboseEnabled()
-                    ? "[HUD] Verbose: ON\n" : "[HUD] Verbose: OFF\n");
-            }
-            // 'O' key toggles opaque PSO (Task B: blend/depth sanity test)
-            else if (wParam == 'O')
-            {
-                Renderer::ToggleSystem::ToggleOpaquePSO();
-                OutputDebugStringA(Renderer::ToggleSystem::IsOpaquePSOEnabled()
-                    ? "OpaquePSO: ON\n" : "OpaquePSO: OFF\n");
-            }
-        }
-        break;
+    case WM_KEYDOWN:
+    case WM_KEYUP:
     case WM_MOUSEMOVE:
-        {
-            int xPos = GET_X_LPARAM(lParam);
-            int yPos = GET_Y_LPARAM(lParam);
-            g_app.OnMouseMove(xPos, yPos);
-        }
-        break;
+    case WM_KILLFOCUS:
+        // Delegate to InputRouter; correct fallthrough if not handled
+        if (InputRouter::OnWin32Message(hWnd, message, wParam, lParam))
+            return 0;
+        return DefWindowProc(hWnd, message, wParam, lParam);
+
     case WM_DESTROY:
         PostQuitMessage(0);
         break;
+
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);
     }

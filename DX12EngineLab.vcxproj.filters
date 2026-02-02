@@ -16,6 +16,9 @@
     <Filter Include="Scene">
       <UniqueIdentifier>{B8E5A1C3-F9D2-4E8A-9C7B-6D3F2E1A0B4C}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Input">
+      <UniqueIdentifier>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framework.h">
@@ -66,6 +69,9 @@
     <ClInclude Include="Scene\SceneIO.h">
       <Filter>Scene</Filter>
     </ClInclude>
+    <ClInclude Include="Input\InputRouter.h">
+      <Filter>Input</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp">
@@ -103,6 +109,9 @@
     </ClCompile>
     <ClCompile Include="Scene\SceneIO.cpp">
       <Filter>Scene</Filter>
+    </ClCompile>
+    <ClCompile Include="Input\InputRouter.cpp">
+      <Filter>Input</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

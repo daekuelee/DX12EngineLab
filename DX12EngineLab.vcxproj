@@ -134,6 +134,7 @@
     <ClInclude Include="Engine\WorldState.h" />
     <ClInclude Include="Engine\InputSampler.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="Input\InputRouter.h" />
     <ClInclude Include="Renderer\DX12\DescriptorRingAllocator.h" />
     <ClInclude Include="Renderer\DX12\Dx12Context.h" />
     <ClInclude Include="Renderer\DX12\Dx12Debug.h" />
@@ -161,6 +162,7 @@
     <ClCompile Include="DX12EngineLab.cpp" />
     <ClCompile Include="Engine\App.cpp" />
     <ClCompile Include="Engine\WorldState.cpp" />
+    <ClCompile Include="Input\InputRouter.cpp" />
     <ClCompile Include="Renderer\DX12\DescriptorRingAllocator.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Context.cpp" />
     <ClCompile Include="Renderer\DX12\Dx12Debug.cpp" />
