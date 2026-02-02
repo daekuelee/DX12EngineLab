@@ -63,6 +63,9 @@
     <ClInclude Include="Scene\SceneContract.h">
       <Filter>Scene</Filter>
     </ClInclude>
+    <ClInclude Include="Scene\SceneIO.h">
+      <Filter>Scene</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp">
@@ -96,6 +99,9 @@
       <Filter>Scene</Filter>
     </ClCompile>
     <ClCompile Include="Scene\SceneContract.cpp">
+      <Filter>Scene</Filter>
+    </ClCompile>
+    <ClCompile Include="Scene\SceneIO.cpp">
       <Filter>Scene</Filter>
     </ClCompile>
   </ItemGroup>

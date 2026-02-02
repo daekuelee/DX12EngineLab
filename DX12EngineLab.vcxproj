@@ -155,6 +155,7 @@
     <ClInclude Include="targetver.h" />
     <ClInclude Include="Scene\SceneTypes.h" />
     <ClInclude Include="Scene\SceneContract.h" />
+    <ClInclude Include="Scene\SceneIO.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp" />
@@ -183,6 +184,7 @@
     <ClCompile Include="third_party\imgui\backends\imgui_impl_dx12.cpp" />
     <ClCompile Include="Scene\SceneTypes.cpp" />
     <ClCompile Include="Scene\SceneContract.cpp" />
+    <ClCompile Include="Scene\SceneIO.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="DX12EngineLab.rc" />

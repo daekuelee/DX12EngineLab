@@ -20,9 +20,14 @@ bool OverlayOps::TryAdd(const OverlayOp& op) {
         // Duplicate key - reject
 #ifdef _DEBUG
         if (s_enableDebugBreak) {
-            char buf[256];
-            sprintf_s(buf, "[SCENE_ERROR] OverlayOps::TryAdd REJECTED duplicate key (%u, %u) from source '%s'\n",
-                op.key.ix, op.key.iz, op.source.c_str());
+            const OverlayOp& existing = result.first->second;
+            char buf[512];
+            sprintf_s(buf, "[SCENE_ERROR] OverlayOps::TryAdd REJECTED duplicate key (%u,%u)\n"
+                          "  first: '%s' line %d\n"
+                          "  second: '%s' line %d\n",
+                op.key.ix, op.key.iz,
+                existing.source.c_str(), existing.sourceLine,
+                op.source.c_str(), op.sourceLine);
             OutputDebugStringA(buf);
             DebugBreak();
         }
