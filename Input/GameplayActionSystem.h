@@ -1,10 +1,23 @@
 #pragma once
 /******************************************************************************
- * FILE CONTRACT - GameplayActionSystem.h (Day4 PR2.2)
+ * FILE CONTRACT - GameplayActionSystem.h (Day4 PR2.3)
  *
  * SCOPE
  *   Owns action-layer buffering for gameplay actions.
  *   Translates FrameInput (RAW) into InputState (per-step).
+ *   This is intent buffering/policy, NOT simulation.
+ *
+ * TERMINOLOGY
+ *   - FrameInput: Raw per-frame sample from OS (mouse deltas, key states)
+ *   - FrameIntent: Latched per-frame intent (cached movement, buffered jump)
+ *   - StepIntent (InputState): Per-fixed-step packet consumed by sim
+ *   - ActionSystem: Intent buffering/policy layer, NOT simulation
+ *
+ * SSOT TIMING POLICY (NO DOUBLE-DECAY)
+ *   Timers (jumpBuffer, coyote) must decay exactly once per frame:
+ *   - If stepCount > 0: decay ONLY in BuildStepIntent, by fixedDt per step
+ *   - If stepCount == 0: decay ONLY in FinalizeFrameIntent, by frameDt once
+ *   This prevents timer freezing on low-dt frames and double-decay on high-dt.
  *
  * SSOT OWNERSHIP
  *   - Jump buffer state (latched intent + timer)
@@ -20,12 +33,6 @@
  *   - Movement applies to all fixed steps within frame
  *   - ImGui block flushes all buffers (no delayed action)
  *   - WM_KILLFOCUS triggers ResetAllState (no stale buffers on refocus)
- *
- * TIMING POLICY
- *   - stepCount > 0: timers decrement by fixedDt per step in ConsumeForFixedStep
- *   - stepCount == 0: timers decrement by frameDt once in EndFrame
- *   - NO double-decay: EndFrame explicitly guards with if (stepCount == 0)
- *   - Prevents infinite buffer on consecutive 0-step frames
  *
  * PROOF POINTS
  *   [PROOF-STEP0-LATCH]       - stepCount==0 doesn't lose jump
@@ -84,66 +91,41 @@ namespace GameplayActionSystem
     void SetConfig(const ActionConfig& config);
     const ActionConfig& GetConfig();
 
-    /******************************************************************************
-     * FUNCTION CONTRACT - BeginFrame
-     *
-     * PRECONDITIONS
-     *   - Called exactly once per frame, AFTER ConsumeFrameInput
-     *   - Called BEFORE any fixed-step iteration
-     *
-     * PARAMETERS
-     *   - frame: FrameInput snapshot from GameplayInputSystem
-     *   - imguiBlocksGameplay: true if ImGui wants keyboard OR mouse
-     *
-     * SIDE EFFECTS
-     *   - If imguiBlocksGameplay: flush jump buffer, flush coyote timer
-     *   - Else: latch jump intent if frame.jumpPressed, store movement
-     *
-     * PROOF
-     *   [PROOF-IMGUI-BLOCK-FLUSH] - bufferFlushedByBlock set when flushing
-     ******************************************************************************/
-    void BeginFrame(const Engine::FrameInput& frame, bool imguiBlocksGameplay);
+    //-------------------------------------------------------------------------
+    // StageFrameIntent - Latch per-frame intent from raw input
+    //
+    // CONTRACT:
+    //   - Latches per-frame intent (movement cache) + buffers jump
+    //   - Flushes all buffers when ImGui blocks gameplay
+    //   - Does NOT touch sim state; does NOT sample OS input
+    //   - Called once per frame BEFORE fixed-step loop
+    //-------------------------------------------------------------------------
+    void StageFrameIntent(const Engine::FrameInput& frame, bool imguiBlocksGameplay);
 
-    /******************************************************************************
-     * FUNCTION CONTRACT - ConsumeForFixedStep
-     *
-     * PRECONDITIONS
-     *   - BeginFrame called this frame
-     *   - Called once per fixed-step iteration
-     *
-     * PARAMETERS
-     *   - onGround: current ground state from WorldState (state BEFORE this step)
-     *   - fixedDt: fixed timestep (for timer decrement)
-     *   - allowJumpThisStep: true only on first step of frame
-     *
-     * RETURNS
-     *   - InputState ready for WorldState::TickFixed
-     *
-     * SIDE EFFECTS
-     *   - Decrements coyote/jump buffer timers by fixedDt
-     *   - If jump fires: clears jump buffer
-     *   - If !onGround && wasOnGround: starts coyote timer
-     *
-     * PROOF
-     *   [PROOF-JUMP-ONCE] - jump only fires when allowJumpThisStep=true
-     *   [PROOF-STEP0-LATCH] - jump buffer persists if no step runs
-     ******************************************************************************/
-    Engine::InputState ConsumeForFixedStep(bool onGround, float fixedDt, bool allowJumpThisStep);
+    //-------------------------------------------------------------------------
+    // BuildStepIntent - Produce per-step intent for fixed sim
+    //
+    // CONTRACT:
+    //   - Produces StepIntent (InputState) for one fixed-step iteration
+    //   - Decrements timers by fixedDt (part of SSOT timing policy)
+    //   - Never samples OS input; uses cached FrameIntent only
+    //   - Jump fires only when isFirstStep=true [PROOF-JUMP-ONCE]
+    //   - Returns InputState ready for WorldState::TickFixed
+    //-------------------------------------------------------------------------
+    Engine::InputState BuildStepIntent(bool onGround, float fixedDt, bool isFirstStep);
 
-    /******************************************************************************
-     * FUNCTION CONTRACT - EndFrame
-     *
-     * PRECONDITIONS
-     *   - Called exactly once per frame, AFTER all fixed steps
-     *
-     * SIDE EFFECTS
-     *   - If stepCount==0: decrement BOTH timers by frameDt (frame-rate timer)
-     *   - Updates debug state for HUD
-     *
-     * PROOF
-     *   [PROOF-STEP0-LATCH] - buffer persists across frames with 0 steps
-     ******************************************************************************/
-    void EndFrame(uint32_t stepCount, float frameDt);
+    //-------------------------------------------------------------------------
+    // FinalizeFrameIntent - Handle edge-case "0 fixed steps this frame"
+    //
+    // CONTRACT:
+    //   - Handles the edge-case when accumulator < FIXED_DT (no fixed steps ran)
+    //   - If stepCount==0: decrement timers by frameDt (prevents timer freeze)
+    //   - If stepCount>0: timers already decayed in BuildStepIntent, do nothing
+    //   - Updates HUD debug snapshot every frame regardless of stepCount
+    //   - Without this, timers would freeze on high-FPS frames causing
+    //     inconsistent jump buffer/coyote behavior across varying framerates
+    //-------------------------------------------------------------------------
+    void FinalizeFrameIntent(uint32_t stepCount, float frameDt);
 
     // Debug state accessor (called by App::Tick for HUD injection, NOT WorldState)
     const ActionDebugState& GetDebugState();

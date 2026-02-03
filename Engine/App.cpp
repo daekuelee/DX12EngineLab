@@ -122,9 +122,9 @@ namespace Engine
                 frameDt, imguiKeyboard, imguiMouse
             );
 
-            // 2. Latch actions (jump buffer, movement cache)
+            // 2. Stage frame intent (jump buffer, movement cache)
             // [PROOF-IMGUI-BLOCK-FLUSH] - flushes buffers if imguiBlocksGameplay
-            GameplayActionSystem::BeginFrame(frame, imguiBlocksGameplay);
+            GameplayActionSystem::StageFrameIntent(frame, imguiBlocksGameplay);
 
             // 3. Apply mouse look ONCE (already masked if imguiMouse)
             m_worldState.ApplyMouseLook(frame.mouseDX, frame.mouseDY);
@@ -143,11 +143,11 @@ namespace Engine
                 // onGround is state from PREVIOUS step (or last frame's final step)
                 bool onGround = m_worldState.IsOnGround();
 
-                // Get InputState from action layer
-                InputState input = GameplayActionSystem::ConsumeForFixedStep(
+                // Build StepIntent from action layer
+                InputState input = GameplayActionSystem::BuildStepIntent(
                     onGround,
                     FIXED_DT,
-                    isFirstStep  // allowJumpThisStep
+                    isFirstStep
                 );
 
                 m_worldState.TickFixed(input, FIXED_DT);
@@ -156,8 +156,8 @@ namespace Engine
                 stepCount++;
             }
 
-            // 6. End frame (handle stepCount==0 timer decay)
-            GameplayActionSystem::EndFrame(stepCount, frameDt);
+            // 6. Finalize frame intent (handle stepCount==0 timer decay)
+            GameplayActionSystem::FinalizeFrameIntent(stepCount, frameDt);
 
             // Variable-rate camera smoothing
             m_worldState.TickFrame(frameDt);
