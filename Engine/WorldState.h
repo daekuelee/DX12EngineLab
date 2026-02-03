@@ -259,8 +259,25 @@ namespace Engine
         bool IsOnGround() const { return m_pawn.onGround; }
         float GetSprintAlpha() const { return m_sprintAlpha; }
 
-        // Mouse look (applied once per frame, before fixed-step)
-        void ApplyMouseLook(float deltaX, float deltaY);
+        //---------------------------------------------------------------------
+        // C-2 Presentation-Only Look Offset
+        //
+        // PURPOSE:
+        //   When stepCount==0 (no fixed steps ran), the camera can still
+        //   respond to mouse input via a presentation-only offset that does
+        //   NOT mutate sim yaw/pitch. This prevents visual lag on high-FPS.
+        //
+        // SSOT BOUNDARY:
+        //   - m_presentationYawOffset/m_presentationPitchOffset are applied
+        //     in TickFrame() for camera positioning only
+        //   - Sim yaw/pitch (m_pawn.yaw/pitch) are ONLY mutated in TickFixed
+        //
+        // CALL PATTERN:
+        //   - App calls SetPresentationLookOffset() when stepCount==0
+        //   - App calls ClearPresentationLookOffset() when stepCount>0
+        //---------------------------------------------------------------------
+        void SetPresentationLookOffset(float yawRad, float pitchRad);
+        void ClearPresentationLookOffset();
 
         // Pawn position/yaw accessors for character rendering
         float GetPawnPosX() const { return m_pawn.posX; }
@@ -300,6 +317,10 @@ namespace Engine
         float m_sprintAlpha = 0.0f;         // 0-1 smoothed sprint blend
         bool m_jumpConsumedThisFrame = false;
         bool m_jumpQueued = false;          // Evidence: true for 1 frame after jump
+
+        // C-2: Presentation-only look offset (does NOT mutate sim yaw/pitch)
+        float m_presentationYawOffset = 0.0f;
+        float m_presentationPitchOffset = 0.0f;
 
         // Respawn tracking (Part 1)
         uint32_t m_respawnCount = 0;

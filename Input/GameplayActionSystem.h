@@ -56,6 +56,34 @@ namespace GameplayActionSystem
     };
 
     //-------------------------------------------------------------------------
+    // Control Config (SSOT for look sensitivity/rates)
+    //
+    // PURPOSE:
+    //   Centralizes ALL look-related tuning parameters in the Action layer.
+    //   This enables consistent behavior across mouse + keyboard look inputs
+    //   and eliminates duplicated constants in WorldState.
+    //
+    // SSOT GUARANTEE:
+    //   - mouseSensitivityRadPerPixel: ONLY source for pixel->radian conversion
+    //   - keyboardYawRateRadPerSec: ONLY source for Q/E yaw rotation speed
+    //   - maxMousePixelsPerFrame: ONLY source for mouse delta clamp
+    //
+    // CONSUMERS:
+    //   - BuildStepIntent(): uses these to compute yawDelta/pitchDelta
+    //   - GetPendingLookPreviewRad(): uses sens for C-2 preview calculation
+    //
+    // NOTE:
+    //   WorldState::m_config.mouseSensitivity and lookSpeed are now DEAD CODE
+    //   for ThirdPerson mode (kept only for FreeCam compatibility if needed).
+    //-------------------------------------------------------------------------
+    struct ControlConfig
+    {
+        float mouseSensitivityRadPerPixel = 0.003f;  // rad/pixel for mouse look
+        float keyboardYawRateRadPerSec = 2.0f;       // rad/sec for Q/E yaw
+        float maxMousePixelsPerFrame = 120.0f;       // clamp for large mouse jumps
+    };
+
+    //-------------------------------------------------------------------------
     // Debug/Proof State (read-only snapshot for HUD)
     //-------------------------------------------------------------------------
     struct ActionDebugState
@@ -79,8 +107,12 @@ namespace GameplayActionSystem
         // Input passthrough (for HUD comparison)
         float moveX = 0.0f;
         float moveZ = 0.0f;
-        float yawAxis = 0.0f;  // [TP-LOOK-KEYS] Keyboard yaw input
+        float yawAxis = 0.0f;  // [TP-LOOK-KEYS] Keyboard yaw input (cached)
         bool sprintDown = false;
+
+        // [LOOK-UNIFIED] Pending mouse accumulation (for C-2 preview debug)
+        float pendingMouseDX = 0.0f;
+        float pendingMouseDY = 0.0f;
     };
 
     //-------------------------------------------------------------------------
@@ -90,6 +122,8 @@ namespace GameplayActionSystem
     void Initialize();
     void SetConfig(const ActionConfig& config);
     const ActionConfig& GetConfig();
+    void SetControlConfig(const ControlConfig& config);
+    const ControlConfig& GetControlConfig();
 
     //-------------------------------------------------------------------------
     // StageFrameIntent - Latch per-frame intent from raw input
@@ -110,9 +144,15 @@ namespace GameplayActionSystem
     //   - Decrements timers by fixedDt (part of SSOT timing policy)
     //   - Never samples OS input; uses cached FrameIntent only
     //   - Jump fires only when isFirstStep=true [PROOF-JUMP-ONCE]
+    //   - [LOOK-UNIFIED] Computes yawDelta/pitchDelta from pending mouse + keyboard
+    //     yaw on first step only; subsequent steps get zero deltas
+    //   - isThirdPerson: passed from App to avoid layer violation (Action->Renderer)
     //   - Returns InputState ready for WorldState::TickFixed
+    //
+    // PROOF TAGS:
+    //   [PROOF-LOOK-ONCE] - look deltas computed only when isFirstStep=true
     //-------------------------------------------------------------------------
-    Engine::InputState BuildStepIntent(bool onGround, float fixedDt, bool isFirstStep);
+    Engine::InputState BuildStepIntent(bool onGround, float fixedDt, bool isFirstStep, bool isThirdPerson);
 
     //-------------------------------------------------------------------------
     // FinalizeFrameIntent - Handle edge-case "0 fixed steps this frame"
@@ -126,6 +166,29 @@ namespace GameplayActionSystem
     //     inconsistent jump buffer/coyote behavior across varying framerates
     //-------------------------------------------------------------------------
     void FinalizeFrameIntent(uint32_t stepCount, float frameDt);
+
+    //-------------------------------------------------------------------------
+    // GetPendingLookPreviewRad - C-2 presentation-only preview
+    //
+    // PURPOSE:
+    //   Returns the pending mouse look intent converted to radians WITHOUT
+    //   consuming or clearing the pending values. Used by App to set
+    //   presentation-only camera offset when stepCount==0 (no fixed steps ran).
+    //
+    // CONTRACT:
+    //   - Does NOT clear s_pendingMouseDX/DY (preview only, not consumption)
+    //   - Returns zero if blocked by ImGui
+    //   - Uses ControlConfig::mouseSensitivityRadPerPixel for conversion
+    //   - Sign matches ApplyMouseLook convention: mouse right -> negative yaw
+    //
+    // SSOT BOUNDARY:
+    //   - This is presentation-only; sim yaw/pitch is NOT modified
+    //   - The offset is applied in WorldState::TickFrame for camera position only
+    //
+    // PROOF TAGS:
+    //   [PROOF-STEP0-LATCH-LOOK] - pending persists across 0-step frames
+    //-------------------------------------------------------------------------
+    void GetPendingLookPreviewRad(float& outYaw, float& outPitch);
 
     // Debug state accessor (called by App::Tick for HUD injection, NOT WorldState)
     const ActionDebugState& GetDebugState();

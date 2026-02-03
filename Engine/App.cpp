@@ -1,31 +1,37 @@
 /******************************************************************************
- * FILE CONTRACT — App.cpp (Day4 PR2.2)
+ * FILE CONTRACT — App.cpp (Day4 PR2.3)
  *
  * SCOPE
  *   Owns application lifecycle, fixed-step simulation loop, camera injection.
  *   Orchestrates RAW input -> Action layer -> Physics flow.
  *   Injects action debug state into HUD snapshot.
  *
- * TICK CONTRACT
+ * TICK CONTRACT (ThirdPerson mode)
  *   1. ConsumeFrameInput exactly once per frame (RAW snapshot)
- *   2. GameplayActionSystem::BeginFrame (latch jump, cache movement)
- *   3. ApplyMouseLook once per frame (orientation only)
- *   4. WorldState::BeginFrame (reset per-frame flags)
- *   5. Fixed-step loop:
+ *   2. GameplayActionSystem::StageFrameIntent (latch jump, cache movement, accum mouse)
+ *   3. WorldState::BeginFrame (reset per-frame flags)
+ *   4. Fixed-step loop:
  *      - onGround = IsOnGround() [state from PREVIOUS step]
- *      - InputState from GameplayActionSystem::ConsumeForFixedStep
- *      - WorldState::TickFixed consumes InputState
- *   6. GameplayActionSystem::EndFrame (handle stepCount==0 timer decay)
+ *      - InputState from GameplayActionSystem::BuildStepIntent (yawDelta/pitchDelta)
+ *      - WorldState::TickFixed consumes InputState (applies yawDelta to sim yaw)
+ *   5. GameplayActionSystem::FinalizeFrameIntent (handle stepCount==0 timer decay)
+ *   6. C-2 preview: if stepCount==0, set presentation offset for camera
  *   7. Inject action debug into HUD snapshot (at App level, not WorldState)
  *
+ * [LOOK-UNIFIED] ApplyMouseLook removed - all look input flows through BuildStepIntent
+ *   Mouse + keyboard yaw are converted to yawDelta/pitchDelta with SSOT tuning in Action layer.
+ *
  * INVARIANTS
- *   - onGround passed to ConsumeForFixedStep is state BEFORE step executes
- *   - Jump fires on first step only (allowJumpThisStep=true)
+ *   - onGround passed to BuildStepIntent is state BEFORE step executes
+ *   - Jump fires on first step only (isFirstStep=true)
+ *   - Look deltas computed on first step only [PROOF-LOOK-ONCE]
  *   - Action debug injection happens HERE (not WorldState::BuildSnapshot)
  *
  * PROOF POINTS
- *   [PROOF-JUMP-ONCE]         — isFirstStep flag controls allowJumpThisStep
+ *   [PROOF-JUMP-ONCE]         — isFirstStep flag controls jump firing
+ *   [PROOF-LOOK-ONCE]         — isFirstStep flag controls look delta computation
  *   [PROOF-STEP0-LATCH]       — Action layer handles stepCount==0
+ *   [PROOF-STEP0-LATCH-LOOK]  — Pending mouse persists, applied as C-2 preview
  *   [PROOF-IMGUI-BLOCK-FLUSH] — Action layer flushes on ImGui capture
  ******************************************************************************/
 
@@ -67,28 +73,28 @@ namespace Engine
     }
 
     /******************************************************************************
-     * FUNCTION CONTRACT — App::Tick (ThirdPerson branch, Day4 PR2.2)
+     * FUNCTION CONTRACT — App::Tick (ThirdPerson branch, Day4 PR2.3)
      *
      * PRECONDITIONS
      *   - m_initialized == true
      *   - GameplayInputSystem initialized
      *   - GameplayActionSystem initialized
      *
-     * INPUT CONSUMPTION (Day4 PR2.2 flow)
+     * INPUT CONSUMPTION (Day4 PR2.3 flow - LOOK-UNIFIED)
      *   1. ConsumeFrameInput exactly once (RAW snapshot, clears edges)
-     *   2. GameplayActionSystem::BeginFrame (latch jump, cache movement)
-     *   3. ApplyMouseLook (already masked if imguiMouse)
-     *   4. WorldState::BeginFrame (reset m_jumpConsumedThisFrame)
-     *   5. Fixed-step loop:
+     *   2. GameplayActionSystem::StageFrameIntent (latch jump, cache movement, accum mouse)
+     *   3. WorldState::BeginFrame (reset m_jumpConsumedThisFrame)
+     *   4. Fixed-step loop:
      *      - onGround = IsOnGround() [state from PREVIOUS step]
-     *      - InputState from GameplayActionSystem::ConsumeForFixedStep
+     *      - InputState from GameplayActionSystem::BuildStepIntent (yawDelta/pitchDelta)
      *      - WorldState::TickFixed consumes InputState
-     *   6. GameplayActionSystem::EndFrame (stepCount==0 timer decay)
+     *   5. GameplayActionSystem::FinalizeFrameIntent (stepCount==0 timer decay)
+     *   6. C-2 preview: SetPresentationLookOffset when stepCount==0
      *   7. Inject action debug into HUD snapshot
      *
      * POSTCONDITIONS
      *   - WorldState updated via TickFixed/TickFrame
-     *   - Camera injected to renderer
+     *   - Camera injected to renderer (uses effective yaw = sim + presentation offset)
      *   - HUD snapshot with action debug sent to renderer
      ******************************************************************************/
     void App::Tick()
@@ -122,21 +128,21 @@ namespace Engine
                 frameDt, imguiKeyboard, imguiMouse
             );
 
-            // 2. Stage frame intent (jump buffer, movement cache)
+            // 2. Stage frame intent (jump buffer, movement cache, pending mouse)
             // [PROOF-IMGUI-BLOCK-FLUSH] - flushes buffers if imguiBlocksGameplay
+            // [LOOK-UNIFIED] mouse deltas accumulated here for BuildStepIntent
             GameplayActionSystem::StageFrameIntent(frame, imguiBlocksGameplay);
 
-            // 3. Apply mouse look ONCE (already masked if imguiMouse)
-            m_worldState.ApplyMouseLook(frame.mouseDX, frame.mouseDY);
-
-            // 4. Reset per-frame flags (does NOT touch m_pawn.onGround)
+            // 3. Reset per-frame flags (does NOT touch m_pawn.onGround)
             m_worldState.BeginFrame();
 
-            // 5. Fixed-step loop with action system
-            // [PROOF-JUMP-ONCE] — jump fires only when allowJumpThisStep=true
+            // 4. Fixed-step loop with action system
+            // [PROOF-JUMP-ONCE] — jump fires only when isFirstStep=true
+            // [PROOF-LOOK-ONCE] — look deltas computed only when isFirstStep=true
             // [PROOF-STEP0-LATCH] — buffer persists if stepCount==0
             uint32_t stepCount = 0;
             bool isFirstStep = true;
+            constexpr bool isThirdPerson = true;  // We're in the ThirdPerson branch
 
             while (m_accumulator >= FIXED_DT)
             {
@@ -144,10 +150,12 @@ namespace Engine
                 bool onGround = m_worldState.IsOnGround();
 
                 // Build StepIntent from action layer
+                // [LOOK-UNIFIED] yawDelta/pitchDelta computed inside
                 InputState input = GameplayActionSystem::BuildStepIntent(
                     onGround,
                     FIXED_DT,
-                    isFirstStep
+                    isFirstStep,
+                    isThirdPerson
                 );
 
                 m_worldState.TickFixed(input, FIXED_DT);
@@ -156,8 +164,21 @@ namespace Engine
                 stepCount++;
             }
 
-            // 6. Finalize frame intent (handle stepCount==0 timer decay)
+            // 5. Finalize frame intent (handle stepCount==0 timer decay)
             GameplayActionSystem::FinalizeFrameIntent(stepCount, frameDt);
+
+            // 6. C-2: Presentation-only preview when no fixed steps ran
+            // [PROOF-STEP0-LATCH-LOOK] — pending mouse persists, applied as preview offset
+            if (stepCount == 0 && !imguiBlocksGameplay)
+            {
+                float previewYaw, previewPitch;
+                GameplayActionSystem::GetPendingLookPreviewRad(previewYaw, previewPitch);
+                m_worldState.SetPresentationLookOffset(previewYaw, previewPitch);
+            }
+            else
+            {
+                m_worldState.ClearPresentationLookOffset();
+            }
 
             // Variable-rate camera smoothing
             m_worldState.TickFrame(frameDt);

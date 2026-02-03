@@ -26,8 +26,8 @@
  ******************************************************************************/
 
 #include "GameplayActionSystem.h"
-#include "../Renderer/DX12/ToggleSystem.h"
 #include <cstdio>
+#include <cmath>  // fmaxf/fminf for clamp
 
 #if defined(_DEBUG)
 #include <Windows.h>
@@ -39,6 +39,7 @@ namespace GameplayActionSystem
     // Internal State
     //-------------------------------------------------------------------------
     static ActionConfig s_config;
+    static ControlConfig s_controlConfig;
     static ActionDebugState s_debugState;
 
     // Jump buffer
@@ -66,6 +67,10 @@ namespace GameplayActionSystem
     static bool s_blockedThisFrame = false;
     static bool s_bufferFlushedByBlock = false;
 
+    // [LOOK-UNIFIED] Pending mouse accumulation (pixels, consumed on first step)
+    static float s_pendingMouseDX = 0.0f;
+    static float s_pendingMouseDY = 0.0f;
+
     //-------------------------------------------------------------------------
     // Public API
     //-------------------------------------------------------------------------
@@ -73,6 +78,7 @@ namespace GameplayActionSystem
     void Initialize()
     {
         s_config = ActionConfig{};
+        s_controlConfig = ControlConfig{};
         ResetAllState();
     }
 
@@ -84,6 +90,16 @@ namespace GameplayActionSystem
     const ActionConfig& GetConfig()
     {
         return s_config;
+    }
+
+    void SetControlConfig(const ControlConfig& config)
+    {
+        s_controlConfig = config;
+    }
+
+    const ControlConfig& GetControlConfig()
+    {
+        return s_controlConfig;
     }
 
     //-------------------------------------------------------------------------
@@ -138,6 +154,10 @@ namespace GameplayActionSystem
             s_jumpBufferTimer = 0.0f;
             s_coyoteTimer = 0.0f;
 
+            // [LOOK-UNIFIED] Flush pending mouse on ImGui block
+            s_pendingMouseDX = 0.0f;
+            s_pendingMouseDY = 0.0f;
+
             // Zero out movement cache
             s_cached = {};
             return;
@@ -148,6 +168,35 @@ namespace GameplayActionSystem
         s_cached.moveZ = frame.moveZ;
         s_cached.yawAxis = frame.yawAxis;
         s_cached.sprintDown = frame.sprintDown;
+
+        // [LOOK-UNIFIED] Accumulate pending mouse deltas (pixels)
+        s_pendingMouseDX += frame.mouseDX;
+        s_pendingMouseDY += frame.mouseDY;
+
+        // Clamp to prevent extreme spikes (unit: pixels)
+        const float maxPx = s_controlConfig.maxMousePixelsPerFrame;
+#if defined(_DEBUG)
+        float beforeX = s_pendingMouseDX, beforeY = s_pendingMouseDY;
+#endif
+        if (s_pendingMouseDX > maxPx) s_pendingMouseDX = maxPx;
+        if (s_pendingMouseDX < -maxPx) s_pendingMouseDX = -maxPx;
+        if (s_pendingMouseDY > maxPx) s_pendingMouseDY = maxPx;
+        if (s_pendingMouseDY < -maxPx) s_pendingMouseDY = -maxPx;
+
+#if defined(_DEBUG)
+        // [PROOF-CLAMP] Only log when clamp actually changed values
+        if (beforeX != s_pendingMouseDX || beforeY != s_pendingMouseDY)
+        {
+            static uint32_t s_clampProofCounter = 0;
+            if (++s_clampProofCounter % 60 == 0)
+            {
+                char buf[128];
+                sprintf_s(buf, "[PROOF-CLAMP] before=(%.0f,%.0f) after=(%.0f,%.0f)\n",
+                    beforeX, beforeY, s_pendingMouseDX, s_pendingMouseDY);
+                OutputDebugStringA(buf);
+            }
+        }
+#endif
 
         // Latch jump intent if pressed this frame
         if (frame.jumpPressed)
@@ -168,6 +217,7 @@ namespace GameplayActionSystem
     // PURPOSE:
     //   Produces a StepIntent (InputState) for one fixed-step physics iteration.
     //   Evaluates buffered jump intent, coyote time, and emits per-step input.
+    //   [LOOK-UNIFIED] Computes yawDelta/pitchDelta from pending mouse + keyboard yaw.
     //
     // WHEN CALLED:
     //   Once per fixed-step iteration, inside the while(accumulator >= FIXED_DT) loop.
@@ -179,22 +229,26 @@ namespace GameplayActionSystem
     //   - s_jumpBuffered, s_jumpBufferTimer (consumed when jump fires)
     //   - s_coyoteTimer (decremented by fixedDt per step)
     //   - s_wasOnGroundLastStep (updated at end for next step)
+    //   - s_pendingMouseDX/DY (consumed on first step only)
     //
     // MUST NOT TOUCH:
     //   - OS input sampling (uses cached FrameIntent only)
     //   - Any sim state (WorldState pawn, physics) - caller applies InputState
+    //   - Renderer state (isThirdPerson passed in to avoid layer violation)
     //
     // EDGE CASES:
     //   - isFirstStep gating: jump can ONLY fire when isFirstStep=true
     //     [PROOF-JUMP-ONCE] validates that multiple steps -> jump fires once
+    //   - [PROOF-LOOK-ONCE] look deltas computed only when isFirstStep=true
     //   - Coyote time: starts when leaving ground, consumed on jump
     //   - Timer decay: decremented by fixedDt each step (SSOT timing policy)
     //
     // PROOF TAGS:
     //   [PROOF-JUMP-ONCE] - jump fires only on first step of frame
+    //   [PROOF-LOOK-ONCE] - look deltas computed only on first step of frame
     //   [PROOF-STEP0-LATCH] - buffer persists if no step runs (validated in Finalize)
     //-------------------------------------------------------------------------
-    Engine::InputState BuildStepIntent(bool onGround, float fixedDt, bool isFirstStep)
+    Engine::InputState BuildStepIntent(bool onGround, float fixedDt, bool isFirstStep, bool isThirdPerson)
     {
         Engine::InputState input;
 
@@ -205,23 +259,35 @@ namespace GameplayActionSystem
             input.moveZ = s_cached.moveZ;
             input.sprint = s_cached.sprintDown;
 
-            // [MODE-GATE] Keyboard yaw ONLY in ThirdPerson mode
-            // FreeCam Q/E uses separate GetAsyncKeyState path - must not drift pawn
-            if (Renderer::ToggleSystem::GetCameraMode() == Renderer::CameraMode::ThirdPerson)
+            // [LOOK-UNIFIED] Compute yawDelta/pitchDelta on first step only
+            // Sign matches old ApplyMouseLook: mouse right -> yaw decreases (turn right)
+            if (isFirstStep && isThirdPerson)
             {
-                input.yawAxis = s_cached.yawAxis;
+                const float sens = s_controlConfig.mouseSensitivityRadPerPixel;
+                const float rate = s_controlConfig.keyboardYawRateRadPerSec;
+
+                // Mouse: pixel->radian, sign matches ApplyMouseLook (negative = turn right)
+                // Keyboard yaw: Q=+1, E=-1 (from GameplayInputSystem)
+                input.yawDelta = -(s_pendingMouseDX * sens) + (s_cached.yawAxis * rate * fixedDt);
+                input.pitchDelta = -(s_pendingMouseDY * sens);
+
+                // Consume pending mouse (only consumed once per frame)
+                s_pendingMouseDX = 0.0f;
+                s_pendingMouseDY = 0.0f;
 
 #if defined(_DEBUG)
-                // [SIGN-PROOF] Throttled proof log when yawAxis active
-                static uint32_t s_proofFrameCounter = 0;
-                if (s_cached.yawAxis != 0.0f && (++s_proofFrameCounter % 60 == 0))
+                // [PROOF-LOOK-ONCE] Throttled proof log when look deltas active
+                static uint32_t s_lookProofCounter = 0;
+                if ((input.yawDelta != 0.0f || input.pitchDelta != 0.0f) && (++s_lookProofCounter % 60 == 0))
                 {
                     char buf[128];
-                    sprintf_s(buf, "[TP-LOOK-KEYS] yawAxis=%.1f mode=ThirdPerson\n", s_cached.yawAxis);
+                    sprintf_s(buf, "[PROOF-LOOK-ONCE] yaw=%.4f pitch=%.4f isFirstStep=true\n",
+                        input.yawDelta, input.pitchDelta);
                     OutputDebugStringA(buf);
                 }
 #endif
             }
+            // else: yawDelta/pitchDelta remain 0 (subsequent steps get no look input)
         }
 
         s_stepsThisFrame++;
@@ -352,6 +418,19 @@ namespace GameplayActionSystem
                 s_coyoteTimer -= frameDt;
                 if (s_coyoteTimer < 0.0f) s_coyoteTimer = 0.0f;
             }
+
+#if defined(_DEBUG)
+            // [PROOF-STEP0-LATCH-LOOK] - log pending mouse when no steps ran
+            if (s_pendingMouseDX != 0.0f || s_pendingMouseDY != 0.0f)
+            {
+                float previewYaw = -(s_pendingMouseDX * s_controlConfig.mouseSensitivityRadPerPixel);
+                float previewPitch = -(s_pendingMouseDY * s_controlConfig.mouseSensitivityRadPerPixel);
+                char buf[128];
+                sprintf_s(buf, "[PROOF-STEP0-LATCH-LOOK] pending=(%.0f,%.0f)px preview=(%.4f,%.4f)rad\n",
+                    s_pendingMouseDX, s_pendingMouseDY, previewYaw, previewPitch);
+                OutputDebugStringA(buf);
+            }
+#endif
         }
 
         // Update debug state for HUD (always, regardless of stepCount)
@@ -367,11 +446,40 @@ namespace GameplayActionSystem
         s_debugState.moveZ = s_cached.moveZ;
         s_debugState.yawAxis = s_cached.yawAxis;
         s_debugState.sprintDown = s_cached.sprintDown;
+        s_debugState.pendingMouseDX = s_pendingMouseDX;
+        s_debugState.pendingMouseDY = s_pendingMouseDY;
     }
 
     const ActionDebugState& GetDebugState()
     {
         return s_debugState;
+    }
+
+    //-------------------------------------------------------------------------
+    // GetPendingLookPreviewRad
+    //
+    // PURPOSE:
+    //   Returns the pending mouse look intent converted to radians WITHOUT
+    //   consuming the pending values. Used for C-2 presentation-only preview.
+    //
+    // SSOT BOUNDARY:
+    //   - Does NOT clear s_pendingMouseDX/DY (preview only, not consumption)
+    //   - Returns zero if blocked by ImGui
+    //   - Sign matches ApplyMouseLook: mouse right -> negative yaw
+    //-------------------------------------------------------------------------
+    void GetPendingLookPreviewRad(float& outYaw, float& outPitch)
+    {
+        if (s_blockedThisFrame)
+        {
+            outYaw = 0.0f;
+            outPitch = 0.0f;
+            return;
+        }
+
+        const float sens = s_controlConfig.mouseSensitivityRadPerPixel;
+        outYaw = -(s_pendingMouseDX * sens);
+        outPitch = -(s_pendingMouseDY * sens);
+        // NOTE: Does NOT clear pending - this is preview only
     }
 
     void ResetAllState()
@@ -385,6 +493,8 @@ namespace GameplayActionSystem
         s_stepsThisFrame = 0;
         s_blockedThisFrame = false;
         s_bufferFlushedByBlock = false;
+        s_pendingMouseDX = 0.0f;
+        s_pendingMouseDY = 0.0f;
         s_debugState = ActionDebugState{};
 
 #if defined(_DEBUG)
