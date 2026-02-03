@@ -23,13 +23,13 @@
  *
  * INVARIANTS
  *   - onGround passed to BuildStepIntent is state BEFORE step executes
- *   - Jump fires on first step only (isFirstStep=true)
+ *   - Jump fires on first step only (stepIndex==0)
  *   - Look deltas computed on first step only [PROOF-LOOK-ONCE]
  *   - Action debug injection happens HERE (not WorldState::BuildSnapshot)
  *
  * PROOF POINTS
- *   [PROOF-JUMP-ONCE]         — isFirstStep flag controls jump firing
- *   [PROOF-LOOK-ONCE]         — isFirstStep flag controls look delta computation
+ *   [PROOF-JUMP-ONCE]         — stepIndex==0 controls jump firing
+ *   [PROOF-LOOK-ONCE]         — stepIndex==0 controls look delta computation
  *   [PROOF-STEP0-LATCH]       — Action layer handles stepCount==0
  *   [PROOF-STEP0-LATCH-LOOK]  — Pending mouse persists, applied as C-2 preview
  *   [PROOF-IMGUI-BLOCK-FLUSH] — Action layer flushes on ImGui capture
@@ -137,11 +137,10 @@ namespace Engine
             m_worldState.BeginFrame();
 
             // 4. Fixed-step loop with action system
-            // [PROOF-JUMP-ONCE] — jump fires only when isFirstStep=true
-            // [PROOF-LOOK-ONCE] — look deltas computed only when isFirstStep=true
+            // [PROOF-JUMP-ONCE] — jump fires only when stepIndex==0
+            // [PROOF-LOOK-ONCE] — look deltas computed only when stepIndex==0
             // [PROOF-STEP0-LATCH] — buffer persists if stepCount==0
             uint32_t stepCount = 0;
-            bool isFirstStep = true;
             constexpr bool isThirdPerson = true;  // We're in the ThirdPerson branch
 
             while (m_accumulator >= FIXED_DT)
@@ -151,16 +150,16 @@ namespace Engine
 
                 // Build StepIntent from action layer
                 // [LOOK-UNIFIED] yawDelta/pitchDelta computed inside
+                // stepIndex = stepCount before increment (first call gets 0, second gets 1, etc.)
                 InputState input = GameplayActionSystem::BuildStepIntent(
                     onGround,
                     FIXED_DT,
-                    isFirstStep,
+                    stepCount,  // stepIndex: 0 on first iteration, 1 on second, etc.
                     isThirdPerson
                 );
 
                 m_worldState.TickFixed(input, FIXED_DT);
                 m_accumulator -= FIXED_DT;
-                isFirstStep = false;
                 stepCount++;
             }
 

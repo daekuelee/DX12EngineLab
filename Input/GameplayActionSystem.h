@@ -143,16 +143,18 @@ namespace GameplayActionSystem
     //   - Produces StepIntent (InputState) for one fixed-step iteration
     //   - Decrements timers by fixedDt (part of SSOT timing policy)
     //   - Never samples OS input; uses cached FrameIntent only
-    //   - Jump fires only when isFirstStep=true [PROOF-JUMP-ONCE]
+    //   - Jump fires only when stepIndex==0 [PROOF-JUMP-ONCE]
     //   - [LOOK-UNIFIED] Computes yawDelta/pitchDelta from pending mouse + keyboard
     //     yaw on first step only; subsequent steps get zero deltas
+    //   - stepIndex: 0-based index of current step within frame (App passes stepCount
+    //     BEFORE incrementing, so first call gets 0, second gets 1, etc.)
     //   - isThirdPerson: passed from App to avoid layer violation (Action->Renderer)
     //   - Returns InputState ready for WorldState::TickFixed
     //
     // PROOF TAGS:
-    //   [PROOF-LOOK-ONCE] - look deltas computed only when isFirstStep=true
+    //   [PROOF-LOOK-ONCE] - look deltas computed only when stepIndex==0
     //-------------------------------------------------------------------------
-    Engine::InputState BuildStepIntent(bool onGround, float fixedDt, bool isFirstStep, bool isThirdPerson);
+    Engine::InputState BuildStepIntent(bool onGround, float fixedDt, uint32_t stepIndex, bool isThirdPerson);
 
     //-------------------------------------------------------------------------
     // FinalizeFrameIntent - Handle edge-case "0 fixed steps this frame"
