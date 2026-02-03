@@ -19,6 +19,7 @@
  ******************************************************************************/
 
 #include "GameplayActionSystem.h"
+#include "../Renderer/DX12/ToggleSystem.h"
 #include <cstdio>
 
 #if defined(_DEBUG)
@@ -41,10 +42,16 @@ namespace GameplayActionSystem
     static bool s_wasOnGroundLastStep = true;
     static float s_coyoteTimer = 0.0f;
 
-    // Per-frame input cache (from BeginFrame)
-    static float s_cachedMoveX = 0.0f;
-    static float s_cachedMoveZ = 0.0f;
-    static bool s_cachedSprintDown = false;
+    // [CACHE-PATTERN] Per-frame input cache (from BeginFrame)
+    // All cached inputs grouped in one struct for consistency
+    struct CachedFrameInput
+    {
+        float moveX = 0.0f;
+        float moveZ = 0.0f;
+        float yawAxis = 0.0f;
+        bool sprintDown = false;
+    };
+    static CachedFrameInput s_cached = {};
 
     // Per-frame tracking
     static bool s_jumpFiredThisFrame = false;
@@ -95,16 +102,15 @@ namespace GameplayActionSystem
             s_coyoteTimer = 0.0f;
 
             // Zero out movement cache
-            s_cachedMoveX = 0.0f;
-            s_cachedMoveZ = 0.0f;
-            s_cachedSprintDown = false;
+            s_cached = {};
             return;
         }
 
         // Cache movement for all steps this frame
-        s_cachedMoveX = frame.moveX;
-        s_cachedMoveZ = frame.moveZ;
-        s_cachedSprintDown = frame.sprintDown;
+        s_cached.moveX = frame.moveX;
+        s_cached.moveZ = frame.moveZ;
+        s_cached.yawAxis = frame.yawAxis;
+        s_cached.sprintDown = frame.sprintDown;
 
         // Latch jump intent if pressed this frame
         if (frame.jumpPressed)
@@ -126,9 +132,27 @@ namespace GameplayActionSystem
         // Movement always passes through (if not blocked)
         if (!s_blockedThisFrame)
         {
-            input.moveX = s_cachedMoveX;
-            input.moveZ = s_cachedMoveZ;
-            input.sprint = s_cachedSprintDown;
+            input.moveX = s_cached.moveX;
+            input.moveZ = s_cached.moveZ;
+            input.sprint = s_cached.sprintDown;
+
+            // [MODE-GATE] Keyboard yaw ONLY in ThirdPerson mode
+            // FreeCam Q/E uses separate GetAsyncKeyState path - must not drift pawn
+            if (Renderer::ToggleSystem::GetCameraMode() == Renderer::CameraMode::ThirdPerson)
+            {
+                input.yawAxis = s_cached.yawAxis;
+
+#if defined(_DEBUG)
+                // [SIGN-PROOF] Throttled proof log when yawAxis active
+                static uint32_t s_proofFrameCounter = 0;
+                if (s_cached.yawAxis != 0.0f && (++s_proofFrameCounter % 60 == 0))
+                {
+                    char buf[128];
+                    sprintf_s(buf, "[TP-LOOK-KEYS] yawAxis=%.1f mode=ThirdPerson\n", s_cached.yawAxis);
+                    OutputDebugStringA(buf);
+                }
+#endif
+            }
         }
 
         s_stepsThisFrame++;
@@ -239,9 +263,10 @@ namespace GameplayActionSystem
         s_debugState.jumpFiredThisFrame = s_jumpFiredThisFrame;
         s_debugState.blockedThisFrame = s_blockedThisFrame;
         s_debugState.bufferFlushedByBlock = s_bufferFlushedByBlock;
-        s_debugState.moveX = s_cachedMoveX;
-        s_debugState.moveZ = s_cachedMoveZ;
-        s_debugState.sprintDown = s_cachedSprintDown;
+        s_debugState.moveX = s_cached.moveX;
+        s_debugState.moveZ = s_cached.moveZ;
+        s_debugState.yawAxis = s_cached.yawAxis;
+        s_debugState.sprintDown = s_cached.sprintDown;
     }
 
     const ActionDebugState& GetDebugState()
@@ -255,9 +280,7 @@ namespace GameplayActionSystem
         s_jumpBufferTimer = 0.0f;
         s_wasOnGroundLastStep = true;
         s_coyoteTimer = 0.0f;
-        s_cachedMoveX = 0.0f;
-        s_cachedMoveZ = 0.0f;
-        s_cachedSprintDown = false;
+        s_cached = {};
         s_jumpFiredThisFrame = false;
         s_stepsThisFrame = 0;
         s_blockedThisFrame = false;

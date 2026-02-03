@@ -21,7 +21,7 @@ namespace Engine
     {
         float moveX = 0.0f;       // Axis: -1 to +1 (strafe)
         float moveZ = 0.0f;       // Axis: -1 to +1 (forward/back)
-        float yawAxis = 0.0f;     // Axis: -1 to +1 (rotation) [unused by action layer]
+        float yawAxis = 0.0f;     // [TP-LOOK-KEYS] Q/E keyboard yaw (-1 to +1)
         float pitchAxis = 0.0f;   // Axis: -1 to +1 (look) [unused by action layer]
         bool sprint = false;
         bool jump = false;        // True if jump triggered this step

@@ -72,6 +72,7 @@ namespace GameplayActionSystem
         // Input passthrough (for HUD comparison)
         float moveX = 0.0f;
         float moveZ = 0.0f;
+        float yawAxis = 0.0f;  // [TP-LOOK-KEYS] Keyboard yaw input
         bool sprintDown = false;
     };
 
