@@ -1,16 +1,23 @@
 /******************************************************************************
- * GameplayActionSystem.cpp - Action layer buffering (Day4 PR2.2)
+ * GameplayActionSystem.cpp - Action layer buffering (Day4 PR2.3)
+ *
+ * TERMINOLOGY
+ *   - FrameInput: Raw per-frame sample from OS (mouse deltas, key states)
+ *   - FrameIntent: Latched per-frame intent (cached movement, buffered jump)
+ *   - StepIntent (InputState): Per-fixed-step packet consumed by sim
+ *   - ActionSystem: Intent buffering/policy layer, NOT simulation
+ *
+ * SSOT TIMING POLICY (NO DOUBLE-DECAY)
+ *   Timers (jumpBuffer, coyote) must decay exactly once per frame:
+ *   - If stepCount > 0: decay ONLY in BuildStepIntent, by fixedDt per step
+ *   - If stepCount == 0: decay ONLY in FinalizeFrameIntent, by frameDt once
+ *   This prevents timer freezing on high-FPS frames and double-decay on low-FPS.
  *
  * CONTRACT
- *   - BeginFrame() caches movement, latches jump intent, flushes on ImGui block
- *   - ConsumeForFixedStep() produces InputState per fixed-step, decays timers by fixedDt
- *   - EndFrame() handles stepCount==0 timer decay, updates debug state
- *   - ResetAllState() clears all buffers (WM_KILLFOCUS, respawn)
- *
- * TIMING POLICY
- *   - stepCount > 0: timers decay by fixedDt per step in ConsumeForFixedStep ONLY
- *   - stepCount == 0: timers decay by frameDt once in EndFrame ONLY
- *   - NO double-decay: EndFrame guards with if (stepCount == 0)
+ *   - StageFrameIntent(): latches FrameIntent + buffers jump; flushes when ImGui blocks
+ *   - BuildStepIntent(): produces StepIntent for fixed sim; decrements timers by fixedDt
+ *   - FinalizeFrameIntent(): handles "0 fixed steps" edge-case; updates HUD debug
+ *   - ResetAllState(): clears all buffers (WM_KILLFOCUS, respawn)
  *
  * PROOF POINTS
  *   [PROOF-STEP0-LATCH]       - stepCount==0 doesn't lose jump
@@ -20,6 +27,7 @@
 
 #include "GameplayActionSystem.h"
 #include <cstdio>
+#include <cmath>  // fmaxf/fminf for clamp
 
 #if defined(_DEBUG)
 #include <Windows.h>
@@ -31,6 +39,7 @@ namespace GameplayActionSystem
     // Internal State
     //-------------------------------------------------------------------------
     static ActionConfig s_config;
+    static ControlConfig s_controlConfig;
     static ActionDebugState s_debugState;
 
     // Jump buffer
@@ -41,16 +50,26 @@ namespace GameplayActionSystem
     static bool s_wasOnGroundLastStep = true;
     static float s_coyoteTimer = 0.0f;
 
-    // Per-frame input cache (from BeginFrame)
-    static float s_cachedMoveX = 0.0f;
-    static float s_cachedMoveZ = 0.0f;
-    static bool s_cachedSprintDown = false;
+    // [CACHE-PATTERN] Per-frame input cache (from BeginFrame)
+    // All cached inputs grouped in one struct for consistency
+    struct CachedFrameInput
+    {
+        float moveX = 0.0f;
+        float moveZ = 0.0f;
+        float yawAxis = 0.0f;
+        bool sprintDown = false;
+    };
+    static CachedFrameInput s_cached = {};
 
     // Per-frame tracking
     static bool s_jumpFiredThisFrame = false;
     static uint32_t s_stepsThisFrame = 0;
     static bool s_blockedThisFrame = false;
     static bool s_bufferFlushedByBlock = false;
+
+    // [LOOK-UNIFIED] Pending mouse accumulation (pixels, consumed on first step)
+    static float s_pendingMouseDX = 0.0f;
+    static float s_pendingMouseDY = 0.0f;
 
     //-------------------------------------------------------------------------
     // Public API
@@ -59,6 +78,7 @@ namespace GameplayActionSystem
     void Initialize()
     {
         s_config = ActionConfig{};
+        s_controlConfig = ControlConfig{};
         ResetAllState();
     }
 
@@ -72,7 +92,47 @@ namespace GameplayActionSystem
         return s_config;
     }
 
-    void BeginFrame(const Engine::FrameInput& frame, bool imguiBlocksGameplay)
+    void SetControlConfig(const ControlConfig& config)
+    {
+        s_controlConfig = config;
+    }
+
+    const ControlConfig& GetControlConfig()
+    {
+        return s_controlConfig;
+    }
+
+    //-------------------------------------------------------------------------
+    // StageFrameIntent
+    //
+    // PURPOSE:
+    //   Latches per-frame intent from raw FrameInput. Caches movement axes,
+    //   buffers jump press, and prepares state for subsequent BuildStepIntent calls.
+    //
+    // WHEN CALLED:
+    //   Once per frame, AFTER GameplayInputSystem::ConsumeFrameInput(),
+    //   BEFORE the fixed-step loop begins. Order: ConsumeFrameInput -> StageFrameIntent -> loop.
+    //
+    // SSOT OWNERSHIP (what this function mutates):
+    //   - s_cached (movement/yaw cache for this frame)
+    //   - s_jumpBuffered, s_jumpBufferTimer (latch jump intent)
+    //   - s_blockedThisFrame, s_bufferFlushedByBlock (per-frame tracking)
+    //   - s_jumpFiredThisFrame, s_stepsThisFrame (reset to 0)
+    //
+    // MUST NOT TOUCH:
+    //   - s_coyoteTimer (except on ImGui flush)
+    //   - s_wasOnGroundLastStep (owned by BuildStepIntent)
+    //   - Any sim state (WorldState pawn, physics)
+    //
+    // EDGE CASES:
+    //   - ImGui block: flush jump buffer + coyote timer immediately
+    //     [PROOF-IMGUI-BLOCK-FLUSH] validates this via s_bufferFlushedByBlock flag
+    //   - No jump pressed: s_jumpBuffered unchanged (may persist from buffer)
+    //
+    // PROOF TAGS:
+    //   [PROOF-IMGUI-BLOCK-FLUSH] - set s_bufferFlushedByBlock when flushing
+    //-------------------------------------------------------------------------
+    void StageFrameIntent(const Engine::FrameInput& frame, bool imguiBlocksGameplay)
     {
         // Reset per-frame tracking
         s_jumpFiredThisFrame = false;
@@ -94,17 +154,49 @@ namespace GameplayActionSystem
             s_jumpBufferTimer = 0.0f;
             s_coyoteTimer = 0.0f;
 
+            // [LOOK-UNIFIED] Flush pending mouse on ImGui block
+            s_pendingMouseDX = 0.0f;
+            s_pendingMouseDY = 0.0f;
+
             // Zero out movement cache
-            s_cachedMoveX = 0.0f;
-            s_cachedMoveZ = 0.0f;
-            s_cachedSprintDown = false;
+            s_cached = {};
             return;
         }
 
         // Cache movement for all steps this frame
-        s_cachedMoveX = frame.moveX;
-        s_cachedMoveZ = frame.moveZ;
-        s_cachedSprintDown = frame.sprintDown;
+        s_cached.moveX = frame.moveX;
+        s_cached.moveZ = frame.moveZ;
+        s_cached.yawAxis = frame.yawAxis;
+        s_cached.sprintDown = frame.sprintDown;
+
+        // [LOOK-UNIFIED] Accumulate pending mouse deltas (pixels)
+        s_pendingMouseDX += frame.mouseDX;
+        s_pendingMouseDY += frame.mouseDY;
+
+        // Clamp to prevent extreme spikes (unit: pixels)
+        const float maxPx = s_controlConfig.maxMousePixelsPerFrame;
+#if defined(_DEBUG)
+        float beforeX = s_pendingMouseDX, beforeY = s_pendingMouseDY;
+#endif
+        if (s_pendingMouseDX > maxPx) s_pendingMouseDX = maxPx;
+        if (s_pendingMouseDX < -maxPx) s_pendingMouseDX = -maxPx;
+        if (s_pendingMouseDY > maxPx) s_pendingMouseDY = maxPx;
+        if (s_pendingMouseDY < -maxPx) s_pendingMouseDY = -maxPx;
+
+#if defined(_DEBUG)
+        // [PROOF-CLAMP] Only log when clamp actually changed values
+        if (beforeX != s_pendingMouseDX || beforeY != s_pendingMouseDY)
+        {
+            static uint32_t s_clampProofCounter = 0;
+            if (++s_clampProofCounter % 60 == 0)
+            {
+                char buf[128];
+                sprintf_s(buf, "[PROOF-CLAMP] before=(%.0f,%.0f) after=(%.0f,%.0f)\n",
+                    beforeX, beforeY, s_pendingMouseDX, s_pendingMouseDY);
+                OutputDebugStringA(buf);
+            }
+        }
+#endif
 
         // Latch jump intent if pressed this frame
         if (frame.jumpPressed)
@@ -119,16 +211,83 @@ namespace GameplayActionSystem
         }
     }
 
-    Engine::InputState ConsumeForFixedStep(bool onGround, float fixedDt, bool allowJumpThisStep)
+    //-------------------------------------------------------------------------
+    // BuildStepIntent
+    //
+    // PURPOSE:
+    //   Produces a StepIntent (InputState) for one fixed-step physics iteration.
+    //   Evaluates buffered jump intent, coyote time, and emits per-step input.
+    //   [LOOK-UNIFIED] Computes yawDelta/pitchDelta from pending mouse + keyboard yaw.
+    //
+    // WHEN CALLED:
+    //   Once per fixed-step iteration, inside the while(accumulator >= FIXED_DT) loop.
+    //   May be called 0-15 times per frame depending on accumulator.
+    //
+    // SSOT OWNERSHIP (what this function mutates):
+    //   - s_stepsThisFrame (incremented each call)
+    //   - s_jumpFiredThisFrame (set true when jump fires)
+    //   - s_jumpBuffered, s_jumpBufferTimer (consumed when jump fires)
+    //   - s_coyoteTimer (decremented by fixedDt per step)
+    //   - s_wasOnGroundLastStep (updated at end for next step)
+    //   - s_pendingMouseDX/DY (consumed on first step only)
+    //
+    // MUST NOT TOUCH:
+    //   - OS input sampling (uses cached FrameIntent only)
+    //   - Any sim state (WorldState pawn, physics) - caller applies InputState
+    //   - Renderer state (isThirdPerson passed in to avoid layer violation)
+    //
+    // EDGE CASES:
+    //   - isFirstStep gating: jump can ONLY fire when isFirstStep=true
+    //     [PROOF-JUMP-ONCE] validates that multiple steps -> jump fires once
+    //   - [PROOF-LOOK-ONCE] look deltas computed only when isFirstStep=true
+    //   - Coyote time: starts when leaving ground, consumed on jump
+    //   - Timer decay: decremented by fixedDt each step (SSOT timing policy)
+    //
+    // PROOF TAGS:
+    //   [PROOF-JUMP-ONCE] - jump fires only on first step of frame
+    //   [PROOF-LOOK-ONCE] - look deltas computed only on first step of frame
+    //   [PROOF-STEP0-LATCH] - buffer persists if no step runs (validated in Finalize)
+    //-------------------------------------------------------------------------
+    Engine::InputState BuildStepIntent(bool onGround, float fixedDt, bool isFirstStep, bool isThirdPerson)
     {
         Engine::InputState input;
 
         // Movement always passes through (if not blocked)
         if (!s_blockedThisFrame)
         {
-            input.moveX = s_cachedMoveX;
-            input.moveZ = s_cachedMoveZ;
-            input.sprint = s_cachedSprintDown;
+            input.moveX = s_cached.moveX;
+            input.moveZ = s_cached.moveZ;
+            input.sprint = s_cached.sprintDown;
+
+            // [LOOK-UNIFIED] Compute yawDelta/pitchDelta on first step only
+            // Sign matches old ApplyMouseLook: mouse right -> yaw decreases (turn right)
+            if (isFirstStep && isThirdPerson)
+            {
+                const float sens = s_controlConfig.mouseSensitivityRadPerPixel;
+                const float rate = s_controlConfig.keyboardYawRateRadPerSec;
+
+                // Mouse: pixel->radian, sign matches ApplyMouseLook (negative = turn right)
+                // Keyboard yaw: Q=+1, E=-1 (from GameplayInputSystem)
+                input.yawDelta = -(s_pendingMouseDX * sens) + (s_cached.yawAxis * rate * fixedDt);
+                input.pitchDelta = -(s_pendingMouseDY * sens);
+
+                // Consume pending mouse (only consumed once per frame)
+                s_pendingMouseDX = 0.0f;
+                s_pendingMouseDY = 0.0f;
+
+#if defined(_DEBUG)
+                // [PROOF-LOOK-ONCE] Throttled proof log when look deltas active
+                static uint32_t s_lookProofCounter = 0;
+                if ((input.yawDelta != 0.0f || input.pitchDelta != 0.0f) && (++s_lookProofCounter % 60 == 0))
+                {
+                    char buf[128];
+                    sprintf_s(buf, "[PROOF-LOOK-ONCE] yaw=%.4f pitch=%.4f isFirstStep=true\n",
+                        input.yawDelta, input.pitchDelta);
+                    OutputDebugStringA(buf);
+                }
+#endif
+            }
+            // else: yawDelta/pitchDelta remain 0 (subsequent steps get no look input)
         }
 
         s_stepsThisFrame++;
@@ -145,7 +304,7 @@ namespace GameplayActionSystem
         }
 
         // Determine if jump can fire
-        bool canJump = allowJumpThisStep && s_jumpBuffered && !s_jumpFiredThisFrame && !s_blockedThisFrame;
+        bool canJump = isFirstStep && s_jumpBuffered && !s_jumpFiredThisFrame && !s_blockedThisFrame;
         bool hasGround = onGround || (s_coyoteTimer > 0.0f);
 
         if (canJump && hasGround)
@@ -196,7 +355,38 @@ namespace GameplayActionSystem
         return input;
     }
 
-    void EndFrame(uint32_t stepCount, float frameDt)
+    //-------------------------------------------------------------------------
+    // FinalizeFrameIntent
+    //
+    // PURPOSE:
+    //   Handles the edge-case where stepCount==0 (no fixed steps ran this frame).
+    //   When accumulator < FIXED_DT, the fixed loop runs 0 times, so timers would
+    //   freeze without this fallback decay. Also updates HUD debug snapshot every frame.
+    //
+    // WHEN CALLED:
+    //   Once per frame, AFTER the fixed-step loop completes.
+    //   Order: StageFrameIntent -> loop(BuildStepIntent) -> FinalizeFrameIntent.
+    //
+    // SSOT OWNERSHIP (what this function mutates):
+    //   - s_jumpBufferTimer, s_jumpBuffered (decay ONLY if stepCount==0)
+    //   - s_coyoteTimer (decay ONLY if stepCount==0)
+    //   - s_debugState (always updated for HUD)
+    //
+    // MUST NOT TOUCH:
+    //   - Timers when stepCount>0 (already decayed in BuildStepIntent)
+    //   - Any sim state (WorldState pawn, physics)
+    //
+    // EDGE CASES:
+    //   - stepCount==0: accumulator < FIXED_DT means no sim steps ran.
+    //     Without timer decay here, jump buffer/coyote would freeze on high-FPS.
+    //     Decay by frameDt once to match real elapsed time.
+    //   - stepCount>0: do NOT decay (would cause double-decay since BuildStepIntent
+    //     already decremented by fixedDt per step)
+    //
+    // PROOF TAGS:
+    //   [PROOF-STEP0-LATCH] - proves buffer persists across 0-step frames
+    //-------------------------------------------------------------------------
+    void FinalizeFrameIntent(uint32_t stepCount, float frameDt)
     {
         // CRITICAL: Only decay timers when no fixed steps ran (prevents double-decay)
         if (stepCount == 0)
@@ -228,6 +418,19 @@ namespace GameplayActionSystem
                 s_coyoteTimer -= frameDt;
                 if (s_coyoteTimer < 0.0f) s_coyoteTimer = 0.0f;
             }
+
+#if defined(_DEBUG)
+            // [PROOF-STEP0-LATCH-LOOK] - log pending mouse when no steps ran
+            if (s_pendingMouseDX != 0.0f || s_pendingMouseDY != 0.0f)
+            {
+                float previewYaw = -(s_pendingMouseDX * s_controlConfig.mouseSensitivityRadPerPixel);
+                float previewPitch = -(s_pendingMouseDY * s_controlConfig.mouseSensitivityRadPerPixel);
+                char buf[128];
+                sprintf_s(buf, "[PROOF-STEP0-LATCH-LOOK] pending=(%.0f,%.0f)px preview=(%.4f,%.4f)rad\n",
+                    s_pendingMouseDX, s_pendingMouseDY, previewYaw, previewPitch);
+                OutputDebugStringA(buf);
+            }
+#endif
         }
 
         // Update debug state for HUD (always, regardless of stepCount)
@@ -239,14 +442,44 @@ namespace GameplayActionSystem
         s_debugState.jumpFiredThisFrame = s_jumpFiredThisFrame;
         s_debugState.blockedThisFrame = s_blockedThisFrame;
         s_debugState.bufferFlushedByBlock = s_bufferFlushedByBlock;
-        s_debugState.moveX = s_cachedMoveX;
-        s_debugState.moveZ = s_cachedMoveZ;
-        s_debugState.sprintDown = s_cachedSprintDown;
+        s_debugState.moveX = s_cached.moveX;
+        s_debugState.moveZ = s_cached.moveZ;
+        s_debugState.yawAxis = s_cached.yawAxis;
+        s_debugState.sprintDown = s_cached.sprintDown;
+        s_debugState.pendingMouseDX = s_pendingMouseDX;
+        s_debugState.pendingMouseDY = s_pendingMouseDY;
     }
 
     const ActionDebugState& GetDebugState()
     {
         return s_debugState;
+    }
+
+    //-------------------------------------------------------------------------
+    // GetPendingLookPreviewRad
+    //
+    // PURPOSE:
+    //   Returns the pending mouse look intent converted to radians WITHOUT
+    //   consuming the pending values. Used for C-2 presentation-only preview.
+    //
+    // SSOT BOUNDARY:
+    //   - Does NOT clear s_pendingMouseDX/DY (preview only, not consumption)
+    //   - Returns zero if blocked by ImGui
+    //   - Sign matches ApplyMouseLook: mouse right -> negative yaw
+    //-------------------------------------------------------------------------
+    void GetPendingLookPreviewRad(float& outYaw, float& outPitch)
+    {
+        if (s_blockedThisFrame)
+        {
+            outYaw = 0.0f;
+            outPitch = 0.0f;
+            return;
+        }
+
+        const float sens = s_controlConfig.mouseSensitivityRadPerPixel;
+        outYaw = -(s_pendingMouseDX * sens);
+        outPitch = -(s_pendingMouseDY * sens);
+        // NOTE: Does NOT clear pending - this is preview only
     }
 
     void ResetAllState()
@@ -255,13 +488,13 @@ namespace GameplayActionSystem
         s_jumpBufferTimer = 0.0f;
         s_wasOnGroundLastStep = true;
         s_coyoteTimer = 0.0f;
-        s_cachedMoveX = 0.0f;
-        s_cachedMoveZ = 0.0f;
-        s_cachedSprintDown = false;
+        s_cached = {};
         s_jumpFiredThisFrame = false;
         s_stepsThisFrame = 0;
         s_blockedThisFrame = false;
         s_bufferFlushedByBlock = false;
+        s_pendingMouseDX = 0.0f;
+        s_pendingMouseDY = 0.0f;
         s_debugState = ActionDebugState{};
 
 #if defined(_DEBUG)

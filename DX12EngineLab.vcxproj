@@ -131,6 +131,7 @@
   <ItemGroup>
     <ClInclude Include="DX12EngineLab.h" />
     <ClInclude Include="Engine\App.h" />
+    <ClInclude Include="Engine\FrameClock.h" />
     <ClInclude Include="Engine\WorldState.h" />
     <ClInclude Include="Engine\InputSampler.h" />
     <ClInclude Include="framework.h" />
@@ -165,6 +166,7 @@
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp" />
     <ClCompile Include="Engine\App.cpp" />
+    <ClCompile Include="Engine\FrameClock.cpp" />
     <ClCompile Include="Engine\WorldState.cpp" />
     <ClCompile Include="Input\HotkeyRouter.cpp" />
     <ClCompile Include="Input\GameplayInputSystem.cpp" />

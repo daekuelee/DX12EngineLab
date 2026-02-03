@@ -26,6 +26,7 @@ namespace Engine
         // Movement (masked if imguiKeyboard)
         float moveX = 0.0f;    // -1 to +1 (A/D)
         float moveZ = 0.0f;    // -1 to +1 (W/S)
+        float yawAxis = 0.0f;  // [TP-LOOK-KEYS] Q/E keyboard yaw (-1 to +1)
 
         // Mouse look (masked if imguiMouse)
         float mouseDX = 0.0f;

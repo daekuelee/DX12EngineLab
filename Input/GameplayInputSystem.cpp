@@ -185,6 +185,12 @@ namespace GameplayInputSystem
             // Sprint (Shift)
             frame.sprintDown = s_keys[VK_SHIFT].down;
 
+            // [TP-LOOK-KEYS] Q/E keyboard yaw rotation
+            // [SIGN-PROOF] Q=+1 (left), E=-1 (right) - hypothesis from ApplyMouseLook convention
+            // Verified by runtime proof log
+            if (s_keys['Q'].down) frame.yawAxis += 1.0f;
+            if (s_keys['E'].down) frame.yawAxis -= 1.0f;
+
             // Jump: edge-triggered from event tracking
             // [PROOF-JUMP-ONCE] — Edge consumed here, cleared below
             frame.jumpPressed = s_keys[VK_SPACE].pressedThisFrame;

@@ -283,19 +283,19 @@ namespace Engine
         m_jumpConsumedThisFrame = false;
     }
 
-    void WorldState::ApplyMouseLook(float deltaX, float deltaY)
+    //-------------------------------------------------------------------------
+    // C-2: Presentation-only look offset implementation
+    //-------------------------------------------------------------------------
+    void WorldState::SetPresentationLookOffset(float yawRad, float pitchRad)
     {
-        // Mouse right -> yaw decreases -> turn right (matches camera yaw convention)
-        m_pawn.yaw -= deltaX * m_config.mouseSensitivity;
+        m_presentationYawOffset = yawRad;
+        m_presentationPitchOffset = pitchRad;
+    }
 
-        // Mouse down -> pitch decreases -> look down
-        m_pawn.pitch -= deltaY * m_config.mouseSensitivity;
-
-        // Clamp pitch
-        if (m_pawn.pitch < m_config.pitchClampMin)
-            m_pawn.pitch = m_config.pitchClampMin;
-        if (m_pawn.pitch > m_config.pitchClampMax)
-            m_pawn.pitch = m_config.pitchClampMax;
+    void WorldState::ClearPresentationLookOffset()
+    {
+        m_presentationYawOffset = 0.0f;
+        m_presentationPitchOffset = 0.0f;
     }
 
     void WorldState::TickFixed(const InputState& input, float fixedDt)
@@ -309,11 +309,11 @@ namespace Engine
             ResolveOverlaps_Capsule();
         }
 
-        // 1. Apply yaw rotation (axis-based)
-        m_pawn.yaw += input.yawAxis * m_config.lookSpeed * fixedDt;
+        // 1. Apply yaw rotation [LOOK-UNIFIED] pre-computed delta from Action layer
+        m_pawn.yaw += input.yawDelta;
 
-        // 2. Apply pitch rotation with clamping
-        m_pawn.pitch += input.pitchAxis * m_config.lookSpeed * fixedDt;
+        // 2. Apply pitch rotation with clamping [LOOK-UNIFIED]
+        m_pawn.pitch += input.pitchDelta;
         if (m_pawn.pitch < m_config.pitchClampMin) m_pawn.pitch = m_config.pitchClampMin;
         if (m_pawn.pitch > m_config.pitchClampMax) m_pawn.pitch = m_config.pitchClampMax;
 
@@ -2107,8 +2107,16 @@ namespace Engine
     void WorldState::TickFrame(float frameDt)
     {
         // 1. Compute target camera position (behind and above pawn)
-        float cosYaw = cosf(m_pawn.yaw);
-        float sinYaw = sinf(m_pawn.yaw);
+        // [C-2] Use effective yaw/pitch (sim + presentation preview offset)
+        float effectiveYaw = m_pawn.yaw + m_presentationYawOffset;
+        float effectivePitch = m_pawn.pitch + m_presentationPitchOffset;
+
+        // Clamp effective pitch for presentation too
+        if (effectivePitch < m_config.pitchClampMin) effectivePitch = m_config.pitchClampMin;
+        if (effectivePitch > m_config.pitchClampMax) effectivePitch = m_config.pitchClampMax;
+
+        float cosYaw = cosf(effectiveYaw);
+        float sinYaw = sinf(effectiveYaw);
         float targetEyeX = m_pawn.posX - sinYaw * m_config.camOffsetBehind;
         float targetEyeY = m_pawn.posY + m_config.camOffsetUp;
         float targetEyeZ = m_pawn.posZ - cosYaw * m_config.camOffsetBehind;
