@@ -59,6 +59,10 @@ namespace Engine
         m_accumulator = 0.0f;
 
         m_initialized = true;
+
+        // [DT-SSOT] Initialize frame clock
+        m_frameClock.Init();
+
         return true;
     }
 
@@ -92,8 +96,12 @@ namespace Engine
         if (!m_initialized)
             return;
 
-        // Get frame delta time from renderer (from last frame)
-        float frameDt = m_renderer.GetDeltaTime();
+        /**************************************************************************
+         * [DT-SSOT] Delta time computed once at Tick() start
+         * All consumers use same frameDt; renderer never measures dt.
+         **************************************************************************/
+        m_frameClock.Update();
+        float frameDt = m_frameClock.GetDeltaSeconds();
 
         // Accumulate time for fixed-step simulation
         m_accumulator += frameDt;
@@ -184,6 +192,14 @@ namespace Engine
             );
         }
         // else: Free camera mode - renderer uses its internal FreeCamera
+
+        /**************************************************************************
+         * [CALL-ORDER] dt injection order guarantee:
+         *   1. FrameClock.Update() - measure dt (done above)
+         *   2. SetFrameDeltaTime(dt) - inject to renderer (here)
+         *   3. Render() - uses injected dt via GetDeltaTime() (below)
+         **************************************************************************/
+        m_renderer.SetFrameDeltaTime(frameDt);
 
         // Render frame
         m_renderer.Render();

@@ -162,6 +162,9 @@ namespace Renderer
         // Delta time accessor for fixed-step loop
         float GetDeltaTime() const { return m_lastDeltaTime; }
 
+        // [DT-SSOT] Receive frame dt from App (called before Render)
+        void SetFrameDeltaTime(float dt);
+
         // Window dimensions for aspect ratio
         float GetAspect() const { return m_width > 0 && m_height > 0 ? static_cast<float>(m_width) / static_cast<float>(m_height) : 1.0f; }
 
@@ -254,10 +257,7 @@ namespace Renderer
         private:
         FreeCamera m_camera;
 
-        // Timer state for delta time calculation
-        LARGE_INTEGER m_lastTime = {};
-        LARGE_INTEGER m_frequency = {};
-        bool m_timerInitialized = false;
+        // [DT-SSOT] Delta time set by App via SetFrameDeltaTime()
         float m_lastDeltaTime = 0.0f;
 
         // MT1: Transform generation count for validation
@@ -285,7 +285,6 @@ namespace Renderer
         void UpdateCamera(float dt);
 
         // Phase helpers for Render()
-        float UpdateDeltaTime();
         Allocation UpdateFrameConstants(FrameContext& ctx);
         Allocation UpdateTransforms(FrameContext& ctx);
         void RecordBarriersAndCopy(FrameContext& ctx, const Allocation& transformsAlloc);

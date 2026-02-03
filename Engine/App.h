@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include "../Renderer/DX12/Dx12Context.h"
 #include "WorldState.h"
+#include "FrameClock.h"
 
 namespace Engine
 {
@@ -44,6 +45,9 @@ namespace Engine
         bool m_mouseInitialized = false;
         float m_pendingMouseDeltaX = 0.0f;
         float m_pendingMouseDeltaY = 0.0f;
+
+        // [DT-SSOT] Frame clock owns delta-time measurement
+        FrameClock m_frameClock;
 
         static constexpr float FIXED_DT = 1.0f / 60.0f;  // 60 Hz fixed step
     };

@@ -423,10 +423,7 @@ namespace Renderer
         m_frameId = 0;
         m_initialized = true;
 
-        // Initialize free camera timer
-        QueryPerformanceFrequency(&m_frequency);
-        QueryPerformanceCounter(&m_lastTime);
-        m_timerInitialized = true;
+        // [DT-SSOT] Timer removed - FrameClock owns dt
 
         OutputDebugStringA("Dx12Context initialized successfully\n");
         return true;
@@ -443,27 +440,32 @@ namespace Renderer
     // Phase Helpers
     //-------------------------------------------------------------------------
 
-    float Dx12Context::UpdateDeltaTime()
-    {
-        float dt = 0.0f;
-        LARGE_INTEGER currentTime;
-        QueryPerformanceCounter(&currentTime);
-        if (m_timerInitialized && m_frequency.QuadPart > 0)
-        {
-            dt = static_cast<float>(currentTime.QuadPart - m_lastTime.QuadPart) /
-                 static_cast<float>(m_frequency.QuadPart);
-            // Clamp to avoid huge jumps (e.g., after breakpoint)
-            if (dt > 0.1f) dt = 0.1f;
-        }
-        m_lastTime = currentTime;
-        m_lastDeltaTime = dt;  // Store for external access
-        return dt;
-    }
-
     void Dx12Context::SetFrameCamera(const DirectX::XMFLOAT4X4& viewProj)
     {
         m_injectedViewProj = viewProj;
         m_useInjectedCamera = true;
+    }
+
+    /******************************************************************************
+     * [DT-SSOT] SetFrameDeltaTime — Receive dt from App
+     *
+     * CONTRACT:
+     *   - Called once per frame by App::Tick() BEFORE Render()
+     *   - Sets m_lastDeltaTime for GetDeltaTime() accessor
+     *
+     * [CAMERA-OWNER] Camera ownership:
+     *   - ThirdPerson: Engine owns camera; uses injected viewProj; no UpdateCamera
+     *   - Free: Renderer owns camera via UpdateCamera(dt) called HERE only
+     ******************************************************************************/
+    void Dx12Context::SetFrameDeltaTime(float dt)
+    {
+        m_lastDeltaTime = dt;
+
+        // [CAMERA-OWNER] Free camera update ONLY in Free mode
+        if (ToggleSystem::GetCameraMode() == CameraMode::Free)
+        {
+            UpdateCamera(dt);
+        }
     }
 
     void Dx12Context::SetHUDSnapshot(const HUDSnapshot& snap)
@@ -823,9 +825,7 @@ namespace Renderer
         if (!m_initialized)
             return;
 
-        // Pre-frame: delta time and camera update
-        float dt = UpdateDeltaTime();
-        UpdateCamera(dt);
+        // [DT-SSOT] dt and camera handled via SetFrameDeltaTime() before Render()
 
         // Begin frame: fence wait + allocator reset
         uint32_t frameResourceIndex = static_cast<uint32_t>(m_frameId % FrameCount);
