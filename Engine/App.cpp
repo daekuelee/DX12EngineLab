@@ -167,43 +167,16 @@ namespace Engine
             GameplayActionSystem::FinalizeFrameIntent(stepCount, frameDt);
 
             //=====================================================================
-            // PHASE 3: PRESENTATION (C-2 Preview Offset)
+            // PHASE 3-5: CAMERA PIPELINE (PR2.3 helper extraction)
             //
-            // CONTRACT:
-            //   - stepCount==0 => apply preview offset for visual responsiveness
-            //   - INVARIANT: Does NOT mutate m_pawn.yaw or m_pawn.pitch
-            //
-            // GHOST OFFSET PREVENTION (code-backed):
-            //   - Guard: `!imguiBlocksGameplay` prevents entry to this block
-            //   - StageFrameIntent flushes pending mouse when blocked
-            //     (GameplayActionSystem.cpp:155-157: s_pendingMouseDX = 0)
-            //   - GetPendingLookPreviewRad returns 0 when s_blockedThisFrame is set
-            //     (GameplayActionSystem.cpp:470-475)
+            // CONTRACT: Call order MUST be preserved:
+            //   3. ApplyPresentationPreviewIfNeeded (offset before rig)
+            //   4. UpdateRenderCamera (rig before submit)
+            //   5. SubmitRenderCamera (submit uses rig result)
             //=====================================================================
-            if (stepCount == 0 && !imguiBlocksGameplay)
-            {
-                float previewYaw, previewPitch;
-                GameplayActionSystem::GetPendingLookPreviewRad(previewYaw, previewPitch);
-                m_worldState.SetPresentationLookOffset(previewYaw, previewPitch);
-            }
-            else
-            {
-                m_worldState.ClearPresentationLookOffset();
-            }
-
-            //=====================================================================
-            // PHASE 4: CAMERA RIG UPDATE
-            // CONTRACT: TickFrame writes m_renderCam only (never m_pawn.yaw/pitch)
-            //=====================================================================
-            m_worldState.TickFrame(frameDt);
-
-            //=====================================================================
-            // PHASE 5: RENDER SUBMISSION
-            // CONTRACT: BuildViewProj is const (reads m_renderCam, m_pawn.pos)
-            //=====================================================================
-            float aspect = m_renderer.GetAspect();
-            DirectX::XMFLOAT4X4 viewProj = m_worldState.BuildViewProj(aspect);
-            m_renderer.SetFrameCamera(viewProj);
+            ApplyPresentationPreviewIfNeeded(stepCount, imguiBlocksGameplay);
+            UpdateRenderCamera(frameDt);
+            SubmitRenderCamera();
 
             // 7. Build HUD snapshot and inject action debug state
             Renderer::HUDSnapshot snap = m_worldState.BuildSnapshot();
@@ -241,6 +214,59 @@ namespace Engine
 
         // Render frame
         m_renderer.Render();
+    }
+
+    /******************************************************************************
+     * CONTRACT: ApplyPresentationPreviewIfNeeded (PR2.3)
+     *
+     * SCOPE: ThirdPerson camera mode only
+     * BEHAVIOR:
+     *   - stepCount==0 && !imguiBlocksGameplay => set presentation offset
+     *   - otherwise => clear presentation offset
+     * CALL ORDER: Must be called BEFORE UpdateRenderCamera
+     ******************************************************************************/
+    void App::ApplyPresentationPreviewIfNeeded(uint32_t stepCount, bool imguiBlocksGameplay)
+    {
+        if (stepCount == 0 && !imguiBlocksGameplay)
+        {
+            float previewYaw, previewPitch;
+            GameplayActionSystem::GetPendingLookPreviewRad(previewYaw, previewPitch);
+            m_worldState.SetPresentationLookOffset(previewYaw, previewPitch);
+        }
+        else
+        {
+            m_worldState.ClearPresentationLookOffset();
+        }
+    }
+
+    /******************************************************************************
+     * CONTRACT: UpdateRenderCamera (PR2.3)
+     *
+     * SCOPE: ThirdPerson camera mode only
+     * BEHAVIOR: Wraps m_worldState.TickFrame(frameDt)
+     * CALL ORDER: Must be called AFTER ApplyPresentationPreviewIfNeeded,
+     *             BEFORE SubmitRenderCamera
+     ******************************************************************************/
+    void App::UpdateRenderCamera(float frameDt)
+    {
+        m_worldState.TickFrame(frameDt);
+    }
+
+    /******************************************************************************
+     * CONTRACT: SubmitRenderCamera (PR2.3)
+     *
+     * SCOPE: ThirdPerson camera mode only
+     * BEHAVIOR:
+     *   - Gets aspect ratio from renderer
+     *   - Builds view/projection matrix via BuildViewProj
+     *   - Submits to renderer via SetFrameCamera
+     * CALL ORDER: Must be called AFTER UpdateRenderCamera
+     ******************************************************************************/
+    void App::SubmitRenderCamera()
+    {
+        float aspect = m_renderer.GetAspect();
+        DirectX::XMFLOAT4X4 viewProj = m_worldState.BuildViewProj(aspect);
+        m_renderer.SetFrameCamera(viewProj);
     }
 
     void App::Shutdown()

@@ -50,5 +50,18 @@ namespace Engine
         FrameClock m_frameClock;
 
         static constexpr float FIXED_DT = 1.0f / 60.0f;  // 60 Hz fixed step
+
+        //---------------------------------------------------------------------
+        // Camera/Presentation Helpers (PR2.3)
+        //
+        // CONTRACT: Behavior-preserving extraction from Tick().
+        // INVARIANT: Call order must be preserved:
+        //   1. ApplyPresentationPreviewIfNeeded (sets offset before camera rig)
+        //   2. UpdateRenderCamera (computes camera rig state)
+        //   3. SubmitRenderCamera (reads computed camera state)
+        //---------------------------------------------------------------------
+        void ApplyPresentationPreviewIfNeeded(uint32_t stepCount, bool imguiBlocksGameplay);
+        void UpdateRenderCamera(float frameDt);
+        void SubmitRenderCamera();
     };
 }
