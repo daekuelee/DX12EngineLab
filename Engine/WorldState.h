@@ -147,8 +147,7 @@ namespace Engine
         int WorldToCellZ(float z) const;
         AABB BuildPawnAABB(float px, float py, float pz) const;
         AABB GetCubeAABB(uint16_t cubeIdx) const;
-        bool Intersects(const AABB& a, const AABB& b) const;
-        float ComputeSignedPenetration(const AABB& pawn, const AABB& cube, Axis axis) const;
+        // PR2.2: Intersects/ComputeSignedPenetration moved to WorldCollisionMath.h (stateless)
         std::vector<uint16_t> QuerySpatialHash(const AABB& pawn) const;
         void ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis, float prevPawnBottom = 0.0f);
         // Day3.8: MTV-based XZ resolution (Issue A fix)

@@ -1,4 +1,5 @@
 #include "WorldState.h"
+#include "WorldCollisionMath.h"  // PR2.2: Stateless AABB helpers
 #include "../Renderer/DX12/Dx12Context.h"  // For HUDSnapshot
 #include <cmath>
 #include <cstdio>
@@ -986,46 +987,7 @@ namespace Engine
         return aabb;
     }
 
-    bool WorldState::Intersects(const AABB& a, const AABB& b) const
-    {
-        // Day3.5: Strict intersection (open intervals - touching doesn't count)
-        return (a.minX < b.maxX && a.maxX > b.minX &&
-                a.minY < b.maxY && a.maxY > b.minY &&
-                a.minZ < b.maxZ && a.maxZ > b.minZ);
-    }
-
-    float WorldState::ComputeSignedPenetration(const AABB& pawn, const AABB& cube, Axis axis) const
-    {
-        // Center-based sign decision: push pawn AWAY from cube center
-        float pawnMin, pawnMax, cubeMin, cubeMax;
-
-        if (axis == Axis::X) {
-            pawnMin = pawn.minX; pawnMax = pawn.maxX;
-            cubeMin = cube.minX; cubeMax = cube.maxX;
-        } else if (axis == Axis::Y) {
-            pawnMin = pawn.minY; pawnMax = pawn.maxY;
-            cubeMin = cube.minY; cubeMax = cube.maxY;
-        } else { // Z
-            pawnMin = pawn.minZ; pawnMax = pawn.maxZ;
-            cubeMin = cube.minZ; cubeMax = cube.maxZ;
-        }
-
-        float centerPawn = (pawnMin + pawnMax) * 0.5f;
-        float centerCube = (cubeMin + cubeMax) * 0.5f;
-        float pawnHalf = (pawnMax - pawnMin) * 0.5f;
-        float cubeHalf = (cubeMax - cubeMin) * 0.5f;
-
-        // Overlap magnitude
-        float overlap = (pawnHalf + cubeHalf) - fabsf(centerPawn - centerCube);
-
-        // No penetration if overlap <= 0
-        if (overlap <= 0.0f) return 0.0f;
-
-        // Sign: push pawn away from cube center (negative direction if pawn is left/below)
-        float sign = (centerPawn < centerCube) ? -1.0f : 1.0f;
-
-        return sign * overlap;
-    }
+    // PR2.2: Intersects/ComputeSignedPenetration moved to WorldCollisionMath.h (stateless)
 
     std::vector<uint16_t> WorldState::QuerySpatialHash(const AABB& pawn) const
     {
@@ -1130,12 +1092,12 @@ namespace Engine
         for (uint16_t cubeIdx : candidates)
         {
             AABB cube = GetCubeAABB(cubeIdx);
-            if (!Intersects(pawn, cube)) continue;
+            if (!IntersectsAABB(pawn, cube)) continue;
 
             m_collisionStats.contacts++;
 
-            float penX = ComputeSignedPenetration(pawn, cube, Axis::X);
-            float penZ = ComputeSignedPenetration(pawn, cube, Axis::Z);
+            float penX = SignedPenetrationAABB(pawn, cube, Axis::X);
+            float penZ = SignedPenetrationAABB(pawn, cube, Axis::Z);
 
             float centerDiffX = ((pawn.minX + pawn.maxX) - (cube.minX + cube.maxX)) * 0.5f;
             float centerDiffZ = ((pawn.minZ + pawn.maxZ) - (cube.minZ + cube.maxZ)) * 0.5f;
@@ -1185,7 +1147,7 @@ namespace Engine
             // Day3.9: Post-resolution proof - verify XZ separation achieved
             AABB pawnAfterXZ = BuildPawnAABB(newX, newY, newZ);
             AABB cubeCheck = GetCubeAABB(static_cast<uint16_t>(bestCubeIdx));
-            m_collisionStats.xzStillOverlapping = Intersects(pawnAfterXZ, cubeCheck);
+            m_collisionStats.xzStillOverlapping = IntersectsAABB(pawnAfterXZ, cubeCheck);
 
             if (fabsf(bestPenX) > m_collisionStats.maxPenetrationAbs)
                 m_collisionStats.maxPenetrationAbs = fabsf(bestPenX);
@@ -1213,7 +1175,7 @@ namespace Engine
         for (uint16_t cubeIdx : candidates)
         {
             AABB cube = GetCubeAABB(cubeIdx);
-            if (!Intersects(pawn, cube)) continue;
+            if (!IntersectsAABB(pawn, cube)) continue;
 
             // Day3.9: Anti-step-up guard for Y axis
             // Day3.12 Phase 4A: Skip this guard for Capsule mode when Y sweep is enabled
@@ -1227,7 +1189,7 @@ namespace Engine
                 float cubeTop = cube.maxY;
 
                 // Compute what the Y delta would be
-                float penY = ComputeSignedPenetration(pawn, cube, Axis::Y);
+                float penY = SignedPenetrationAABB(pawn, cube, Axis::Y);
                 float deltaY = penY;  // Penetration is already signed correctly
 
                 // wouldPushUp = the correction would move pawn upward
@@ -1251,7 +1213,7 @@ namespace Engine
             // Day3.4: Count actual intersections (summed, not deduplicated)
             m_collisionStats.contacts++;
 
-            float pen = ComputeSignedPenetration(pawn, cube, axis);
+            float pen = SignedPenetrationAABB(pawn, cube, axis);
 
             // Day3.4: Track max penetration for diagnostics
             if (fabsf(pen) > m_collisionStats.maxPenetrationAbs)
