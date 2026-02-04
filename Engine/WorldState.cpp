@@ -237,6 +237,21 @@ namespace Engine
         // Part 2: Build spatial grid for cube collision
         BuildSpatialGrid();
 
+        // PR2.4: One-shot startup proof log for controller mode quarantine
+        {
+            const char* modeName = (m_controllerMode == ControllerMode::Capsule) ? "Capsule" : "AABB";
+            char buf[128];
+            sprintf_s(buf, "[PROOF-LEGACY-QUAR] controller=%s (legacy AABB %s)\n",
+                      modeName,
+#if ENABLE_LEGACY_AABB
+                      "ENABLED"
+#else
+                      "DISABLED"
+#endif
+            );
+            OutputDebugStringA(buf);
+        }
+
         // Day3.12: Mutual exclusion - StepUpGridTest overrides T1/T2/T3 fixtures
         if (m_config.enableStepUpGridTest)
         {
@@ -301,6 +316,19 @@ namespace Engine
 
     void WorldState::TickFixed(const InputState& input, float fixedDt)
     {
+        //---------------------------------------------------------------------
+        // PR2.4: Hot-path quarantine clamp - guarantees legacy AABB never runs
+        //---------------------------------------------------------------------
+#if !ENABLE_LEGACY_AABB
+        if (m_controllerMode != ControllerMode::Capsule)
+        {
+            m_controllerMode = ControllerMode::Capsule;
+#if defined(_DEBUG)
+            OutputDebugStringA("[PROOF-LEGACY-QUAR] Mode clamped to Capsule in TickFixed\n");
+#endif
+        }
+#endif
+
         // Reset collision stats for this tick
         m_collisionStats = CollisionStats{};
 
@@ -709,14 +737,27 @@ namespace Engine
         }
     }
 
+    /******************************************************************************
+     * CONTRACT: ToggleControllerMode (PR2.4 - Legacy AABB Quarantine)
+     *
+     * POLICY: Capsule-only is SSOT. Legacy AABB is quarantined.
+     * BEHAVIOR: Warning + no-op (mode stays Capsule).
+     * RE-ENABLE: Build with ENABLE_LEGACY_AABB=1 (not recommended).
+     ******************************************************************************/
     void WorldState::ToggleControllerMode()
     {
+#if ENABLE_LEGACY_AABB
+        // Legacy path - only if explicitly enabled at build time
         m_controllerMode = (m_controllerMode == ControllerMode::AABB)
                            ? ControllerMode::Capsule : ControllerMode::AABB;
         const char* name = (m_controllerMode == ControllerMode::AABB) ? "AABB" : "Capsule";
         char buf[64];
         sprintf_s(buf, "[MODE] ctrl=%s\n", name);
         OutputDebugStringA(buf);
+#else
+        // Capsule-only policy: AABB toggle is disabled (warning + no-op)
+        OutputDebugStringA("[PROOF-LEGACY-QUAR] Toggle ignored - Capsule-only policy (AABB quarantined)\n");
+#endif
     }
 
     void WorldState::ToggleStepUpGridTest()

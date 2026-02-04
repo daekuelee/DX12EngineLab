@@ -110,8 +110,19 @@ namespace Engine
         // Day3.5: Jump grace flag (prevents support query from clearing onGround on jump frame)
         bool m_justJumpedThisTick = false;
 
-        // Day3.11: Controller mode
-        ControllerMode m_controllerMode = ControllerMode::AABB;
+        //---------------------------------------------------------------------
+        // PR2.4: Controller mode (Legacy AABB Quarantine)
+        //
+        // POLICY: Capsule-only is SSOT. Legacy AABB is quarantined.
+        // DEFAULT: ControllerMode::Capsule
+        // TOGGLE: Disabled (warning + no-op)
+        // RE-ENABLE: Build with ENABLE_LEGACY_AABB=1 (not recommended)
+        //---------------------------------------------------------------------
+#ifndef ENABLE_LEGACY_AABB
+#define ENABLE_LEGACY_AABB 0
+#endif
+        ControllerMode m_controllerMode = ControllerMode::Capsule;
+        bool m_legacyQuarantineLoggedOnce = false;  // One-shot startup log flag
 
         // Part 2: Spatial hash grid (100x100 cells, each cell contains cube index)
         // Built once at init - cubes don't move
