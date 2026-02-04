@@ -220,10 +220,10 @@ namespace Engine
         m_pawn.onGround = false;  // Start in air, floor resolve will set true
 
         // Initialize camera at offset from pawn
-        m_camera.eyeX = m_pawn.posX;
-        m_camera.eyeY = m_pawn.posY + m_config.camOffsetUp;
-        m_camera.eyeZ = m_pawn.posZ - m_config.camOffsetBehind;
-        m_camera.fovY = m_config.baseFovY;
+        m_renderCam.eyeX = m_pawn.posX;
+        m_renderCam.eyeY = m_pawn.posY + m_config.camOffsetUp;
+        m_renderCam.eyeZ = m_pawn.posZ - m_config.camOffsetBehind;
+        m_renderCam.fovY = m_config.baseFovY;
 
         m_sprintAlpha = 0.0f;
         m_jumpConsumedThisFrame = false;
@@ -318,8 +318,8 @@ namespace Engine
         if (m_pawn.pitch > m_config.pitchClampMax) m_pawn.pitch = m_config.pitchClampMax;
 
         // 3. Compute camera-relative movement vectors (pawnXZ - eyeXZ)
-        float camFwdX = m_pawn.posX - m_camera.eyeX;
-        float camFwdZ = m_pawn.posZ - m_camera.eyeZ;
+        float camFwdX = m_pawn.posX - m_renderCam.eyeX;
+        float camFwdZ = m_pawn.posZ - m_renderCam.eyeZ;
         float fwdLen = sqrtf(camFwdX * camFwdX + camFwdZ * camFwdZ);
 
         // Len guard: fallback to pawn yaw if camera too close
@@ -338,12 +338,12 @@ namespace Engine
         float camRightX = -camFwdZ;
         float camRightZ = camFwdX;
 
-        // Store for HUD proof + orthogonality check
-        m_camera.dbgFwdX = camFwdX;
-        m_camera.dbgFwdZ = camFwdZ;
-        m_camera.dbgRightX = camRightX;
-        m_camera.dbgRightZ = camRightZ;
-        m_camera.dbgDot = camFwdX * camRightX + camFwdZ * camRightZ;  // Should be ~0
+        // Store for HUD proof + orthogonality check (Day4: now in MovementBasisDebug)
+        m_movementBasis.fwdX = camFwdX;
+        m_movementBasis.fwdZ = camFwdZ;
+        m_movementBasis.rightX = camRightX;
+        m_movementBasis.rightZ = camRightZ;
+        m_movementBasis.dot = camFwdX * camRightX + camFwdZ * camRightZ;  // Should be ~0
 
         // 4. Smooth sprint alpha toward target
         float targetSprint = input.sprint ? 1.0f : 0.0f;
@@ -2106,40 +2106,80 @@ namespace Engine
 
     void WorldState::TickFrame(float frameDt)
     {
-        // 1. Compute target camera position (behind and above pawn)
-        // [C-2] Use effective yaw/pitch (sim + presentation preview offset)
+        //=========================================================================
+        // BLOCK 1: PresentationInput
+        // CONTRACT: Reads sim yaw/pitch + presentation offsets
+        // WRITES: m_renderCam.effectiveYaw/Pitch (proof fields only)
+        //=========================================================================
         float effectiveYaw = m_pawn.yaw + m_presentationYawOffset;
         float effectivePitch = m_pawn.pitch + m_presentationPitchOffset;
-
-        // Clamp effective pitch for presentation too
         if (effectivePitch < m_config.pitchClampMin) effectivePitch = m_config.pitchClampMin;
         if (effectivePitch > m_config.pitchClampMax) effectivePitch = m_config.pitchClampMax;
 
+#if defined(_DEBUG)
+        m_renderCam.effectiveYaw = effectiveYaw;
+        m_renderCam.effectivePitch = effectivePitch;
+#endif
+
+        //=========================================================================
+        // BLOCK 2: CameraRig
+        // CONTRACT: Computes target eye, smooths camera position
+        // WRITES: m_renderCam.eyeX/Y/Z, m_renderCam.targetEyeX/Y/Z
+        //=========================================================================
         float cosYaw = cosf(effectiveYaw);
         float sinYaw = sinf(effectiveYaw);
         float targetEyeX = m_pawn.posX - sinYaw * m_config.camOffsetBehind;
         float targetEyeY = m_pawn.posY + m_config.camOffsetUp;
         float targetEyeZ = m_pawn.posZ - cosYaw * m_config.camOffsetBehind;
 
-        // Smooth camera toward target
-        float followAlpha = 1.0f - expf(-m_config.camFollowRate * frameDt);
-        m_camera.eyeX += (targetEyeX - m_camera.eyeX) * followAlpha;
-        m_camera.eyeY += (targetEyeY - m_camera.eyeY) * followAlpha;
-        m_camera.eyeZ += (targetEyeZ - m_camera.eyeZ) * followAlpha;
+#if defined(_DEBUG)
+        m_renderCam.targetEyeX = targetEyeX;
+        m_renderCam.targetEyeY = targetEyeY;
+        m_renderCam.targetEyeZ = targetEyeZ;
+#endif
 
-        // 2. Smooth FOV toward target (based on sprint)
+        float followAlpha = 1.0f - expf(-m_config.camFollowRate * frameDt);
+        m_renderCam.eyeX += (targetEyeX - m_renderCam.eyeX) * followAlpha;
+        m_renderCam.eyeY += (targetEyeY - m_renderCam.eyeY) * followAlpha;
+        m_renderCam.eyeZ += (targetEyeZ - m_renderCam.eyeZ) * followAlpha;
+
+        //=========================================================================
+        // BLOCK 3: FOV Smooth
+        // CONTRACT: Smooths FOV based on sprint alpha
+        // WRITES: m_renderCam.fovY
+        //=========================================================================
         float targetFov = m_config.baseFovY + (m_config.sprintFovY - m_config.baseFovY) * m_sprintAlpha;
         float fovAlpha = 1.0f - expf(-m_config.fovSmoothRate * frameDt);
-        m_camera.fovY += (targetFov - m_camera.fovY) * fovAlpha;
+        m_renderCam.fovY += (targetFov - m_renderCam.fovY) * fovAlpha;
 
-        // 3. Clear jumpQueued after one render frame (evidence display)
+        //=========================================================================
+        // BLOCK 4: Evidence Cleanup
+        //=========================================================================
         m_jumpQueued = false;
+
+#if defined(_DEBUG)
+        // [PROOF-CAM-SPLIT] Throttled log (every 120 frames, Debug-only)
+        static uint32_t s_camLogCounter = 0;
+        if (++s_camLogCounter % 120 == 0)
+        {
+            char buf[256];
+            sprintf_s(buf, "[PROOF-CAM-SPLIT] simYaw=%.3f prevOff=%.3f effYaw=%.3f eye=(%.2f,%.2f,%.2f)\n",
+                m_pawn.yaw, m_presentationYawOffset, m_renderCam.effectiveYaw,
+                m_renderCam.eyeX, m_renderCam.eyeY, m_renderCam.eyeZ);
+            OutputDebugStringA(buf);
+        }
+#endif
     }
 
     DirectX::XMFLOAT4X4 WorldState::BuildViewProj(float aspect) const
     {
-        // Camera looks at pawn position
-        XMFLOAT3 eye = { m_camera.eyeX, m_camera.eyeY, m_camera.eyeZ };
+        //=========================================================================
+        // CONTRACT: Read-only view/proj matrix construction
+        // READS: m_renderCam.eyeX/Y/Z, m_renderCam.fovY, m_pawn.posX/Y/Z
+        // INVARIANT: NEVER writes any state (const method)
+        // WARNING: DO NOT MODIFY MATH - only member access paths changed
+        //=========================================================================
+        XMFLOAT3 eye = { m_renderCam.eyeX, m_renderCam.eyeY, m_renderCam.eyeZ };
         XMFLOAT3 target = { m_pawn.posX, m_pawn.posY + 1.5f, m_pawn.posZ };  // Look at pawn center
         XMFLOAT3 up = { 0.0f, 1.0f, 0.0f };
 
@@ -2149,7 +2189,7 @@ namespace Engine
 
         // Right-handed view and projection
         XMMATRIX view = XMMatrixLookAtRH(eyeVec, targetVec, upVec);
-        XMMATRIX proj = XMMatrixPerspectiveFovRH(m_camera.fovY, aspect, 1.0f, 1000.0f);
+        XMMATRIX proj = XMMatrixPerspectiveFovRH(m_renderCam.fovY, aspect, 1.0f, 1000.0f);
         XMMATRIX viewProj = XMMatrixMultiply(view, proj);
 
         XMFLOAT4X4 result;
@@ -2178,7 +2218,7 @@ namespace Engine
         snap.sprintAlpha = m_sprintAlpha;
         snap.yawDeg = m_pawn.yaw * RAD_TO_DEG;
         snap.pitchDeg = m_pawn.pitch * RAD_TO_DEG;
-        snap.fovDeg = m_camera.fovY * RAD_TO_DEG;
+        snap.fovDeg = m_renderCam.fovY * RAD_TO_DEG;
         snap.jumpQueued = m_jumpQueued;
 
         // Part 1: Respawn tracking
@@ -2214,12 +2254,29 @@ namespace Engine
         snap.floorMaxZ = m_config.floorMaxZ;
         snap.floorY = m_config.floorY;
 
-        // Day3.7: Camera basis proof (Bug A)
-        snap.camFwdX = m_camera.dbgFwdX;
-        snap.camFwdZ = m_camera.dbgFwdZ;
-        snap.camRightX = m_camera.dbgRightX;
-        snap.camRightZ = m_camera.dbgRightZ;
-        snap.camDot = m_camera.dbgDot;
+        // Day3.7: Camera basis proof (Bug A) - now from MovementBasisDebug
+        snap.camFwdX = m_movementBasis.fwdX;
+        snap.camFwdZ = m_movementBasis.fwdZ;
+        snap.camRightX = m_movementBasis.rightX;
+        snap.camRightZ = m_movementBasis.rightZ;
+        snap.camDot = m_movementBasis.dot;
+
+#if defined(_DEBUG)
+        // Day4: Camera split proof (Debug-only fields)
+        snap.simYaw = m_pawn.yaw;
+        snap.simPitch = m_pawn.pitch;
+        snap.presentationYawOffset = m_presentationYawOffset;
+        snap.presentationPitchOffset = m_presentationPitchOffset;
+        snap.effectiveYaw = m_renderCam.effectiveYaw;
+        snap.effectivePitch = m_renderCam.effectivePitch;
+        snap.renderEyeX = m_renderCam.eyeX;
+        snap.renderEyeY = m_renderCam.eyeY;
+        snap.renderEyeZ = m_renderCam.eyeZ;
+        snap.targetEyeX = m_renderCam.targetEyeX;
+        snap.targetEyeY = m_renderCam.targetEyeY;
+        snap.targetEyeZ = m_renderCam.targetEyeZ;
+        snap.step0PreviewActive = (m_presentationYawOffset != 0.0f || m_presentationPitchOffset != 0.0f);
+#endif
 
         // Day3.7: Collision extent proof (Bug C)
         snap.pawnExtentX = m_config.pawnHalfExtentX;

@@ -130,7 +130,18 @@ namespace Engine
     // Day4 PR2.2: InputState moved to Engine/InputState.h (lightweight header)
     // Used by GameplayActionSystem (producer) and WorldState::TickFixed (consumer)
 
-    // Pawn physics state
+    //-------------------------------------------------------------------------
+    // CONTRACT: PawnState - Simulation-owned physics and control state
+    //
+    // OWNERSHIP:
+    //   - WRITER: WorldState::TickFixed() exclusively
+    //   - READERS: WorldState::TickFrame(), BuildViewProj(), BuildSnapshot()
+    //
+    // CONTROL VIEW (yaw/pitch):
+    //   - Conceptual "ControlViewState" lives here as yaw/pitch fields
+    //   - TickFrame NEVER writes yaw or pitch
+    //   - Presentation offsets are ADDITIVE and applied in TickFrame only
+    //-------------------------------------------------------------------------
     struct PawnState
     {
         float posX = 0.0f;
@@ -144,7 +155,7 @@ namespace Engine
         bool onGround = true;
     };
 
-    // Camera state (smoothed)
+    // Camera state (smoothed) - DEPRECATED: See RenderCameraState below
     struct CameraState
     {
         float eyeX = 0.0f;
@@ -155,6 +166,60 @@ namespace Engine
         float dbgFwdX = 0.0f, dbgFwdZ = 0.0f;
         float dbgRightX = 0.0f, dbgRightZ = 0.0f;
         float dbgDot = 0.0f;  // Orthogonality proof: should be ~0
+    };
+
+    //-------------------------------------------------------------------------
+    // CONTRACT: MovementBasisDebug - Sim movement basis (TickFixed-computed)
+    //
+    // OWNERSHIP:
+    //   - WRITER: WorldState::TickFixed() exclusively
+    //   - READERS: WorldState::BuildSnapshot()
+    //
+    // PURPOSE:
+    //   Camera-relative basis vectors used for Sim movement calculation.
+    //   Computed from pawn-to-camera direction at physics rate.
+    //   Stored for HUD proof display (Bug A orthogonality check).
+    //
+    // NOTE: This is the SIM movement basis, NOT the render camera direction.
+    //   During step0 preview, the render camera may be rotated by presentation
+    //   offset, but movement basis remains unchanged (only updated by TickFixed).
+    //-------------------------------------------------------------------------
+    struct MovementBasisDebug
+    {
+        float fwdX = 0.0f, fwdZ = 0.0f;    // Normalized pawn-to-camera direction (XZ)
+        float rightX = 0.0f, rightZ = 0.0f; // Cross(fwd, up)
+        float dot = 0.0f;                   // Orthogonality proof: should be ~0
+    };
+
+    //-------------------------------------------------------------------------
+    // CONTRACT: RenderCameraState - TickFrame-owned render camera data
+    //
+    // OWNERSHIP:
+    //   - WRITER: Initialize() (once at startup), then TickFrame() exclusively
+    //   - READERS: WorldState::BuildViewProj() (const), WorldState::BuildSnapshot()
+    //
+    // INVARIANTS:
+    //   - TickFixed NEVER writes these fields (after Initialize)
+    //   - BuildViewProj NEVER writes these fields (const method)
+    //
+    // DERIVATION (TickFrame):
+    //   1. effectiveYaw = m_pawn.yaw + m_presentationYawOffset
+    //   2. targetEye computed from effectiveYaw and m_pawn.pos
+    //   3. eye smoothed toward targetEye (exponential)
+    //   4. fov smoothed toward sprint target
+    //-------------------------------------------------------------------------
+    struct RenderCameraState
+    {
+        // Core render state (smoothed)
+        float eyeX = 0.0f, eyeY = 8.0f, eyeZ = -15.0f;
+        float fovY = 0.785398163f;  // 45 degrees
+
+#if defined(_DEBUG)
+        // PROOF fields (Debug-only, written by TickFrame for HUD validation)
+        float effectiveYaw = 0.0f;    // sim yaw + presentationYawOffset
+        float effectivePitch = 0.0f;  // sim pitch + presentationPitchOffset (clamped)
+        float targetEyeX = 0.0f, targetEyeY = 0.0f, targetEyeZ = 0.0f;
+#endif
     };
 
     // Map configuration
@@ -310,7 +375,9 @@ namespace Engine
 
     private:
         PawnState m_pawn;
-        CameraState m_camera;
+        // Day4 PR1: Split camera state into SSOT structs
+        MovementBasisDebug m_movementBasis;  // Written by TickFixed only
+        RenderCameraState m_renderCam;       // Written by TickFrame only
         MapState m_map;
         WorldConfig m_config;
 

@@ -166,8 +166,20 @@ namespace Engine
             // 5. Finalize frame intent (handle stepCount==0 timer decay)
             GameplayActionSystem::FinalizeFrameIntent(stepCount, frameDt);
 
-            // 6. C-2: Presentation-only preview when no fixed steps ran
-            // [PROOF-STEP0-LATCH-LOOK] — pending mouse persists, applied as preview offset
+            //=====================================================================
+            // PHASE 3: PRESENTATION (C-2 Preview Offset)
+            //
+            // CONTRACT:
+            //   - stepCount==0 => apply preview offset for visual responsiveness
+            //   - INVARIANT: Does NOT mutate m_pawn.yaw or m_pawn.pitch
+            //
+            // GHOST OFFSET PREVENTION (code-backed):
+            //   - Guard: `!imguiBlocksGameplay` prevents entry to this block
+            //   - StageFrameIntent flushes pending mouse when blocked
+            //     (GameplayActionSystem.cpp:155-157: s_pendingMouseDX = 0)
+            //   - GetPendingLookPreviewRad returns 0 when s_blockedThisFrame is set
+            //     (GameplayActionSystem.cpp:470-475)
+            //=====================================================================
             if (stepCount == 0 && !imguiBlocksGameplay)
             {
                 float previewYaw, previewPitch;
@@ -179,10 +191,16 @@ namespace Engine
                 m_worldState.ClearPresentationLookOffset();
             }
 
-            // Variable-rate camera smoothing
+            //=====================================================================
+            // PHASE 4: CAMERA RIG UPDATE
+            // CONTRACT: TickFrame writes m_renderCam only (never m_pawn.yaw/pitch)
+            //=====================================================================
             m_worldState.TickFrame(frameDt);
 
-            // Build and inject camera
+            //=====================================================================
+            // PHASE 5: RENDER SUBMISSION
+            // CONTRACT: BuildViewProj is const (reads m_renderCam, m_pawn.pos)
+            //=====================================================================
             float aspect = m_renderer.GetAspect();
             DirectX::XMFLOAT4X4 viewProj = m_worldState.BuildViewProj(aspect);
             m_renderer.SetFrameCamera(viewProj);

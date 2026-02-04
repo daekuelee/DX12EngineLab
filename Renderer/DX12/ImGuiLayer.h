@@ -147,6 +147,15 @@ namespace Renderer
             bool actionJumpFiredThisFrame = false;
             bool actionBlockedByImGui = false;
             bool actionBufferFlushedByBlock = false;
+#if defined(_DEBUG)
+            // Day4 PR1: Camera split proof (Debug-only)
+            float simYaw = 0.0f, simPitch = 0.0f;
+            float presentationYawOffset = 0.0f, presentationPitchOffset = 0.0f;
+            float effectiveYaw = 0.0f, effectivePitch = 0.0f;
+            float renderEyeX = 0.0f, renderEyeY = 0.0f, renderEyeZ = 0.0f;
+            float targetEyeX = 0.0f, targetEyeY = 0.0f, targetEyeZ = 0.0f;
+            bool step0PreviewActive = false;
+#endif
         } m_worldState;
         bool m_hasWorldState = false;
     };

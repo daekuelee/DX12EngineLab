@@ -298,6 +298,22 @@ namespace Renderer
         m_worldState.actionJumpFiredThisFrame = snap.actionJumpFiredThisFrame;
         m_worldState.actionBlockedByImGui = snap.actionBlockedByImGui;
         m_worldState.actionBufferFlushedByBlock = snap.actionBufferFlushedByBlock;
+#if defined(_DEBUG)
+        // Day4 PR1: Camera split proof
+        m_worldState.simYaw = snap.simYaw;
+        m_worldState.simPitch = snap.simPitch;
+        m_worldState.presentationYawOffset = snap.presentationYawOffset;
+        m_worldState.presentationPitchOffset = snap.presentationPitchOffset;
+        m_worldState.effectiveYaw = snap.effectiveYaw;
+        m_worldState.effectivePitch = snap.effectivePitch;
+        m_worldState.renderEyeX = snap.renderEyeX;
+        m_worldState.renderEyeY = snap.renderEyeY;
+        m_worldState.renderEyeZ = snap.renderEyeZ;
+        m_worldState.targetEyeX = snap.targetEyeX;
+        m_worldState.targetEyeY = snap.targetEyeY;
+        m_worldState.targetEyeZ = snap.targetEyeZ;
+        m_worldState.step0PreviewActive = snap.step0PreviewActive;
+#endif
         m_hasWorldState = true;
     }
 
@@ -513,11 +529,11 @@ namespace Renderer
                         m_worldState.floorMinZ, m_worldState.floorMaxZ);
                 }
 
-                // Day3.7: Camera basis proof (Bug A) (verbose)
+                // Day3.7: Sim movement basis proof (Bug A) (verbose)
                 if (ToggleSystem::IsHudVerboseEnabled())
                 {
                     ImGui::Separator();
-                    ImGui::Text("-- Camera Basis --");
+                    ImGui::Text("-- Sim Movement Basis (Bug A) --");
                     ImGui::Text("Fwd: (%.2f, %.2f)", m_worldState.camFwdX, m_worldState.camFwdZ);
                     ImGui::Text("Right: (%.2f, %.2f)", m_worldState.camRightX, m_worldState.camRightZ);
                     ImGui::Text("Dot: %.4f", m_worldState.camDot);
@@ -566,6 +582,44 @@ namespace Renderer
                     if (charActive)
                         ImGui::Text("Character Parts: 6");
                 }
+
+#if defined(_DEBUG)
+                // Day4 PR1: Camera SSOT proof pipeline (Debug-only)
+                if (ImGui::CollapsingHeader("Camera SSOT (Day4)"))
+                {
+                    constexpr float R2D = 57.2958f;
+
+                    // === SIM (CONTROL) ===
+                    ImGui::Text("-- Sim (Control) --");
+                    ImGui::Text("  Yaw: %.2f deg  Pitch: %.2f deg",
+                        m_worldState.simYaw * R2D, m_worldState.simPitch * R2D);
+
+                    ImGui::Separator();
+
+                    // === PRESENTATION OFFSETS ===
+                    ImGui::Text("-- Presentation Offset --");
+                    ImGui::Text("  Yaw: %.4f rad  Pitch: %.4f rad",
+                        m_worldState.presentationYawOffset, m_worldState.presentationPitchOffset);
+                    ImGui::Text("  Step0 Preview: %s",
+                        m_worldState.step0PreviewActive ? "ACTIVE" : "off");
+
+                    ImGui::Separator();
+
+                    // === EFFECTIVE (SIM + PRESENTATION) ===
+                    ImGui::Text("-- Effective (Sim + Offset) --");
+                    ImGui::Text("  Yaw: %.2f deg  Pitch: %.2f deg",
+                        m_worldState.effectiveYaw * R2D, m_worldState.effectivePitch * R2D);
+
+                    ImGui::Separator();
+
+                    // === RENDER CAMERA ===
+                    ImGui::Text("-- Render Camera --");
+                    ImGui::Text("  Eye: (%.2f, %.2f, %.2f)",
+                        m_worldState.renderEyeX, m_worldState.renderEyeY, m_worldState.renderEyeZ);
+                    ImGui::Text("  Target: (%.2f, %.2f, %.2f)",
+                        m_worldState.targetEyeX, m_worldState.targetEyeY, m_worldState.targetEyeZ);
+                }
+#endif
             }
 
             // Upload diagnostics section (Day2) - only show when diag mode enabled AND metrics valid

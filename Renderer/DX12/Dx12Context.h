@@ -133,6 +133,19 @@ namespace Renderer
         bool actionJumpFiredThisFrame = false;
         bool actionBlockedByImGui = false;
         bool actionBufferFlushedByBlock = false;
+
+#if defined(_DEBUG)
+        // Day4 PR1: Camera split proof fields (Debug-only)
+        float simYaw = 0.0f;
+        float simPitch = 0.0f;
+        float presentationYawOffset = 0.0f;
+        float presentationPitchOffset = 0.0f;
+        float effectiveYaw = 0.0f;
+        float effectivePitch = 0.0f;
+        float renderEyeX = 0.0f, renderEyeY = 0.0f, renderEyeZ = 0.0f;
+        float targetEyeX = 0.0f, targetEyeY = 0.0f, targetEyeZ = 0.0f;
+        bool step0PreviewActive = false;
+#endif
     };
     class Dx12Context
     {
