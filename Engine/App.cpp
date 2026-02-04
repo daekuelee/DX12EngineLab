@@ -23,13 +23,13 @@
  *
  * INVARIANTS
  *   - onGround passed to BuildStepIntent is state BEFORE step executes
- *   - Jump fires on first step only (isFirstStep=true)
+ *   - Jump fires on first step only (stepIndex==0)
  *   - Look deltas computed on first step only [PROOF-LOOK-ONCE]
  *   - Action debug injection happens HERE (not WorldState::BuildSnapshot)
  *
  * PROOF POINTS
- *   [PROOF-JUMP-ONCE]         — isFirstStep flag controls jump firing
- *   [PROOF-LOOK-ONCE]         — isFirstStep flag controls look delta computation
+ *   [PROOF-JUMP-ONCE]         — stepIndex==0 controls jump firing
+ *   [PROOF-LOOK-ONCE]         — stepIndex==0 controls look delta computation
  *   [PROOF-STEP0-LATCH]       — Action layer handles stepCount==0
  *   [PROOF-STEP0-LATCH-LOOK]  — Pending mouse persists, applied as C-2 preview
  *   [PROOF-IMGUI-BLOCK-FLUSH] — Action layer flushes on ImGui capture
@@ -137,11 +137,10 @@ namespace Engine
             m_worldState.BeginFrame();
 
             // 4. Fixed-step loop with action system
-            // [PROOF-JUMP-ONCE] — jump fires only when isFirstStep=true
-            // [PROOF-LOOK-ONCE] — look deltas computed only when isFirstStep=true
+            // [PROOF-JUMP-ONCE] — jump fires only when stepIndex==0
+            // [PROOF-LOOK-ONCE] — look deltas computed only when stepIndex==0
             // [PROOF-STEP0-LATCH] — buffer persists if stepCount==0
             uint32_t stepCount = 0;
-            bool isFirstStep = true;
             constexpr bool isThirdPerson = true;  // We're in the ThirdPerson branch
 
             while (m_accumulator >= FIXED_DT)
@@ -151,42 +150,33 @@ namespace Engine
 
                 // Build StepIntent from action layer
                 // [LOOK-UNIFIED] yawDelta/pitchDelta computed inside
+                // stepIndex = stepCount before increment (first call gets 0, second gets 1, etc.)
                 InputState input = GameplayActionSystem::BuildStepIntent(
                     onGround,
                     FIXED_DT,
-                    isFirstStep,
+                    stepCount,  // stepIndex: 0 on first iteration, 1 on second, etc.
                     isThirdPerson
                 );
 
                 m_worldState.TickFixed(input, FIXED_DT);
                 m_accumulator -= FIXED_DT;
-                isFirstStep = false;
                 stepCount++;
             }
 
             // 5. Finalize frame intent (handle stepCount==0 timer decay)
             GameplayActionSystem::FinalizeFrameIntent(stepCount, frameDt);
 
-            // 6. C-2: Presentation-only preview when no fixed steps ran
-            // [PROOF-STEP0-LATCH-LOOK] — pending mouse persists, applied as preview offset
-            if (stepCount == 0 && !imguiBlocksGameplay)
-            {
-                float previewYaw, previewPitch;
-                GameplayActionSystem::GetPendingLookPreviewRad(previewYaw, previewPitch);
-                m_worldState.SetPresentationLookOffset(previewYaw, previewPitch);
-            }
-            else
-            {
-                m_worldState.ClearPresentationLookOffset();
-            }
-
-            // Variable-rate camera smoothing
-            m_worldState.TickFrame(frameDt);
-
-            // Build and inject camera
-            float aspect = m_renderer.GetAspect();
-            DirectX::XMFLOAT4X4 viewProj = m_worldState.BuildViewProj(aspect);
-            m_renderer.SetFrameCamera(viewProj);
+            //=====================================================================
+            // PHASE 3-5: CAMERA PIPELINE (PR2.3 helper extraction)
+            //
+            // CONTRACT: Call order MUST be preserved:
+            //   3. ApplyPresentationPreviewIfNeeded (offset before rig)
+            //   4. UpdateRenderCamera (rig before submit)
+            //   5. SubmitRenderCamera (submit uses rig result)
+            //=====================================================================
+            ApplyPresentationPreviewIfNeeded(stepCount, imguiBlocksGameplay);
+            UpdateRenderCamera(frameDt);
+            SubmitRenderCamera();
 
             // 7. Build HUD snapshot and inject action debug state
             Renderer::HUDSnapshot snap = m_worldState.BuildSnapshot();
@@ -209,7 +199,7 @@ namespace Engine
                 m_worldState.GetPawnPosX(),
                 m_worldState.GetPawnPosY(),
                 m_worldState.GetPawnPosZ(),
-                m_worldState.GetPawnYaw()
+                m_worldState.GetControlYaw()
             );
         }
         // else: Free camera mode - renderer uses its internal FreeCamera
@@ -224,6 +214,59 @@ namespace Engine
 
         // Render frame
         m_renderer.Render();
+    }
+
+    /******************************************************************************
+     * CONTRACT: ApplyPresentationPreviewIfNeeded (PR2.3)
+     *
+     * SCOPE: ThirdPerson camera mode only
+     * BEHAVIOR:
+     *   - stepCount==0 && !imguiBlocksGameplay => set presentation offset
+     *   - otherwise => clear presentation offset
+     * CALL ORDER: Must be called BEFORE UpdateRenderCamera
+     ******************************************************************************/
+    void App::ApplyPresentationPreviewIfNeeded(uint32_t stepCount, bool imguiBlocksGameplay)
+    {
+        if (stepCount == 0 && !imguiBlocksGameplay)
+        {
+            float previewYaw, previewPitch;
+            GameplayActionSystem::GetPendingLookPreviewRad(previewYaw, previewPitch);
+            m_worldState.SetPresentationLookOffset(previewYaw, previewPitch);
+        }
+        else
+        {
+            m_worldState.ClearPresentationLookOffset();
+        }
+    }
+
+    /******************************************************************************
+     * CONTRACT: UpdateRenderCamera (PR2.3)
+     *
+     * SCOPE: ThirdPerson camera mode only
+     * BEHAVIOR: Wraps m_worldState.TickFrame(frameDt)
+     * CALL ORDER: Must be called AFTER ApplyPresentationPreviewIfNeeded,
+     *             BEFORE SubmitRenderCamera
+     ******************************************************************************/
+    void App::UpdateRenderCamera(float frameDt)
+    {
+        m_worldState.TickFrame(frameDt);
+    }
+
+    /******************************************************************************
+     * CONTRACT: SubmitRenderCamera (PR2.3)
+     *
+     * SCOPE: ThirdPerson camera mode only
+     * BEHAVIOR:
+     *   - Gets aspect ratio from renderer
+     *   - Builds view/projection matrix via BuildViewProj
+     *   - Submits to renderer via SetFrameCamera
+     * CALL ORDER: Must be called AFTER UpdateRenderCamera
+     ******************************************************************************/
+    void App::SubmitRenderCamera()
+    {
+        float aspect = m_renderer.GetAspect();
+        DirectX::XMFLOAT4X4 viewProj = m_worldState.BuildViewProj(aspect);
+        m_renderer.SetFrameCamera(viewProj);
     }
 
     void App::Shutdown()

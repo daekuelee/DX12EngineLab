@@ -63,7 +63,6 @@ namespace GameplayActionSystem
 
     // Per-frame tracking
     static bool s_jumpFiredThisFrame = false;
-    static uint32_t s_stepsThisFrame = 0;
     static bool s_blockedThisFrame = false;
     static bool s_bufferFlushedByBlock = false;
 
@@ -117,7 +116,7 @@ namespace GameplayActionSystem
     //   - s_cached (movement/yaw cache for this frame)
     //   - s_jumpBuffered, s_jumpBufferTimer (latch jump intent)
     //   - s_blockedThisFrame, s_bufferFlushedByBlock (per-frame tracking)
-    //   - s_jumpFiredThisFrame, s_stepsThisFrame (reset to 0)
+    //   - s_jumpFiredThisFrame (reset to false)
     //
     // MUST NOT TOUCH:
     //   - s_coyoteTimer (except on ImGui flush)
@@ -136,7 +135,6 @@ namespace GameplayActionSystem
     {
         // Reset per-frame tracking
         s_jumpFiredThisFrame = false;
-        s_stepsThisFrame = 0;
         s_blockedThisFrame = imguiBlocksGameplay;
         s_bufferFlushedByBlock = false;
 
@@ -224,7 +222,6 @@ namespace GameplayActionSystem
     //   May be called 0-15 times per frame depending on accumulator.
     //
     // SSOT OWNERSHIP (what this function mutates):
-    //   - s_stepsThisFrame (incremented each call)
     //   - s_jumpFiredThisFrame (set true when jump fires)
     //   - s_jumpBuffered, s_jumpBufferTimer (consumed when jump fires)
     //   - s_coyoteTimer (decremented by fixedDt per step)
@@ -237,9 +234,9 @@ namespace GameplayActionSystem
     //   - Renderer state (isThirdPerson passed in to avoid layer violation)
     //
     // EDGE CASES:
-    //   - isFirstStep gating: jump can ONLY fire when isFirstStep=true
+    //   - stepIndex gating: jump can ONLY fire when stepIndex==0
     //     [PROOF-JUMP-ONCE] validates that multiple steps -> jump fires once
-    //   - [PROOF-LOOK-ONCE] look deltas computed only when isFirstStep=true
+    //   - [PROOF-LOOK-ONCE] look deltas computed only when stepIndex==0
     //   - Coyote time: starts when leaving ground, consumed on jump
     //   - Timer decay: decremented by fixedDt each step (SSOT timing policy)
     //
@@ -248,8 +245,11 @@ namespace GameplayActionSystem
     //   [PROOF-LOOK-ONCE] - look deltas computed only on first step of frame
     //   [PROOF-STEP0-LATCH] - buffer persists if no step runs (validated in Finalize)
     //-------------------------------------------------------------------------
-    Engine::InputState BuildStepIntent(bool onGround, float fixedDt, bool isFirstStep, bool isThirdPerson)
+    Engine::InputState BuildStepIntent(bool onGround, float fixedDt, uint32_t stepIndex, bool isThirdPerson)
     {
+        // Derive isFirstStep from stepIndex (mathematically equivalent to App's previous flip pattern)
+        const bool isFirstStep = (stepIndex == 0);
+
         Engine::InputState input;
 
         // Movement always passes through (if not blocked)
@@ -289,8 +289,6 @@ namespace GameplayActionSystem
             }
             // else: yawDelta/pitchDelta remain 0 (subsequent steps get no look input)
         }
-
-        s_stepsThisFrame++;
 
         // Coyote time logic: start timer when leaving ground
         if (s_wasOnGroundLastStep && !onGround && !s_blockedThisFrame)
@@ -438,7 +436,7 @@ namespace GameplayActionSystem
         s_debugState.jumpBufferTimer = s_jumpBufferTimer;
         s_debugState.coyoteActive = (s_coyoteTimer > 0.0f);
         s_debugState.coyoteTimer = s_coyoteTimer;
-        s_debugState.stepsThisFrame = s_stepsThisFrame;
+        s_debugState.stepsThisFrame = stepCount;
         s_debugState.jumpFiredThisFrame = s_jumpFiredThisFrame;
         s_debugState.blockedThisFrame = s_blockedThisFrame;
         s_debugState.bufferFlushedByBlock = s_bufferFlushedByBlock;
@@ -490,7 +488,6 @@ namespace GameplayActionSystem
         s_coyoteTimer = 0.0f;
         s_cached = {};
         s_jumpFiredThisFrame = false;
-        s_stepsThisFrame = 0;
         s_blockedThisFrame = false;
         s_bufferFlushedByBlock = false;
         s_pendingMouseDX = 0.0f;
