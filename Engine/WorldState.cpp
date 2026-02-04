@@ -215,8 +215,8 @@ namespace Engine
         m_pawn.posX = m_config.spawnX;
         m_pawn.posY = m_config.spawnY;
         m_pawn.posZ = m_config.spawnZ;
-        m_pawn.yaw = 0.0f;
-        m_pawn.pitch = 0.0f;
+        m_view.yaw = 0.0f;
+        m_view.pitch = 0.0f;
         m_pawn.onGround = false;  // Start in air, floor resolve will set true
 
         // Initialize camera at offset from pawn
@@ -310,12 +310,12 @@ namespace Engine
         }
 
         // 1. Apply yaw rotation [LOOK-UNIFIED] pre-computed delta from Action layer
-        m_pawn.yaw += input.yawDelta;
+        m_view.yaw += input.yawDelta;
 
         // 2. Apply pitch rotation with clamping [LOOK-UNIFIED]
-        m_pawn.pitch += input.pitchDelta;
-        if (m_pawn.pitch < m_config.pitchClampMin) m_pawn.pitch = m_config.pitchClampMin;
-        if (m_pawn.pitch > m_config.pitchClampMax) m_pawn.pitch = m_config.pitchClampMax;
+        m_view.pitch += input.pitchDelta;
+        if (m_view.pitch < m_config.pitchClampMin) m_view.pitch = m_config.pitchClampMin;
+        if (m_view.pitch > m_config.pitchClampMax) m_view.pitch = m_config.pitchClampMax;
 
         // 3. Compute camera-relative movement vectors (pawnXZ - eyeXZ)
         float camFwdX = m_pawn.posX - m_renderCam.eyeX;
@@ -325,8 +325,8 @@ namespace Engine
         // Len guard: fallback to pawn yaw if camera too close
         if (fwdLen < 0.001f)
         {
-            camFwdX = sinf(m_pawn.yaw);
-            camFwdZ = cosf(m_pawn.yaw);
+            camFwdX = sinf(m_view.yaw);
+            camFwdZ = cosf(m_view.yaw);
         }
         else
         {
@@ -2111,8 +2111,8 @@ namespace Engine
         // CONTRACT: Reads sim yaw/pitch + presentation offsets
         // WRITES: m_renderCam.effectiveYaw/Pitch (proof fields only)
         //=========================================================================
-        float effectiveYaw = m_pawn.yaw + m_presentationYawOffset;
-        float effectivePitch = m_pawn.pitch + m_presentationPitchOffset;
+        float effectiveYaw = m_view.yaw + m_presentationYawOffset;
+        float effectivePitch = m_view.pitch + m_presentationPitchOffset;
         if (effectivePitch < m_config.pitchClampMin) effectivePitch = m_config.pitchClampMin;
         if (effectivePitch > m_config.pitchClampMax) effectivePitch = m_config.pitchClampMax;
 
@@ -2164,7 +2164,7 @@ namespace Engine
         {
             char buf[256];
             sprintf_s(buf, "[PROOF-CAM-SPLIT] simYaw=%.3f prevOff=%.3f effYaw=%.3f eye=(%.2f,%.2f,%.2f)\n",
-                m_pawn.yaw, m_presentationYawOffset, m_renderCam.effectiveYaw,
+                m_view.yaw, m_presentationYawOffset, m_renderCam.effectiveYaw,
                 m_renderCam.eyeX, m_renderCam.eyeY, m_renderCam.eyeZ);
             OutputDebugStringA(buf);
         }
@@ -2216,8 +2216,8 @@ namespace Engine
         snap.speed = speed;
         snap.onGround = m_pawn.onGround;
         snap.sprintAlpha = m_sprintAlpha;
-        snap.yawDeg = m_pawn.yaw * RAD_TO_DEG;
-        snap.pitchDeg = m_pawn.pitch * RAD_TO_DEG;
+        snap.yawDeg = m_view.yaw * RAD_TO_DEG;
+        snap.pitchDeg = m_view.pitch * RAD_TO_DEG;
         snap.fovDeg = m_renderCam.fovY * RAD_TO_DEG;
         snap.jumpQueued = m_jumpQueued;
 
@@ -2263,8 +2263,8 @@ namespace Engine
 
 #if defined(_DEBUG)
         // Day4: Camera split proof (Debug-only fields)
-        snap.simYaw = m_pawn.yaw;
-        snap.simPitch = m_pawn.pitch;
+        snap.simYaw = m_view.yaw;
+        snap.simPitch = m_view.pitch;
         snap.presentationYawOffset = m_presentationYawOffset;
         snap.presentationPitchOffset = m_presentationPitchOffset;
         snap.effectiveYaw = m_renderCam.effectiveYaw;

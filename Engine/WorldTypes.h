@@ -133,16 +133,14 @@ namespace Engine
     // Used by GameplayActionSystem (producer) and WorldState::TickFixed (consumer)
 
     //-------------------------------------------------------------------------
-    // CONTRACT: PawnState - Simulation-owned physics and control state
+    // CONTRACT: PawnState - Simulation-owned physics state (body only)
     //
     // OWNERSHIP:
-    //   - WRITER: WorldState::TickFixed() exclusively
+    //   - WRITER: WorldState::Initialize() (once), then TickFixed() exclusively
     //   - READERS: WorldState::TickFrame(), BuildViewProj(), BuildSnapshot()
     //
-    // CONTROL VIEW (yaw/pitch):
-    //   - Conceptual "ControlViewState" lives here as yaw/pitch fields
-    //   - TickFrame NEVER writes yaw or pitch
-    //   - Presentation offsets are ADDITIVE and applied in TickFrame only
+    // FIELDS: Position, velocity, grounded state.
+    // NOTE: Control view (yaw/pitch) now in ControlViewState.
     //-------------------------------------------------------------------------
     struct PawnState
     {
@@ -152,9 +150,25 @@ namespace Engine
         float velX = 0.0f;
         float velY = 0.0f;
         float velZ = 0.0f;
-        float yaw = 0.0f;         // Radians
-        float pitch = 0.0f;       // Radians
         bool onGround = true;
+    };
+
+    //-------------------------------------------------------------------------
+    // CONTRACT: ControlViewState - Simulation-owned control view (yaw/pitch)
+    //
+    // OWNERSHIP:
+    //   - WRITER: WorldState::Initialize() (once), then TickFixed() exclusively
+    //   - READERS: WorldState::TickFrame(), BuildSnapshot(), GetControlYaw()
+    //
+    // INVARIANTS:
+    //   - TickFrame NEVER writes yaw or pitch
+    //   - Presentation offsets are ADDITIVE and applied in TickFrame only
+    //   - BuildViewProj does NOT read these fields (uses RenderCameraState)
+    //-------------------------------------------------------------------------
+    struct ControlViewState
+    {
+        float yaw = 0.0f;    // radians
+        float pitch = 0.0f;  // radians
     };
 
     // Camera state (smoothed) - DEPRECATED: See RenderCameraState below

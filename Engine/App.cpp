@@ -226,7 +226,7 @@ namespace Engine
                 m_worldState.GetPawnPosX(),
                 m_worldState.GetPawnPosY(),
                 m_worldState.GetPawnPosZ(),
-                m_worldState.GetPawnYaw()
+                m_worldState.GetControlYaw()
             );
         }
         // else: Free camera mode - renderer uses its internal FreeCamera

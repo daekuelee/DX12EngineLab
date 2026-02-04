@@ -47,11 +47,13 @@ namespace Engine
         void SetPresentationLookOffset(float yawRad, float pitchRad);
         void ClearPresentationLookOffset();
 
-        // Pawn position/yaw accessors for character rendering
+        // Pawn position accessors for character rendering
         float GetPawnPosX() const { return m_pawn.posX; }
         float GetPawnPosY() const { return m_pawn.posY; }
         float GetPawnPosZ() const { return m_pawn.posZ; }
-        float GetPawnYaw() const { return m_pawn.yaw; }
+
+        // Control view accessor (yaw for character facing direction)
+        float GetControlYaw() const { return m_view.yaw; }
 
         // Respawn tracking accessors (Part 1)
         uint32_t GetRespawnCount() const { return m_respawnCount; }
@@ -77,10 +79,13 @@ namespace Engine
         uint16_t GetFixtureT3StepIdx() const { return m_fixtureT3StepIdx; }
 
     private:
-        PawnState m_pawn;
-        // Day4 PR1: Split camera state into SSOT structs
-        MovementBasisDebug m_movementBasis;  // Written by TickFixed only
-        RenderCameraState m_renderCam;       // Written by TickFrame only
+        // SSOT: Written by TickFixed only (after Initialize)
+        PawnState m_pawn;                    // Physics state (pos/vel/onGround)
+        ControlViewState m_view;             // Control view (yaw/pitch)
+        MovementBasisDebug m_movementBasis;  // Movement basis proof
+
+        // SSOT: Written by TickFrame only (after Initialize)
+        RenderCameraState m_renderCam;       // Render camera (eye/fov/proof)
         MapState m_map;
         WorldConfig m_config;
 
