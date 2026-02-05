@@ -237,21 +237,6 @@ namespace Engine
         // Part 2: Build spatial grid for cube collision
         BuildSpatialGrid();
 
-        // PR2.4: One-shot startup proof log for controller mode quarantine
-        {
-            const char* modeName = (m_controllerMode == ControllerMode::Capsule) ? "Capsule" : "AABB";
-            char buf[128];
-            sprintf_s(buf, "[PROOF-LEGACY-QUAR] controller=%s (legacy AABB %s)\n",
-                      modeName,
-#if ENABLE_LEGACY_AABB
-                      "ENABLED"
-#else
-                      "DISABLED"
-#endif
-            );
-            OutputDebugStringA(buf);
-        }
-
         // Day3.12: Mutual exclusion - StepUpGridTest overrides T1/T2/T3 fixtures
         if (m_config.enableStepUpGridTest)
         {
@@ -316,27 +301,11 @@ namespace Engine
 
     void WorldState::TickFixed(const InputState& input, float fixedDt)
     {
-        //---------------------------------------------------------------------
-        // PR2.4: Hot-path quarantine clamp - guarantees legacy AABB never runs
-        //---------------------------------------------------------------------
-#if !ENABLE_LEGACY_AABB
-        if (m_controllerMode != ControllerMode::Capsule)
-        {
-            m_controllerMode = ControllerMode::Capsule;
-#if defined(_DEBUG)
-            OutputDebugStringA("[PROOF-LEGACY-QUAR] Mode clamped to Capsule in TickFixed\n");
-#endif
-        }
-#endif
-
         // Reset collision stats for this tick
         m_collisionStats = CollisionStats{};
 
         // Day3.11 Phase 2: Capsule depenetration safety net
-        if (m_controllerMode == ControllerMode::Capsule)
-        {
-            ResolveOverlaps_Capsule();
-        }
+        ResolveOverlaps_Capsule();
 
         // 1. Apply yaw rotation [LOOK-UNIFIED] pre-computed delta from Action layer
         m_view.yaw += input.yawDelta;
@@ -422,7 +391,7 @@ namespace Engine
         float newY;
 
         // Day3.12 Phase 4A: Capsule Y uses sweep when enabled
-        if (m_controllerMode == ControllerMode::Capsule && m_config.enableYSweep)
+        if (m_config.enableYSweep)
         {
             float reqDy = m_pawn.velY * fixedDt;
             float appliedDy = 0.0f;
@@ -436,7 +405,6 @@ namespace Engine
 
         // Day3.11 Phase 3: Capsule XZ uses sweep/slide
         bool capsuleZeroVelX = false, capsuleZeroVelZ = false;
-        if (m_controllerMode == ControllerMode::Capsule)
         {
             float reqDx = m_pawn.velX * fixedDt;
             float reqDz = m_pawn.velZ * fixedDt;
@@ -502,11 +470,6 @@ namespace Engine
             if (capsuleZeroVelX) m_pawn.velX = 0.0f;
             if (capsuleZeroVelZ) m_pawn.velZ = 0.0f;
         }
-        else
-        {
-            newX = m_pawn.posX + m_pawn.velX * fixedDt;
-            newZ = m_pawn.posZ + m_pawn.velZ * fixedDt;
-        }
 
         // Day3.9: Store pawn AABB bottom before collision resolution (for anti-step-up)
         AABB pawnPre = BuildPawnAABB(newX, newY, newZ);
@@ -521,17 +484,9 @@ namespace Engine
         {
             float totalDelta = 0.0f;
 
-            // Day3.8: MTV-based XZ resolution (AABB mode only)
-            if (m_controllerMode == ControllerMode::AABB)
+            // Day3.11: XZ cleanup in iteration loop
+            // ResolveAxis(Y) can push capsule into wall XZ, need cleanup each iteration
             {
-                float prevX = newX, prevZ = newZ;
-                ResolveXZ_MTV(newX, newZ, newY);
-                totalDelta += fabsf(newX - prevX) + fabsf(newZ - prevZ);
-            }
-            else if (m_controllerMode == ControllerMode::Capsule)
-            {
-                // Day3.11: XZ cleanup in iteration loop for Capsule mode
-                // ResolveAxis(Y) can push capsule into wall XZ, need cleanup each iteration
                 float prevX = newX, prevZ = newZ;
                 ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
                 totalDelta += fabsf(newX - prevX) + fabsf(newZ - prevZ);
@@ -540,14 +495,12 @@ namespace Engine
             // Y axis (both modes)
             float prevY = newY;
 #ifdef DEBUG_Y_XZ_PEN
-            float preYPenXZ = (m_controllerMode == ControllerMode::Capsule)
-                ? ScanMaxXZPenetration(newX, newY, newZ) : 0.0f;
+            float preYPenXZ = ScanMaxXZPenetration(newX, newY, newZ);
 #endif
             ResolveAxis(newY, newX, newY, newZ, Axis::Y, prevPawnBottom);
             totalDelta += fabsf(newY - prevY);
 
 #ifdef DEBUG_Y_XZ_PEN
-            if (m_controllerMode == ControllerMode::Capsule)
             {
                 float postYPenXZ = ScanMaxXZPenetration(newX, newY, newZ);
                 if (postYPenXZ > preYPenXZ + 0.001f)
@@ -560,10 +513,9 @@ namespace Engine
             }
 #endif
 
-            // Day3.11 Fix: Post-Y XZ cleanup for Capsule mode
+            // Day3.11 Fix: Post-Y XZ cleanup
             // Y-resolve can push capsule into walls, creating new XZ penetration
             // Must run cleanup AFTER Y-resolve to maintain XZ invariant
-            if (m_controllerMode == ControllerMode::Capsule)
             {
                 float prevX2 = newX, prevZ2 = newZ;
                 ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
@@ -738,29 +690,6 @@ namespace Engine
         }
     }
 
-    /******************************************************************************
-     * CONTRACT: ToggleControllerMode (PR2.4 - Legacy AABB Quarantine)
-     *
-     * POLICY: Capsule-only is SSOT. Legacy AABB is quarantined.
-     * BEHAVIOR: Warning + no-op (mode stays Capsule).
-     * RE-ENABLE: Build with ENABLE_LEGACY_AABB=1 (not recommended).
-     ******************************************************************************/
-    void WorldState::ToggleControllerMode()
-    {
-#if ENABLE_LEGACY_AABB
-        // Legacy path - only if explicitly enabled at build time
-        m_controllerMode = (m_controllerMode == ControllerMode::AABB)
-                           ? ControllerMode::Capsule : ControllerMode::AABB;
-        const char* name = (m_controllerMode == ControllerMode::AABB) ? "AABB" : "Capsule";
-        char buf[64];
-        sprintf_s(buf, "[MODE] ctrl=%s\n", name);
-        OutputDebugStringA(buf);
-#else
-        // Capsule-only policy: AABB toggle is disabled (warning + no-op)
-        OutputDebugStringA("[PROOF-LEGACY-QUAR] Toggle ignored - Capsule-only policy (AABB quarantined)\n");
-#endif
-    }
-
     void WorldState::ToggleStepUpGridTest()
     {
         bool newValue = !m_config.enableStepUpGridTest;
@@ -810,10 +739,9 @@ namespace Engine
         m_pawn.onGround = false;
         m_collisionStats = CollisionStats{};
 
-        const char* modeName = (m_controllerMode == ControllerMode::AABB) ? "AABB" : "Capsule";
         char buf[128];
-        sprintf_s(buf, "[RESPAWN] ctrl=%s stats_cleared=1 pos=(%.1f,%.1f,%.1f)\n",
-                  modeName, m_pawn.posX, m_pawn.posY, m_pawn.posZ);
+        sprintf_s(buf, "[RESPAWN] ctrl=Capsule stats_cleared=1 pos=(%.1f,%.1f,%.1f)\n",
+                  m_pawn.posX, m_pawn.posY, m_pawn.posZ);
         OutputDebugStringA(buf);
     }
 
@@ -1120,84 +1048,6 @@ namespace Engine
         return result;
     }
 
-    // Day3.8: MTV-based XZ resolution (Issue A fix)
-    void WorldState::ResolveXZ_MTV(float& newX, float& newZ, float newY)
-    {
-        AABB pawn = BuildPawnAABB(newX, newY, newZ);
-        auto candidates = QuerySpatialHash(pawn);
-        m_collisionStats.candidatesChecked += static_cast<uint32_t>(candidates.size());
-
-        float bestPenX = 0.0f, bestPenZ = 0.0f;
-        int bestCubeIdx = -1;
-        float bestCenterDiffX = 0.0f, bestCenterDiffZ = 0.0f;
-
-        for (uint16_t cubeIdx : candidates)
-        {
-            AABB cube = GetCubeAABB(cubeIdx);
-            if (!IntersectsAABB(pawn, cube)) continue;
-
-            m_collisionStats.contacts++;
-
-            float penX = SignedPenetrationAABB(pawn, cube, Axis::X);
-            float penZ = SignedPenetrationAABB(pawn, cube, Axis::Z);
-
-            float centerDiffX = ((pawn.minX + pawn.maxX) - (cube.minX + cube.maxX)) * 0.5f;
-            float centerDiffZ = ((pawn.minZ + pawn.maxZ) - (cube.minZ + cube.maxZ)) * 0.5f;
-
-            // Select cube with largest min-axis penetration (deepest contact)
-            float minPen = fminf(fabsf(penX), fabsf(penZ));
-            float bestMinPen = fminf(fabsf(bestPenX), fabsf(bestPenZ));
-
-            if (minPen > bestMinPen || bestCubeIdx < 0)
-            {
-                bestPenX = penX;
-                bestPenZ = penZ;
-                bestCubeIdx = cubeIdx;
-                bestCenterDiffX = centerDiffX;
-                bestCenterDiffZ = centerDiffZ;
-            }
-        }
-
-        if (bestCubeIdx >= 0)
-        {
-            // Store debug info
-            m_collisionStats.lastPenX = bestPenX;
-            m_collisionStats.lastPenZ = bestPenZ;
-            m_collisionStats.centerDiffX = bestCenterDiffX;
-            m_collisionStats.centerDiffZ = bestCenterDiffZ;
-
-            // Day3.9: Separable-axis XZ push-out - apply BOTH axes to guarantee separation
-            if (bestPenX != 0.0f)
-            {
-                newX += bestPenX;
-                m_pawn.velX = 0.0f;
-            }
-            if (bestPenZ != 0.0f)
-            {
-                newZ += bestPenZ;
-                m_pawn.velZ = 0.0f;
-            }
-
-            // Track dominant axis for HUD
-            m_collisionStats.mtvAxis = (fabsf(bestPenX) >= fabsf(bestPenZ)) ? 0 : 2;
-            m_collisionStats.mtvMagnitude = fmaxf(fabsf(bestPenX), fabsf(bestPenZ));
-            m_collisionStats.lastAxisResolved = (fabsf(bestPenX) >= fabsf(bestPenZ)) ? Axis::X : Axis::Z;
-
-            m_collisionStats.penetrationsResolved++;
-            m_collisionStats.lastHitCubeId = bestCubeIdx;
-
-            // Day3.9: Post-resolution proof - verify XZ separation achieved
-            AABB pawnAfterXZ = BuildPawnAABB(newX, newY, newZ);
-            AABB cubeCheck = GetCubeAABB(static_cast<uint16_t>(bestCubeIdx));
-            m_collisionStats.xzStillOverlapping = IntersectsAABB(pawnAfterXZ, cubeCheck);
-
-            if (fabsf(bestPenX) > m_collisionStats.maxPenetrationAbs)
-                m_collisionStats.maxPenetrationAbs = fabsf(bestPenX);
-            if (fabsf(bestPenZ) > m_collisionStats.maxPenetrationAbs)
-                m_collisionStats.maxPenetrationAbs = fabsf(bestPenZ);
-        }
-    }
-
     void WorldState::ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis, float prevPawnBottom)
     {
         // Build pawn AABB at proposed position
@@ -1224,8 +1074,8 @@ namespace Engine
             // (Y is already handled by SweepY_Capsule, so we don't need penetration-based Y resolution)
             if (axis == Axis::Y)
             {
-                // When Capsule + enableYSweep, Y is handled by sweep - skip Y resolution entirely
-                if (m_controllerMode == ControllerMode::Capsule && m_config.enableYSweep)
+                // When enableYSweep, Y is handled by sweep - skip Y resolution entirely
+                if (m_config.enableYSweep)
                     continue;
 
                 float cubeTop = cube.maxY;
@@ -2299,8 +2149,8 @@ namespace Engine
         snap.yStepUpSkipped = m_collisionStats.yStepUpSkipped;
         snap.yDeltaApplied = m_collisionStats.yDeltaApplied;
 
-        // Day3.11: Controller mode
-        snap.controllerMode = static_cast<uint8_t>(m_controllerMode);
+        // Day3.11: Controller mode (always Capsule, AABB removed)
+        snap.controllerMode = static_cast<uint8_t>(ControllerMode::Capsule);
 
         // Day3.11: Capsule geometry
         snap.capsuleRadius = m_config.capsuleRadius;

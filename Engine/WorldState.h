@@ -59,9 +59,7 @@ namespace Engine
         uint32_t GetRespawnCount() const { return m_respawnCount; }
         const char* GetLastRespawnReason() const { return m_lastRespawnReason; }
 
-        // Day3.11: Controller mode
-        ControllerMode GetControllerMode() const { return m_controllerMode; }
-        void ToggleControllerMode();
+        // Day3.11: Controller state reset (respawn)
         void RespawnResetControllerState();
 
         // Day3.12+: Step-up grid test toggle
@@ -110,20 +108,6 @@ namespace Engine
         // Day3.5: Jump grace flag (prevents support query from clearing onGround on jump frame)
         bool m_justJumpedThisTick = false;
 
-        //---------------------------------------------------------------------
-        // PR2.4: Controller mode (Legacy AABB Quarantine)
-        //
-        // POLICY: Capsule-only is SSOT. Legacy AABB is quarantined.
-        // DEFAULT: ControllerMode::Capsule
-        // TOGGLE: Disabled (warning + no-op)
-        // RE-ENABLE: Build with ENABLE_LEGACY_AABB=1 (not recommended)
-        //---------------------------------------------------------------------
-#ifndef ENABLE_LEGACY_AABB
-#define ENABLE_LEGACY_AABB 0
-#endif
-        ControllerMode m_controllerMode = ControllerMode::Capsule;
-        bool m_legacyQuarantineLoggedOnce = false;  // One-shot startup log flag
-
         // Part 2: Spatial hash grid (100x100 cells, each cell contains cube index)
         // Built once at init - cubes don't move
         static constexpr int GRID_SIZE = 100;
@@ -161,8 +145,6 @@ namespace Engine
         // PR2.2: Intersects/ComputeSignedPenetration moved to WorldCollisionMath.h (stateless)
         std::vector<uint16_t> QuerySpatialHash(const AABB& pawn) const;
         void ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis, float prevPawnBottom = 0.0f);
-        // Day3.8: MTV-based XZ resolution (Issue A fix)
-        void ResolveXZ_MTV(float& newX, float& newZ, float newY);
         // Day3.11 Phase 2: Capsule depenetration
         void ResolveOverlaps_Capsule();
         // Day3.11 Phase 3: Capsule XZ sweep/slide

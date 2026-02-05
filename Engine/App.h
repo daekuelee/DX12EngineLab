@@ -20,9 +20,6 @@ namespace Engine
         void Tick();
         void Shutdown();
 
-        // Day3.11: Controller mode toggle (forwarded from WndProc)
-        void ToggleControllerMode();
-
         // Day3.12+: Step-up grid test toggle (forwarded from WndProc)
         void ToggleStepUpGridTest();
 

@@ -281,11 +281,6 @@ namespace Engine
         m_initialized = false;
     }
 
-    void App::ToggleControllerMode()
-    {
-        m_worldState.ToggleControllerMode();
-    }
-
     void App::ToggleStepUpGridTest()
     {
         m_worldState.ToggleStepUpGridTest();
