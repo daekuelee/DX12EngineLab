@@ -10,13 +10,20 @@ namespace Engine { namespace Collision {
     // READS: SceneView (spatial queries), CapsuleMoveRequest (config + state)
     // WRITES: CapsuleMoveResult (pos/vel/onGround), CollisionStats& (diagnostics)
     //
+    // PUBLIC API (PR2.9):
+    //   - DepenetrateInPlace: pre-velocity overlap ejection
+    //   - MoveCapsuleKinematic: the ONLY movement entry point WorldState calls
+    //
     // INVARIANTS:
     //   - NEVER mutates SceneView or any WorldState state
     //   - When enableYSweep=true: no ResolveAxis(Y) in iteration loop
-    //   - Candidate ordering: sort + unique by cube index
-    //   - Tie-break: earliest TOI; on tie within 1e-6f, lower cubeIdx wins
+    //   - Candidate ordering: NormalizeCandidates (sort + unique by cube index)
+    //   - Tie-break: earliest TOI; within kTOI_TieEpsilon, lower cubeIdx wins
+    //   - StepUp attempted at most once per tick
+    //   - QuerySupport called exactly once per tick
+    //   - enableCCD reserved, must be false
     //
-    // DETERMINISM: Identical to previous WorldState inline code.
+    // DETERMINISM: Identical to PR2.8 SolveCapsuleMovement output.
 
     // Pre-solver safety net: push capsule out of overlapping cubes.
     // Called BEFORE velocity computation in TickFixed.
@@ -38,15 +45,23 @@ namespace Engine { namespace Collision {
         float posX, float posY, float posZ,
         bool onGround);
 
-    // Main solver: Y sweep -> XZ sweep/slide -> cleanup -> step-up -> support snap.
-    CapsuleMoveResult SolveCapsuleMovement(
+    // PR2.9: Single public entry point for capsule movement.
+    // Replaces SolveCapsuleMovement. This is the ONLY function WorldState
+    // calls for movement resolution.
+    //
+    // CONTRACT:
+    //   - No CCD (enableCCD must be false; asserted in debug)
+    //   - StepUp attempted at most once per tick (asserted in debug)
+    //   - QuerySupport called exactly once per tick (asserted in debug)
+    //   - Shared TOI contract: kTOI_TieEpsilon tie-break, NormalizeCandidates ordering
+    CapsuleMoveResult MoveCapsuleKinematic(
         const SceneView& scene,
         const CapsuleMoveRequest& req,
         CollisionStats& stats);
 
 #if defined(_DEBUG)
-    // Equivalence harness: runs the iteration loop WITH ResolveAxis(Y)
-    // (the old code path) and compares against the main solver's output.
+    // Equivalence harness: runs iteration loop WITH ResolveAxis(Y)
+    // and compares against MoveCapsuleKinematic output.
     // When enableYSweep=true, ResolveAxis(Y) is a confirmed no-op,
     // so results must match exactly. Logs [LEGACY_COMPARE_DIFF] on mismatch.
     CapsuleMoveResult SolveCapsuleMovement_WithAxisY(

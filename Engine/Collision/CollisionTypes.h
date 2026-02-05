@@ -32,6 +32,8 @@ namespace Engine { namespace Collision {
         bool enableStepUp;
         float maxStepHeight;
         float sweepSkinY;
+        // PR2.9: CCD placeholder — reserved for PR3.x, MUST be false
+        bool enableCCD = false;
         // Floor
         FloorBounds floor;
         // Cube collision dims (for legacy ResolveAxis BuildPawnAABB)

@@ -1,6 +1,7 @@
 #include "CapsuleMovement.h"
 #include "../WorldCollisionMath.h"  // IntersectsAABB, SignedPenetrationAABB
 #include <DirectXMath.h>
+#include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
@@ -178,6 +179,44 @@ namespace
         if (fabsf(dz) < STOP_EPS) dz = 0.0f;
     }
 
+    // ========================================================================
+    // PR2.9: Centralized sweep/solver constants (TOI contract)
+    //
+    // All sweep functions (SweepY, SweepXZ, ProbeY, ProbeXZ) and the solver
+    // iteration loop share these constants. Values are identical to PR2.8
+    // hardcoded literals — this is a naming-only change.
+    // ========================================================================
+    static constexpr float kTOI_TieEpsilon       = 1e-6f;   // TOI tie-break window
+    static constexpr float kMinVelocityThreshold  = 0.0001f; // Below this, skip sweep
+    static constexpr float kSweepSkinXZ           = 0.01f;   // XZ sweep skin width
+    static constexpr int   kMaxSweepsXZ           = 4;       // Max slide iterations per XZ sweep
+    static constexpr int   kMaxIterations         = 8;       // Convergence loop cap
+    static constexpr float kConvergenceEpsilon    = 0.001f;  // Convergence delta threshold
+
+    // PR2.9: Shared candidate normalization (replaces 6 inline sort+unique blocks)
+    static void NormalizeCandidates(std::vector<uint16_t>& candidates)
+    {
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    }
+
+    // PR2.9: Shared TOI tie-break comparator
+    // Returns true if (newTOI, newIdx) should replace (bestTOI, bestIdx).
+    // Rule: earliest TOI wins; within kTOI_TieEpsilon, lower cubeIdx wins.
+    //
+    // NOTE: Used by SweepXZ and ProbeXZ where both branches update the full
+    // hit state. SweepY and ProbeY use kTOI_TieEpsilon directly because
+    // their tie-break branch updates only cubeIdx (not TOI).
+    static bool IsBetterHit(float newTOI, uint16_t newIdx,
+                            float bestTOI, int bestIdx, bool bestValid)
+    {
+        if (!bestValid) return true;
+        if (newTOI < bestTOI) return true;
+        if (fabsf(newTOI - bestTOI) < kTOI_TieEpsilon &&
+            static_cast<int>(newIdx) < bestIdx) return true;
+        return false;
+    }
+
 } // anonymous namespace
 
 // ============================================================================
@@ -253,8 +292,7 @@ namespace Engine { namespace Collision {
         capAABB.minZ = newZ - r;  capAABB.maxZ = newZ + r;
 
         std::vector<uint16_t> candidates = scene.QueryCandidates(capAABB);
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+        NormalizeCandidates(candidates);
 
 #ifdef DEBUG_Y_XZ_PEN
         if (!candidates.empty())
@@ -329,7 +367,7 @@ namespace Engine { namespace Collision {
         stats.sweepYReqDy = reqDy;
         stats.sweepYAppliedDy = 0.0f;
 
-        if (fabsf(reqDy) < 0.0001f)
+        if (fabsf(reqDy) < kMinVelocityThreshold)
         {
             outAppliedDy = 0.0f;
             return;
@@ -355,8 +393,7 @@ namespace Engine { namespace Collision {
         }
 
         std::vector<uint16_t> candidates = scene.QueryCandidates(sweptAABB);
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+        NormalizeCandidates(candidates);
 
         float earliestTOI = 1.0f;
         int earliestCubeIdx = -1;
@@ -402,7 +439,7 @@ namespace Engine { namespace Collision {
                 earliestTOI = toi;
                 earliestCubeIdx = cubeIdx;
             }
-            else if (hit && fabsf(toi - earliestTOI) < 1e-6f && cubeIdx < earliestCubeIdx)
+            else if (hit && fabsf(toi - earliestTOI) < kTOI_TieEpsilon && cubeIdx < earliestCubeIdx)
             {
                 earliestCubeIdx = cubeIdx;
             }
@@ -468,8 +505,8 @@ namespace Engine { namespace Collision {
                         bool& outZeroVelX, bool& outZeroVelZ,
                         CollisionStats& stats)
     {
-        const float SKIN_WIDTH = 0.01f;
-        const int MAX_SWEEPS = 4;
+        const float SKIN_WIDTH = kSweepSkinXZ;
+        const int MAX_SWEEPS = kMaxSweepsXZ;
 
         float r = geom.radius;
         float hh = geom.halfHeight;
@@ -497,7 +534,7 @@ namespace Engine { namespace Collision {
         for (int sweep = 0; sweep < MAX_SWEEPS; ++sweep)
         {
             float deltaMag = sqrtf(dx * dx + dz * dz);
-            if (deltaMag < 0.0001f) break;
+            if (deltaMag < kMinVelocityThreshold) break;
 
             float curX = posX + totalAppliedDx;
             float curZ = posZ + totalAppliedDz;
@@ -510,8 +547,7 @@ namespace Engine { namespace Collision {
             sweptAABB.maxZ = fmaxf(curZ + r, curZ + r + dz);
 
             std::vector<uint16_t> candidates = scene.QueryCandidates(sweptAABB);
-            std::sort(candidates.begin(), candidates.end());
-            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+            NormalizeCandidates(candidates);
             stats.sweepCandCount = static_cast<uint32_t>(candidates.size());
 
             ::SweepResult earliest = { false, 1.0f, 0.0f, 0.0f };
@@ -521,18 +557,10 @@ namespace Engine { namespace Collision {
             {
                 AABB cube = scene.GetCubeAABB(cubeIdx);
                 ::SweepResult hit = SweepCapsuleVsCubeXZ(curX, curZ, feetY, r, hh, dx, dz, cube, onGround);
-                if (hit.hit)
+                if (hit.hit && IsBetterHit(hit.t, cubeIdx, earliest.t, earliestCubeIdx, earliest.hit))
                 {
-                    if (hit.t < earliest.t || (!earliest.hit))
-                    {
-                        earliest = hit;
-                        earliestCubeIdx = cubeIdx;
-                    }
-                    else if (fabsf(hit.t - earliest.t) < 1e-6f && cubeIdx < earliestCubeIdx)
-                    {
-                        earliest = hit;
-                        earliestCubeIdx = cubeIdx;
-                    }
+                    earliest = hit;
+                    earliestCubeIdx = cubeIdx;
                 }
             }
 
@@ -610,7 +638,7 @@ namespace Engine { namespace Collision {
 
         hitCubeIdx = -1;
 
-        if (fabsf(reqDy) < 0.0001f)
+        if (fabsf(reqDy) < kMinVelocityThreshold)
             return 0.0f;
 
         AABB sweptAABB;
@@ -630,8 +658,7 @@ namespace Engine { namespace Collision {
         }
 
         std::vector<uint16_t> candidates = scene.QueryCandidates(sweptAABB);
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+        NormalizeCandidates(candidates);
 
         float earliestTOI = 1.0f;
         int earliestCube = -1;
@@ -677,7 +704,7 @@ namespace Engine { namespace Collision {
                 earliestTOI = toi;
                 earliestCube = cubeIdx;
             }
-            else if (hit && fabsf(toi - earliestTOI) < 1e-6f && cubeIdx < earliestCube)
+            else if (hit && fabsf(toi - earliestTOI) < kTOI_TieEpsilon && cubeIdx < earliestCube)
             {
                 earliestCube = cubeIdx;
             }
@@ -717,7 +744,7 @@ namespace Engine { namespace Collision {
                          float reqDx, float reqDz,
                          float& outNormalX, float& outNormalZ, int& hitCubeIdx)
     {
-        const float SKIN_WIDTH = 0.01f;
+        const float SKIN_WIDTH = kSweepSkinXZ;
         float r = geom.radius;
         float hh = geom.halfHeight;
 
@@ -726,7 +753,7 @@ namespace Engine { namespace Collision {
         hitCubeIdx = -1;
 
         float deltaMag = sqrtf(reqDx * reqDx + reqDz * reqDz);
-        if (deltaMag < 0.0001f)
+        if (deltaMag < kMinVelocityThreshold)
             return 1.0f;
 
         AABB sweptAABB;
@@ -738,8 +765,7 @@ namespace Engine { namespace Collision {
         sweptAABB.maxZ = fmaxf(posZ + r, posZ + r + reqDz);
 
         std::vector<uint16_t> candidates = scene.QueryCandidates(sweptAABB);
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+        NormalizeCandidates(candidates);
 
         ::SweepResult earliest = { false, 1.0f, 0.0f, 0.0f };
         int earliestCube = -1;
@@ -748,18 +774,10 @@ namespace Engine { namespace Collision {
         {
             AABB cube = scene.GetCubeAABB(cubeIdx);
             ::SweepResult hit = SweepCapsuleVsCubeXZ(posX, posZ, posY, r, hh, reqDx, reqDz, cube, false);
-            if (hit.hit)
+            if (hit.hit && IsBetterHit(hit.t, cubeIdx, earliest.t, earliestCube, earliest.hit))
             {
-                if (hit.t < earliest.t || (!earliest.hit))
-                {
-                    earliest = hit;
-                    earliestCube = cubeIdx;
-                }
-                else if (fabsf(hit.t - earliest.t) < 1e-6f && cubeIdx < earliestCube)
-                {
-                    earliest = hit;
-                    earliestCube = cubeIdx;
-                }
+                earliest = hit;
+                earliestCube = cubeIdx;
             }
         }
 
@@ -1075,8 +1093,7 @@ namespace Engine { namespace Collision {
             capAABB.minZ = result.posZ - r;  capAABB.maxZ = result.posZ + r;
 
             std::vector<uint16_t> candidates = scene.QueryCandidates(capAABB);
-            std::sort(candidates.begin(), candidates.end());
-            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+            NormalizeCandidates(candidates);
 
             float pushX = 0.0f, pushY = 0.0f, pushZ = 0.0f;
             uint32_t overlapCount = 0;
@@ -1136,15 +1153,29 @@ namespace Engine { namespace Collision {
     }
 
     // ========================================================================
-    // SolveCapsuleMovement (main solver, public entry point)
+    // MoveCapsuleKinematic (PR2.9: single public entry point)
+    //
+    // CONTRACT:
+    //   - No CCD in PR2.9 (asserted; CCD deferred to PR3.x)
+    //   - StepUp attempted at most once per tick (asserted)
+    //   - QuerySupport called exactly once per tick (asserted)
+    //   - All sweeps use shared TOI contract (kTOI_TieEpsilon, NormalizeCandidates)
     // ========================================================================
-    CapsuleMoveResult SolveCapsuleMovement(
+    CapsuleMoveResult MoveCapsuleKinematic(
         const SceneView& scene,
         const CapsuleMoveRequest& req,
         CollisionStats& stats)
     {
         const CapsuleGeom& geom = req.geom;
         FloorBounds floor = req.floor;
+
+#if defined(_DEBUG)
+        // PR2.9: CCD is reserved for PR3.x
+        if (req.enableCCD) {
+            OutputDebugStringA("[PR2.9] ASSERT: enableCCD must be false\n");
+        }
+        assert(!req.enableCCD && "CCD not implemented in PR2.9");
+#endif
 
         float posX = req.posX, posY = req.posY, posZ = req.posZ;
         float velX = req.velX, velY = req.velY, velZ = req.velZ;
@@ -1168,6 +1199,9 @@ namespace Engine { namespace Collision {
         }
 
         // Phase 2: XZ sweep/slide + cleanup + step-up + velocity zeroing
+#if defined(_DEBUG)
+        uint32_t dbgStepUpAttempts = 0;
+#endif
         bool capsuleZeroVelX = false, capsuleZeroVelZ = false;
         float reqDx = velX * fixedDt;
         float reqDz = velZ * fixedDt;
@@ -1208,6 +1242,9 @@ namespace Engine { namespace Collision {
                 IsWallLike(stats.sweepNormalX, stats.sweepNormalZ) &&
                 onGround)
             {
+#if defined(_DEBUG)
+                dbgStepUpAttempts++;
+#endif
                 float stepOutX, stepOutY, stepOutZ;
                 if (TryStepUp(scene, geom, floor, req.sweepSkinY, req.maxStepHeight,
                               stats, posX, newY, posZ, reqDx, reqDz,
@@ -1231,6 +1268,10 @@ namespace Engine { namespace Collision {
                 }
             }
 
+#if defined(_DEBUG)
+            assert(dbgStepUpAttempts <= 1 && "StepUp must be attempted at most once per tick");
+#endif
+
             if (capsuleZeroVelX) velX = 0.0f;
             if (capsuleZeroVelZ) velZ = 0.0f;
         }
@@ -1239,8 +1280,8 @@ namespace Engine { namespace Collision {
         AABB pawnPre = BuildPawnAABB(geom, newX, newY, newZ);
         float prevPawnBottom = pawnPre.minY;
 
-        const int MAX_ITERATIONS = 8;
-        const float CONVERGENCE_EPSILON = 0.001f;
+        const int MAX_ITERATIONS = kMaxIterations;
+        const float CONVERGENCE_EPSILON = kConvergenceEpsilon;
         bool converged = false;
 
         if (req.enableYSweep)
@@ -1341,6 +1382,10 @@ namespace Engine { namespace Collision {
         moveResult.onGround = onGround;
 
         // Phase 5: QuerySupport + floor recovery + snap/onGround
+#if defined(_DEBUG)
+        uint32_t dbgQuerySupportCalls = 0;
+        dbgQuerySupportCalls++;
+#endif
         SupportResult support = QuerySupport(scene, geom, floor,
                                              newX, newY, newZ, velY);
 
@@ -1411,6 +1456,10 @@ namespace Engine { namespace Collision {
                 support.candidateCount);
             OutputDebugStringA(buf);
         }
+
+#if defined(_DEBUG)
+        assert(dbgQuerySupportCalls == 1 && "QuerySupport must be called exactly once per tick");
+#endif
 
         return moveResult;
     }
@@ -1487,8 +1536,8 @@ namespace Engine { namespace Collision {
         AABB pawnPre = BuildPawnAABB(geom, newX, newY, newZ);
         float prevPawnBottom = pawnPre.minY;
 
-        const int MAX_ITERATIONS = 8;
-        const float CONVERGENCE_EPSILON = 0.001f;
+        const int MAX_ITERATIONS = kMaxIterations;
+        const float CONVERGENCE_EPSILON = kConvergenceEpsilon;
         bool converged = false;
 
         for (int iter = 0; iter < MAX_ITERATIONS; ++iter)

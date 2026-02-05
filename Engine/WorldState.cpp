@@ -236,12 +236,12 @@ public:
             req.cubeMinY = m_config.cubeMinY;
             req.cubeMaxY = m_config.cubeMaxY;
 
-            auto result = Collision::SolveCapsuleMovement(sceneView, req, m_collisionStats);
+            auto result = Collision::MoveCapsuleKinematic(sceneView, req, m_collisionStats);
 
 #if defined(_DEBUG)
             if (m_config.enableYSweep)
             {
-                // Snapshot: reuse the same req (already built above)
+                // PR2.9: Compare MoveCapsuleKinematic vs WithAxisY (legacy path)
                 CollisionStats legacyStats = {};
                 auto legacyResult = Collision::SolveCapsuleMovement_WithAxisY(
                     sceneView, req, legacyStats);
