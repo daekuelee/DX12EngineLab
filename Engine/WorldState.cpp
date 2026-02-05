@@ -346,22 +346,11 @@ namespace Engine
         if (m_view.pitch < m_config.pitchClampMin) m_view.pitch = m_config.pitchClampMin;
         if (m_view.pitch > m_config.pitchClampMax) m_view.pitch = m_config.pitchClampMax;
 
-        // 3. Compute camera-relative movement vectors (pawnXZ - eyeXZ)
-        float camFwdX = m_pawn.posX - m_renderCam.eyeX;
-        float camFwdZ = m_pawn.posZ - m_renderCam.eyeZ;
-        float fwdLen = sqrtf(camFwdX * camFwdX + camFwdZ * camFwdZ);
-
-        // Len guard: fallback to pawn yaw if camera too close
-        if (fwdLen < 0.001f)
-        {
-            camFwdX = sinf(m_view.yaw);
-            camFwdZ = cosf(m_view.yaw);
-        }
-        else
-        {
-            camFwdX /= fwdLen;
-            camFwdZ /= fwdLen;
-        }
+        // 3. Compute movement basis from sim yaw [SIM-PURE]
+        // CONTRACT: TickFixed must NEVER read m_renderCam or any presentation state.
+        // Movement direction is derived purely from m_view.yaw (sim-owned, written at L342).
+        float camFwdX = sinf(m_view.yaw);
+        float camFwdZ = cosf(m_view.yaw);
 
         // Right = cross(camFwd, up) where up=(0,1,0): (-fwdZ, 0, fwdX)
         float camRightX = -camFwdZ;
@@ -373,6 +362,18 @@ namespace Engine
         m_movementBasis.rightX = camRightX;
         m_movementBasis.rightZ = camRightZ;
         m_movementBasis.dot = camFwdX * camRightX + camFwdZ * camRightZ;  // Should be ~0
+
+#if defined(_DEBUG)
+        // [PROOF-SIM-PURE] Throttled proof: basis derived from sim yaw, orthogonality check
+        static uint32_t s_basisLogCounter = 0;
+        if (++s_basisLogCounter % 600 == 0)
+        {
+            char buf[128];
+            sprintf_s(buf, "[PROOF-SIM-PURE] basisYaw=%.3f fwd=(%.3f,%.3f) dot=%.6f\n",
+                m_view.yaw, camFwdX, camFwdZ, m_movementBasis.dot);
+            OutputDebugStringA(buf);
+        }
+#endif
 
         // 4. Smooth sprint alpha toward target
         float targetSprint = input.sprint ? 1.0f : 0.0f;
