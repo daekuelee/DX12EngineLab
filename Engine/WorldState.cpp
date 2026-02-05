@@ -11,16 +11,24 @@ using namespace DirectX;
 namespace Engine
 {
 
-// PR2.8: SceneView adapter — bridges WorldState private spatial data to module
+// PR2.8→2.10: SceneView adapter — bridges WorldState private spatial data to module
 class WorldStateSceneAdapter : public Collision::SceneView {
     const WorldState& m_ws;
 public:
     explicit WorldStateSceneAdapter(const WorldState& ws) : m_ws(ws) {}
-    std::vector<uint16_t> QueryCandidates(const AABB& box) const override {
-        return m_ws.QuerySpatialHash(box);
+    std::vector<Collision::ColliderId> QueryCandidates(const AABB& box) const override {
+        auto raw = m_ws.QuerySpatialHash(box);
+        return std::vector<Collision::ColliderId>(raw.begin(), raw.end());
     }
-    AABB GetCubeAABB(uint16_t idx) const override {
-        return m_ws.GetCubeAABB(idx);
+    AABB GetColliderAABB(Collision::ColliderId id) const override {
+#if defined(_DEBUG)
+        assert(id != Collision::kInvalidCollider && id != Collision::kFloorCollider
+               && "Sentinel ColliderId must not reach GetColliderAABB");
+#endif
+        return m_ws.GetCubeAABB(static_cast<uint16_t>(id));
+    }
+    Collision::ColliderProps GetColliderProps(Collision::ColliderId) const override {
+        return { true, true, true }; // PR3.x hook, unused now
     }
 };
     void WorldState::Initialize()

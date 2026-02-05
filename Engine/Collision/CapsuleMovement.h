@@ -10,17 +10,30 @@ namespace Engine { namespace Collision {
     // READS: SceneView (spatial queries), CapsuleMoveRequest (config + state)
     // WRITES: CapsuleMoveResult (pos/vel/onGround), CollisionStats& (diagnostics)
     //
-    // PUBLIC API (PR2.9):
+    // PUBLIC API (PR2.9→2.10):
     //   - DepenetrateInPlace: pre-velocity overlap ejection
     //   - MoveCapsuleKinematic: the ONLY movement entry point WorldState calls
+    //
+    // ColliderId IDENTITY (PR2.10):
+    //   - ColliderId (uint32_t): values 0..N for real colliders
+    //   - kInvalidCollider (UINT32_MAX): no-hit sentinel
+    //   - kFloorCollider (UINT32_MAX-1): floor-hit sentinel
+    //   - LegacyIdxForStats: maps sentinels to -1/-2 for stats/log compatibility
+    //
+    // PHASE CALL GRAPH: A → B → C → D → E
+    //   A: SweepY (vertical safe-move)
+    //   B: SweepXZ + CleanupXZ (horizontal safe-move)
+    //   C: TryStepUp (at most once)
+    //   D: Convergence loop (CleanupXZ ± ResolveAxis)
+    //   E: FinalizeSupport (QuerySupport + floor recovery + snap)
     //
     // INVARIANTS:
     //   - NEVER mutates SceneView or any WorldState state
     //   - When enableYSweep=true: no ResolveAxis(Y) in iteration loop
-    //   - Candidate ordering: NormalizeCandidates (sort + unique by cube index)
-    //   - Tie-break: earliest TOI; within kTOI_TieEpsilon, lower cubeIdx wins
+    //   - Candidate ordering: NormalizeCandidates (sort + unique by ColliderId)
+    //   - Tie-break: earliest TOI; within kTOI_TieEpsilon, lower ColliderId wins
     //   - StepUp attempted at most once per tick
-    //   - QuerySupport called exactly once per tick
+    //   - QuerySupport called exactly once per tick (via FinalizeSupport)
     //   - enableCCD reserved, must be false
     //
     // DETERMINISM: Identical to PR2.8 SolveCapsuleMovement output.

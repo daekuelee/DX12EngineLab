@@ -1,7 +1,21 @@
 #pragma once
 #include "../WorldTypes.h"
+#include <cstdint>
 
 namespace Engine { namespace Collision {
+
+    // PR2.10: Collider identity system
+    using ColliderId = uint32_t;
+    constexpr ColliderId kInvalidCollider = UINT32_MAX;
+    constexpr ColliderId kFloorCollider   = UINT32_MAX - 1;
+
+    enum class ColliderType : uint8_t { Box };
+
+    struct ColliderProps {
+        bool blocking;
+        bool walkable;
+        bool stepable;
+    };
 
     struct CapsuleGeom {
         float radius;          // m_config.capsuleRadius (1.4)

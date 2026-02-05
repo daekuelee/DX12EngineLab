@@ -193,27 +193,35 @@ namespace
     static constexpr int   kMaxIterations         = 8;       // Convergence loop cap
     static constexpr float kConvergenceEpsilon    = 0.001f;  // Convergence delta threshold
 
-    // PR2.9: Shared candidate normalization (replaces 6 inline sort+unique blocks)
-    static void NormalizeCandidates(std::vector<uint16_t>& candidates)
+    // PR2.9→2.10: Shared candidate normalization (replaces 6 inline sort+unique blocks)
+    static void NormalizeCandidates(std::vector<Engine::Collision::ColliderId>& candidates)
     {
         std::sort(candidates.begin(), candidates.end());
         candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
     }
 
-    // PR2.9: Shared TOI tie-break comparator
-    // Returns true if (newTOI, newIdx) should replace (bestTOI, bestIdx).
-    // Rule: earliest TOI wins; within kTOI_TieEpsilon, lower cubeIdx wins.
+    // PR2.10: Convert ColliderId sentinel values to legacy int for stats/log fields
+    static int32_t LegacyIdxForStats(Engine::Collision::ColliderId id)
+    {
+        if (id == Engine::Collision::kInvalidCollider) return -1;
+        if (id == Engine::Collision::kFloorCollider)   return -2;
+        return static_cast<int32_t>(id);
+    }
+
+    // PR2.9→2.10: Shared TOI tie-break comparator
+    // Returns true if (newTOI, newId) should replace (bestTOI, bestId).
+    // Rule: earliest TOI wins; within kTOI_TieEpsilon, lower ColliderId wins.
     //
     // NOTE: Used by SweepXZ and ProbeXZ where both branches update the full
     // hit state. SweepY and ProbeY use kTOI_TieEpsilon directly because
-    // their tie-break branch updates only cubeIdx (not TOI).
-    static bool IsBetterHit(float newTOI, uint16_t newIdx,
-                            float bestTOI, int bestIdx, bool bestValid)
+    // their tie-break branch updates only colliderId (not TOI).
+    static bool IsBetterHit(float newTOI, Engine::Collision::ColliderId newId,
+                            float bestTOI, Engine::Collision::ColliderId bestId, bool bestValid)
     {
         if (!bestValid) return true;
         if (newTOI < bestTOI) return true;
         if (fabsf(newTOI - bestTOI) < kTOI_TieEpsilon &&
-            static_cast<int>(newIdx) < bestIdx) return true;
+            newId < bestId) return true;
         return false;
     }
 
@@ -256,12 +264,12 @@ namespace Engine { namespace Collision {
         capAABB.minY = posY;       capAABB.maxY = posY + 2.0f * r + 2.0f * hh;
         capAABB.minZ = posZ - r;  capAABB.maxZ = posZ + r;
 
-        std::vector<uint16_t> candidates = scene.QueryCandidates(capAABB);
+        std::vector<ColliderId> candidates = scene.QueryCandidates(capAABB);
 
         float maxPen = 0.0f;
-        for (uint16_t idx : candidates)
+        for (ColliderId idx : candidates)
         {
-            AABB cube = scene.GetCubeAABB(idx);
+            AABB cube = scene.GetColliderAABB(idx);
             CapsuleOverlapResult ov = CapsuleAABBOverlap(posY, posX, posZ, r, hh, cube);
             if (ov.hit)
             {
@@ -291,7 +299,7 @@ namespace Engine { namespace Collision {
         capAABB.minY = newY;       capAABB.maxY = newY + 2.0f * r + 2.0f * hh;
         capAABB.minZ = newZ - r;  capAABB.maxZ = newZ + r;
 
-        std::vector<uint16_t> candidates = scene.QueryCandidates(capAABB);
+        std::vector<ColliderId> candidates = scene.QueryCandidates(capAABB);
         NormalizeCandidates(candidates);
 
 #ifdef DEBUG_Y_XZ_PEN
@@ -306,9 +314,9 @@ namespace Engine { namespace Collision {
 
         float pushX = 0.0f, pushZ = 0.0f;
 
-        for (uint16_t idx : candidates)
+        for (ColliderId idx : candidates)
         {
-            AABB cube = scene.GetCubeAABB(idx);
+            AABB cube = scene.GetColliderAABB(idx);
             CapsuleOverlapResult ov = CapsuleAABBOverlap(newY, newX, newZ, r, hh, cube);
 #ifdef DEBUG_Y_XZ_PEN
             {
@@ -392,15 +400,15 @@ namespace Engine { namespace Collision {
             sweptAABB.maxY = feetY + totalHeight + reqDy;
         }
 
-        std::vector<uint16_t> candidates = scene.QueryCandidates(sweptAABB);
+        std::vector<ColliderId> candidates = scene.QueryCandidates(sweptAABB);
         NormalizeCandidates(candidates);
 
         float earliestTOI = 1.0f;
-        int earliestCubeIdx = -1;
+        ColliderId earliestCubeIdx = kInvalidCollider;
 
-        for (uint16_t cubeIdx : candidates)
+        for (ColliderId cubeIdx : candidates)
         {
-            AABB cube = scene.GetCubeAABB(cubeIdx);
+            AABB cube = scene.GetColliderAABB(cubeIdx);
 
             float expMinX = cube.minX - r;
             float expMaxX = cube.maxX + r;
@@ -439,7 +447,8 @@ namespace Engine { namespace Collision {
                 earliestTOI = toi;
                 earliestCubeIdx = cubeIdx;
             }
-            else if (hit && fabsf(toi - earliestTOI) < kTOI_TieEpsilon && cubeIdx < earliestCubeIdx)
+            else if (hit && earliestCubeIdx != kInvalidCollider && earliestCubeIdx != kFloorCollider &&
+                     fabsf(toi - earliestTOI) < kTOI_TieEpsilon && cubeIdx < earliestCubeIdx)
             {
                 earliestCubeIdx = cubeIdx;
             }
@@ -457,12 +466,12 @@ namespace Engine { namespace Collision {
                 if (floorTOI >= 0.0f && floorTOI <= 1.0f && floorTOI < earliestTOI)
                 {
                     earliestTOI = floorTOI;
-                    earliestCubeIdx = -2;  // Special marker for floor
+                    earliestCubeIdx = kFloorCollider;
                 }
             }
         }
 
-        if (earliestCubeIdx == -1 && earliestTOI >= 1.0f)
+        if (earliestCubeIdx == kInvalidCollider && earliestTOI >= 1.0f)
         {
             outAppliedDy = reqDy;
             stats.sweepYAppliedDy = reqDy;
@@ -475,7 +484,7 @@ namespace Engine { namespace Collision {
         {
             stats.sweepYHit = true;
             stats.sweepYTOI = earliestTOI;
-            stats.sweepYHitCubeIdx = earliestCubeIdx;
+            stats.sweepYHitCubeIdx = LegacyIdxForStats(earliestCubeIdx);
 
             float deltaMag = fabsf(reqDy);
             float skinParam = SKIN_WIDTH / deltaMag;
@@ -492,7 +501,7 @@ namespace Engine { namespace Collision {
 
             char buf[128];
             sprintf_s(buf, "[SWEEP_Y] req=%.3f cand=%zu hit=1 toi=%.4f cube=%d applied=%.3f\n",
-                reqDy, candidates.size(), earliestTOI, earliestCubeIdx, outAppliedDy);
+                reqDy, candidates.size(), earliestTOI, LegacyIdxForStats(earliestCubeIdx), outAppliedDy);
             OutputDebugStringA(buf);
         }
     }
@@ -546,16 +555,16 @@ namespace Engine { namespace Collision {
             sweptAABB.minZ = fminf(curZ - r, curZ - r + dz);
             sweptAABB.maxZ = fmaxf(curZ + r, curZ + r + dz);
 
-            std::vector<uint16_t> candidates = scene.QueryCandidates(sweptAABB);
+            std::vector<ColliderId> candidates = scene.QueryCandidates(sweptAABB);
             NormalizeCandidates(candidates);
             stats.sweepCandCount = static_cast<uint32_t>(candidates.size());
 
             ::SweepResult earliest = { false, 1.0f, 0.0f, 0.0f };
-            int earliestCubeIdx = -1;
+            ColliderId earliestCubeIdx = kInvalidCollider;
 
-            for (uint16_t cubeIdx : candidates)
+            for (ColliderId cubeIdx : candidates)
             {
-                AABB cube = scene.GetCubeAABB(cubeIdx);
+                AABB cube = scene.GetColliderAABB(cubeIdx);
                 ::SweepResult hit = SweepCapsuleVsCubeXZ(curX, curZ, feetY, r, hh, dx, dz, cube, onGround);
                 if (hit.hit && IsBetterHit(hit.t, cubeIdx, earliest.t, earliestCubeIdx, earliest.hit))
                 {
@@ -580,7 +589,7 @@ namespace Engine { namespace Collision {
 
             stats.sweepHit = true;
             stats.sweepTOI = earliest.t;
-            stats.sweepHitCubeIdx = earliestCubeIdx;
+            stats.sweepHitCubeIdx = LegacyIdxForStats(earliestCubeIdx);
             stats.sweepNormalX = earliest.normalX;
             stats.sweepNormalZ = earliest.normalZ;
 
@@ -592,7 +601,7 @@ namespace Engine { namespace Collision {
 
             char buf[160];
             sprintf_s(buf, "[SWEEP] req=(%.3f,%.3f) cand=%u hit=1 toi=%.4f n=(%.2f,%.2f) cube=%d\n",
-                reqDx, reqDz, stats.sweepCandCount, earliest.t, earliest.normalX, earliest.normalZ, earliestCubeIdx);
+                reqDx, reqDz, stats.sweepCandCount, earliest.t, earliest.normalX, earliest.normalZ, LegacyIdxForStats(earliestCubeIdx));
             OutputDebugStringA(buf);
 
             float remainT = 1.0f - safeT;
@@ -629,14 +638,14 @@ namespace Engine { namespace Collision {
     static float ProbeY(const SceneView& scene, const CapsuleGeom& geom,
                         const FloorBounds& floor, float sweepSkinY,
                         float posX, float posY, float posZ,
-                        float reqDy, int& hitCubeIdx)
+                        float reqDy, ColliderId& hitColliderId)
     {
         const float SKIN_WIDTH = sweepSkinY;
         float r = geom.radius;
         float hh = geom.halfHeight;
         float totalHeight = 2.0f * r + 2.0f * hh;
 
-        hitCubeIdx = -1;
+        hitColliderId = kInvalidCollider;
 
         if (fabsf(reqDy) < kMinVelocityThreshold)
             return 0.0f;
@@ -657,15 +666,15 @@ namespace Engine { namespace Collision {
             sweptAABB.maxY = posY + totalHeight + reqDy;
         }
 
-        std::vector<uint16_t> candidates = scene.QueryCandidates(sweptAABB);
+        std::vector<ColliderId> candidates = scene.QueryCandidates(sweptAABB);
         NormalizeCandidates(candidates);
 
         float earliestTOI = 1.0f;
-        int earliestCube = -1;
+        ColliderId earliestCube = kInvalidCollider;
 
-        for (uint16_t cubeIdx : candidates)
+        for (ColliderId cubeIdx : candidates)
         {
-            AABB cube = scene.GetCubeAABB(cubeIdx);
+            AABB cube = scene.GetColliderAABB(cubeIdx);
 
             float expMinX = cube.minX - r;
             float expMaxX = cube.maxX + r;
@@ -704,7 +713,8 @@ namespace Engine { namespace Collision {
                 earliestTOI = toi;
                 earliestCube = cubeIdx;
             }
-            else if (hit && fabsf(toi - earliestTOI) < kTOI_TieEpsilon && cubeIdx < earliestCube)
+            else if (hit && earliestCube != kInvalidCollider && earliestCube != kFloorCollider &&
+                     fabsf(toi - earliestTOI) < kTOI_TieEpsilon && cubeIdx < earliestCube)
             {
                 earliestCube = cubeIdx;
             }
@@ -720,17 +730,17 @@ namespace Engine { namespace Collision {
             if (floorTOI >= 0.0f && floorTOI <= 1.0f && floorTOI < earliestTOI)
             {
                 earliestTOI = floorTOI;
-                earliestCube = -2;  // Floor marker
+                earliestCube = kFloorCollider;
             }
         }
 
-        if (earliestCube == -1 && earliestTOI >= 1.0f)
+        if (earliestCube == kInvalidCollider && earliestTOI >= 1.0f)
         {
-            hitCubeIdx = -1;
+            hitColliderId = kInvalidCollider;
             return reqDy;
         }
 
-        hitCubeIdx = earliestCube;
+        hitColliderId = earliestCube;
         float deltaMag = fabsf(reqDy);
         float skinParam = SKIN_WIDTH / deltaMag;
         float clampedSkin = fminf(skinParam, earliestTOI * 0.5f);
@@ -742,7 +752,7 @@ namespace Engine { namespace Collision {
     static float ProbeXZ(const SceneView& scene, const CapsuleGeom& geom,
                          float posX, float posY, float posZ,
                          float reqDx, float reqDz,
-                         float& outNormalX, float& outNormalZ, int& hitCubeIdx)
+                         float& outNormalX, float& outNormalZ, ColliderId& hitColliderId)
     {
         const float SKIN_WIDTH = kSweepSkinXZ;
         float r = geom.radius;
@@ -750,7 +760,7 @@ namespace Engine { namespace Collision {
 
         outNormalX = 0.0f;
         outNormalZ = 0.0f;
-        hitCubeIdx = -1;
+        hitColliderId = kInvalidCollider;
 
         float deltaMag = sqrtf(reqDx * reqDx + reqDz * reqDz);
         if (deltaMag < kMinVelocityThreshold)
@@ -764,15 +774,15 @@ namespace Engine { namespace Collision {
         sweptAABB.minZ = fminf(posZ - r, posZ - r + reqDz);
         sweptAABB.maxZ = fmaxf(posZ + r, posZ + r + reqDz);
 
-        std::vector<uint16_t> candidates = scene.QueryCandidates(sweptAABB);
+        std::vector<ColliderId> candidates = scene.QueryCandidates(sweptAABB);
         NormalizeCandidates(candidates);
 
         ::SweepResult earliest = { false, 1.0f, 0.0f, 0.0f };
-        int earliestCube = -1;
+        ColliderId earliestCube = kInvalidCollider;
 
-        for (uint16_t cubeIdx : candidates)
+        for (ColliderId cubeIdx : candidates)
         {
-            AABB cube = scene.GetCubeAABB(cubeIdx);
+            AABB cube = scene.GetColliderAABB(cubeIdx);
             ::SweepResult hit = SweepCapsuleVsCubeXZ(posX, posZ, posY, r, hh, reqDx, reqDz, cube, false);
             if (hit.hit && IsBetterHit(hit.t, cubeIdx, earliest.t, earliestCube, earliest.hit))
             {
@@ -786,7 +796,7 @@ namespace Engine { namespace Collision {
             return 1.0f;
         }
 
-        hitCubeIdx = earliestCube;
+        hitColliderId = earliestCube;
         outNormalX = earliest.normalX;
         outNormalZ = earliest.normalZ;
 
@@ -813,11 +823,11 @@ namespace Engine { namespace Collision {
         stats.stepCubeIdx = -1;
 
         // Phase 1: Probe UP
-        int upHitCube = -1;
+        ColliderId upHitCube = kInvalidCollider;
         float appliedUpDy = ProbeY(scene, geom, floor, sweepSkinY,
                                    startX, startY, startZ, maxStep, upHitCube);
 
-        if (upHitCube != -1 && appliedUpDy < maxStep * 0.9f)
+        if (upHitCube != kInvalidCollider && appliedUpDy < maxStep * 0.9f)
         {
             stats.stepFailMask |= STEP_FAIL_UP_BLOCKED;
             char buf[128];
@@ -831,16 +841,16 @@ namespace Engine { namespace Collision {
 
         // Phase 2: Probe FORWARD at raised height
         float fwdNormalX = 0.0f, fwdNormalZ = 0.0f;
-        int fwdHitCube = -1;
+        ColliderId fwdHitCube = kInvalidCollider;
         float fwdTOI = ProbeXZ(scene, geom, startX, raisedY, startZ,
                                reqDx, reqDz, fwdNormalX, fwdNormalZ, fwdHitCube);
 
-        if (fwdHitCube != -1 && fwdTOI < 0.1f)
+        if (fwdHitCube != kInvalidCollider && fwdTOI < 0.1f)
         {
             stats.stepFailMask |= STEP_FAIL_FWD_BLOCKED;
             char buf[128];
             sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (FWD_BLOCKED toi=%.3f cube=%d)\n",
-                stats.stepFailMask, fwdTOI, fwdHitCube);
+                stats.stepFailMask, fwdTOI, LegacyIdxForStats(fwdHitCube));
             OutputDebugStringA(buf);
             return false;
         }
@@ -850,11 +860,11 @@ namespace Engine { namespace Collision {
 
         // Phase 3: Settle DOWN
         float settleMax = maxStep + SETTLE_EXTRA;
-        int downHitCube = -1;
+        ColliderId downHitCube = kInvalidCollider;
         float appliedDownDy = ProbeY(scene, geom, floor, sweepSkinY,
                                      fwdX, raisedY, fwdZ, -settleMax, downHitCube);
 
-        if (downHitCube == -1)
+        if (downHitCube == kInvalidCollider)
         {
             stats.stepFailMask |= STEP_FAIL_NO_GROUND;
             char buf[128];
@@ -896,11 +906,11 @@ namespace Engine { namespace Collision {
 
         stats.stepSuccess = true;
         stats.stepHeightUsed = settledY - startY;
-        stats.stepCubeIdx = downHitCube;
+        stats.stepCubeIdx = LegacyIdxForStats(downHitCube);
 
         char buf[160];
         sprintf_s(buf, "[STEP_UP] try=1 ok=1 mask=0x00 h=%.3f cube=%d pos=(%.2f,%.2f,%.2f)\n",
-            stats.stepHeightUsed, downHitCube, outX, outY, outZ);
+            stats.stepHeightUsed, LegacyIdxForStats(downHitCube), outX, outY, outZ);
         OutputDebugStringA(buf);
 
         return true;
@@ -942,9 +952,9 @@ namespace Engine { namespace Collision {
         auto candidates = scene.QueryCandidates(queryAABB);
         result.candidateCount = static_cast<uint32_t>(candidates.size());
 
-        for (uint16_t cubeIdx : candidates)
+        for (ColliderId cubeIdx : candidates)
         {
-            AABB cube = scene.GetCubeAABB(cubeIdx);
+            AABB cube = scene.GetColliderAABB(cubeIdx);
 
             bool xzOverlap = (pawnMinX <= cube.maxX && pawnMaxX >= cube.minX &&
                               pawnMinZ <= cube.maxZ && pawnMaxZ >= cube.minZ);
@@ -959,7 +969,7 @@ namespace Engine { namespace Collision {
             {
                 result.source = SupportSource::CUBE;
                 result.supportY = cubeTop;
-                result.cubeId = cubeIdx;
+                result.cubeId = LegacyIdxForStats(cubeIdx);
                 result.gap = dist;
             }
         }
@@ -984,12 +994,12 @@ namespace Engine { namespace Collision {
         stats.candidatesChecked += static_cast<uint32_t>(candidates.size());
 
         float deepestPen = 0.0f;
-        int deepestCubeIdx = -1;
+        ColliderId deepestCubeIdx = kInvalidCollider;
         float deepestCubeTop = 0.0f;
 
-        for (uint16_t cubeIdx : candidates)
+        for (ColliderId cubeIdx : candidates)
         {
-            AABB cube = scene.GetCubeAABB(cubeIdx);
+            AABB cube = scene.GetColliderAABB(cubeIdx);
             if (!IntersectsAABB(pawn, cube)) continue;
 
             if (axis == Axis::Y)
@@ -1027,7 +1037,7 @@ namespace Engine { namespace Collision {
             }
         }
 
-        if (deepestCubeIdx >= 0 && deepestPen != 0.0f)
+        if (deepestCubeIdx != kInvalidCollider && deepestPen != 0.0f)
         {
             posAxis += deepestPen;
 
@@ -1037,12 +1047,12 @@ namespace Engine { namespace Collision {
             }
 
             stats.penetrationsResolved++;
-            stats.lastHitCubeId = deepestCubeIdx;
+            stats.lastHitCubeId = LegacyIdxForStats(deepestCubeIdx);
             stats.lastAxisResolved = axis;
 
             char buf[128];
             const char* axisName = (axis == Axis::X) ? "X" : (axis == Axis::Y) ? "Y" : "Z";
-            sprintf_s(buf, "[Collision] cube=%d axis=%s pen=%.3f\n", deepestCubeIdx, axisName, deepestPen);
+            sprintf_s(buf, "[Collision] cube=%d axis=%s pen=%.3f\n", LegacyIdxForStats(deepestCubeIdx), axisName, deepestPen);
             OutputDebugStringA(buf);
 
             if (axis == Axis::X) velX = 0.0f;
@@ -1092,15 +1102,15 @@ namespace Engine { namespace Collision {
             capAABB.minY = result.posY;       capAABB.maxY = result.posY + 2.0f * r + 2.0f * hh;
             capAABB.minZ = result.posZ - r;  capAABB.maxZ = result.posZ + r;
 
-            std::vector<uint16_t> candidates = scene.QueryCandidates(capAABB);
+            std::vector<ColliderId> candidates = scene.QueryCandidates(capAABB);
             NormalizeCandidates(candidates);
 
             float pushX = 0.0f, pushY = 0.0f, pushZ = 0.0f;
             uint32_t overlapCount = 0;
 
-            for (uint16_t idx : candidates)
+            for (ColliderId idx : candidates)
             {
-                AABB cube = scene.GetCubeAABB(idx);
+                AABB cube = scene.GetColliderAABB(idx);
                 CapsuleOverlapResult ov = CapsuleAABBOverlap(result.posY, result.posX, result.posZ, r, hh, cube);
                 if (ov.hit && ov.depth > MIN_DEPEN_DIST)
                 {
@@ -1153,13 +1163,92 @@ namespace Engine { namespace Collision {
     }
 
     // ========================================================================
-    // MoveCapsuleKinematic (PR2.9: single public entry point)
+    // FinalizeSupport: QuerySupport + floor recovery + stats + snap/onGround
+    // Shared by MoveCapsuleKinematic and SolveCapsuleMovement_WithAxisY.
+    // ========================================================================
+    static void FinalizeSupport(
+        const SceneView& scene, const CapsuleGeom& geom, const FloorBounds& floor,
+        bool justJumped, CapsuleMoveResult& result, CollisionStats& stats)
+    {
+        SupportResult support = QuerySupport(scene, geom, floor,
+                                             result.posX, result.posY, result.posZ, result.velY);
+
+        // Floor penetration recovery
+        if (support.source == SupportSource::NONE && result.velY <= 0.0f)
+        {
+            bool inFloorBounds = (result.posX >= floor.minX && result.posX <= floor.maxX &&
+                                  result.posZ >= floor.minZ && result.posZ <= floor.maxZ);
+            if (inFloorBounds && result.posY < floor.floorY)
+            {
+                float overshoot = floor.floorY - result.posY;
+                char buf[256];
+                sprintf_s(buf, "[FLOOR_RECOVERY] posY=%.3f overshoot=%.3f velY=%.2f\n",
+                    result.posY, overshoot, result.velY);
+                OutputDebugStringA(buf);
+
+                support.source = SupportSource::FLOOR;
+                support.supportY = floor.floorY;
+                support.cubeId = -1;
+                support.gap = overshoot;
+            }
+        }
+
+        // Copy support to stats
+        stats.supportSource = support.source;
+        stats.supportY = support.supportY;
+        stats.supportCubeId = support.cubeId;
+        stats.supportGap = support.gap;
+        stats.snappedThisTick = false;
+
+        // Safety C: Rising case - clear onGround
+        if (!justJumped && result.velY > 0.0f)
+        {
+            result.onGround = false;
+        }
+        // Falling or standing case
+        else if (!justJumped && result.velY <= 0.0f)
+        {
+            if (support.source != SupportSource::NONE)
+            {
+                if (result.posY != support.supportY)
+                {
+                    result.posY = support.supportY;
+                    stats.snappedThisTick = true;
+                }
+                result.velY = 0.0f;
+                result.onGround = true;
+            }
+            else
+            {
+                result.onGround = false;
+            }
+        }
+        // If justJumped: don't touch onGround (already set false in jump)
+
+        // Gap anomaly detection
+        if (support.source == SupportSource::NONE && fabsf(result.posY - 3.0f) < 0.02f)
+        {
+            bool inFloorBounds = (result.posX >= floor.minX && result.posX <= floor.maxX &&
+                                  result.posZ >= floor.minZ && result.posZ <= floor.maxZ);
+            char buf[320];
+            sprintf_s(buf, "[GAP_ANOMALY] px=%.2f pz=%.2f py=%.3f inFloor=%d gap=%.3f foot=[%.2f..%.2f] cand=%u\n",
+                result.posX, result.posZ, result.posY, inFloorBounds ? 1 : 0, support.gap,
+                result.posX - geom.pawnHalfExtentX, result.posX + geom.pawnHalfExtentX,
+                support.candidateCount);
+            OutputDebugStringA(buf);
+        }
+    }
+
+    // ========================================================================
+    // MoveCapsuleKinematic (PR2.9→2.10: single public entry point)
     //
     // CONTRACT:
     //   - No CCD in PR2.9 (asserted; CCD deferred to PR3.x)
     //   - StepUp attempted at most once per tick (asserted)
     //   - QuerySupport called exactly once per tick (asserted)
     //   - All sweeps use shared TOI contract (kTOI_TieEpsilon, NormalizeCandidates)
+    //
+    // PHASE CALL GRAPH: A → B → C → D → E
     // ========================================================================
     CapsuleMoveResult MoveCapsuleKinematic(
         const SceneView& scene,
@@ -1184,7 +1273,7 @@ namespace Engine { namespace Collision {
 
         float newX, newZ, newY;
 
-        // Phase 1: Y movement
+        // ======== Phase A: SafeMove — Vertical (SweepY) ========
         if (req.enableYSweep)
         {
             float reqDy = velY * fixedDt;
@@ -1198,7 +1287,8 @@ namespace Engine { namespace Collision {
             newY = posY + velY * fixedDt;
         }
 
-        // Phase 2: XZ sweep/slide + cleanup + step-up + velocity zeroing
+        // ======== Phase B: SafeMove — Horizontal (SweepXZ + CleanupXZ) ========
+        // ======== Phase C: StepUp — At Most Once ========
 #if defined(_DEBUG)
         uint32_t dbgStepUpAttempts = 0;
 #endif
@@ -1276,7 +1366,7 @@ namespace Engine { namespace Collision {
             if (capsuleZeroVelZ) velZ = 0.0f;
         }
 
-        // Phase 3: Iteration loop
+        // ======== Phase D: Convergence Loop ========
         AABB pawnPre = BuildPawnAABB(geom, newX, newY, newZ);
         float prevPawnBottom = pawnPre.minY;
 
@@ -1371,7 +1461,7 @@ namespace Engine { namespace Collision {
 
         stats.hitMaxIter = (stats.iterationsUsed == MAX_ITERATIONS && !converged);
 
-        // Phase 4: Position commit to result
+        // ======== Phase E: FindFloor + FinalizeSupport ========
         CapsuleMoveResult moveResult = {};
         moveResult.posX = newX;
         moveResult.posY = newY;
@@ -1381,81 +1471,11 @@ namespace Engine { namespace Collision {
         moveResult.velZ = velZ;
         moveResult.onGround = onGround;
 
-        // Phase 5: QuerySupport + floor recovery + snap/onGround
 #if defined(_DEBUG)
         uint32_t dbgQuerySupportCalls = 0;
         dbgQuerySupportCalls++;
 #endif
-        SupportResult support = QuerySupport(scene, geom, floor,
-                                             newX, newY, newZ, velY);
-
-        // Floor penetration recovery
-        if (support.source == SupportSource::NONE && velY <= 0.0f)
-        {
-            bool inFloorBounds = (newX >= floor.minX && newX <= floor.maxX &&
-                                  newZ >= floor.minZ && newZ <= floor.maxZ);
-            if (inFloorBounds && newY < floor.floorY)
-            {
-                float overshoot = floor.floorY - newY;
-                char buf[256];
-                sprintf_s(buf, "[FLOOR_RECOVERY] posY=%.3f overshoot=%.3f velY=%.2f\n",
-                    newY, overshoot, velY);
-                OutputDebugStringA(buf);
-
-                support.source = SupportSource::FLOOR;
-                support.supportY = floor.floorY;
-                support.cubeId = -1;
-                support.gap = overshoot;
-            }
-        }
-
-        // Copy support to stats
-        stats.supportSource = support.source;
-        stats.supportY = support.supportY;
-        stats.supportCubeId = support.cubeId;
-        stats.supportGap = support.gap;
-        stats.snappedThisTick = false;
-
-        // Support application
-        bool justJumped = req.justJumped;
-
-        // Safety C: Rising case - clear onGround
-        if (!justJumped && moveResult.velY > 0.0f)
-        {
-            moveResult.onGround = false;
-        }
-        // Falling or standing case
-        else if (!justJumped && moveResult.velY <= 0.0f)
-        {
-            if (support.source != SupportSource::NONE)
-            {
-                if (moveResult.posY != support.supportY)
-                {
-                    moveResult.posY = support.supportY;
-                    stats.snappedThisTick = true;
-                }
-                moveResult.velY = 0.0f;
-                moveResult.onGround = true;
-            }
-            else
-            {
-                moveResult.onGround = false;
-            }
-        }
-        // If justJumped: don't touch onGround (already set false in jump)
-
-        // Gap anomaly detection
-        if (support.source == SupportSource::NONE && fabsf(moveResult.posY - 3.0f) < 0.02f)
-        {
-            bool inFloorBounds = (moveResult.posX >= floor.minX && moveResult.posX <= floor.maxX &&
-                                  moveResult.posZ >= floor.minZ && moveResult.posZ <= floor.maxZ);
-            char buf[320];
-            sprintf_s(buf, "[GAP_ANOMALY] px=%.2f pz=%.2f py=%.3f inFloor=%d gap=%.3f foot=[%.2f..%.2f] cand=%u\n",
-                moveResult.posX, moveResult.posZ, moveResult.posY, inFloorBounds ? 1 : 0, support.gap,
-                moveResult.posX - geom.pawnHalfExtentX, moveResult.posX + geom.pawnHalfExtentX,
-                support.candidateCount);
-            OutputDebugStringA(buf);
-        }
+        FinalizeSupport(scene, geom, floor, req.justJumped, moveResult, stats);
 
 #if defined(_DEBUG)
         assert(dbgQuerySupportCalls == 1 && "QuerySupport must be called exactly once per tick");
@@ -1575,7 +1595,7 @@ namespace Engine { namespace Collision {
 
         stats.hitMaxIter = (stats.iterationsUsed == MAX_ITERATIONS && !converged);
 
-        // Phase 4-5: Same as main solver
+        // Phase 4-5: Shared FinalizeSupport
         CapsuleMoveResult moveResult = {};
         moveResult.posX = newX;
         moveResult.posY = newY;
@@ -1585,51 +1605,7 @@ namespace Engine { namespace Collision {
         moveResult.velZ = velZ;
         moveResult.onGround = onGround;
 
-        SupportResult support = QuerySupport(scene, geom, floor,
-                                             newX, newY, newZ, velY);
-
-        if (support.source == SupportSource::NONE && velY <= 0.0f)
-        {
-            bool inFloorBounds = (newX >= floor.minX && newX <= floor.maxX &&
-                                  newZ >= floor.minZ && newZ <= floor.maxZ);
-            if (inFloorBounds && newY < floor.floorY)
-            {
-                support.source = SupportSource::FLOOR;
-                support.supportY = floor.floorY;
-                support.cubeId = -1;
-                support.gap = floor.floorY - newY;
-            }
-        }
-
-        stats.supportSource = support.source;
-        stats.supportY = support.supportY;
-        stats.supportCubeId = support.cubeId;
-        stats.supportGap = support.gap;
-        stats.snappedThisTick = false;
-
-        bool justJumped = req.justJumped;
-
-        if (!justJumped && moveResult.velY > 0.0f)
-        {
-            moveResult.onGround = false;
-        }
-        else if (!justJumped && moveResult.velY <= 0.0f)
-        {
-            if (support.source != SupportSource::NONE)
-            {
-                if (moveResult.posY != support.supportY)
-                {
-                    moveResult.posY = support.supportY;
-                    stats.snappedThisTick = true;
-                }
-                moveResult.velY = 0.0f;
-                moveResult.onGround = true;
-            }
-            else
-            {
-                moveResult.onGround = false;
-            }
-        }
+        FinalizeSupport(scene, geom, floor, req.justJumped, moveResult, stats);
 
         return moveResult;
     }
