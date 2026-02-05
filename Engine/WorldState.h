@@ -5,6 +5,7 @@
 #include <vector>
 #include "InputState.h"
 #include "WorldTypes.h"
+#include "Collision/CapsuleMovement.h"
 
 // Forward declare HUDSnapshot from Renderer namespace
 namespace Renderer { struct HUDSnapshot; }
@@ -133,41 +134,14 @@ namespace Engine
         void ResolveFloorCollision();
         void CheckKillZ();
 
-        // Day3.5: Support query (checks floor and cubes for landing surface)
-        SupportResult QuerySupport(float px, float py, float pz, float velY) const;
-
-        // Part 2: Collision helpers
+        // Part 2: Spatial hash helpers (kept for SceneView adapter)
         void BuildSpatialGrid();
         int WorldToCellX(float x) const;
         int WorldToCellZ(float z) const;
-        AABB BuildPawnAABB(float px, float py, float pz) const;
         AABB GetCubeAABB(uint16_t cubeIdx) const;
-        // PR2.2: Intersects/ComputeSignedPenetration moved to WorldCollisionMath.h (stateless)
         std::vector<uint16_t> QuerySpatialHash(const AABB& pawn) const;
-        void ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis, float prevPawnBottom = 0.0f);
-        // Day3.11 Phase 2: Capsule depenetration
-        void ResolveOverlaps_Capsule();
-        // Day3.11 Phase 3: Capsule XZ sweep/slide
-        void SweepXZ_Capsule(float reqDx, float reqDz, float& outAppliedDx, float& outAppliedDz,
-                             bool& outZeroVelX, bool& outZeroVelZ);
-        // Day3.12 Phase 4A: Capsule Y sweep
-        void SweepY_Capsule(float reqDy, float& outAppliedDy);
-        // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
-        void ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY);
-        // Day3.11 Phase 3 Debug: Scan max XZ penetration depth (for instrumentation)
-        float ScanMaxXZPenetration(float posX, float posY, float posZ);
 
-        // Day3.12 Phase 4B: Step-up helpers
-        // Probe Y sweep at arbitrary pose (no stats mutation)
-        float ProbeY(float posX, float posY, float posZ, float reqDy, int& hitCubeIdx);
-        // Probe XZ sweep at arbitrary pose (no stats mutation)
-        float ProbeXZ(float posX, float posY, float posZ, float reqDx, float reqDz,
-                      float& outNormalX, float& outNormalZ, int& hitCubeIdx);
-        // Try step-up maneuver: up -> forward -> down settle
-        bool TryStepUp_Capsule(float startX, float startY, float startZ,
-                               float reqDx, float reqDz,
-                               float& outX, float& outY, float& outZ);
-        // Check if collision normal is wall-like (horizontal)
-        bool IsWallLike(float normalX, float normalZ) const;
+        // PR2.8: SceneView adapter needs friendship for private spatial hash access
+        friend class WorldStateSceneAdapter;
     };
 }

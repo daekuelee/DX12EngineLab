@@ -135,6 +135,9 @@
     <ClInclude Include="Engine\WorldState.h" />
     <ClInclude Include="Engine\WorldTypes.h" />
     <ClInclude Include="Engine\WorldCollisionMath.h" />
+    <ClInclude Include="Engine\Collision\CollisionTypes.h" />
+    <ClInclude Include="Engine\Collision\CollisionSceneView.h" />
+    <ClInclude Include="Engine\Collision\CapsuleMovement.h" />
     <ClInclude Include="Engine\InputSampler.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="Input\HotkeyRouter.h" />
@@ -170,6 +173,7 @@
     <ClCompile Include="Engine\App.cpp" />
     <ClCompile Include="Engine\FrameClock.cpp" />
     <ClCompile Include="Engine\WorldState.cpp" />
+    <ClCompile Include="Engine\Collision\CapsuleMovement.cpp" />
     <ClCompile Include="Engine\WorldTypes_compilecheck.cpp" />
     <ClCompile Include="Input\HotkeyRouter.cpp" />
     <ClCompile Include="Input\GameplayInputSystem.cpp" />

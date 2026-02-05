@@ -1,214 +1,28 @@
 #include "WorldState.h"
-#include "WorldCollisionMath.h"  // PR2.2: Stateless AABB helpers
+#include "Collision/CapsuleMovement.h"
 #include "../Renderer/DX12/Dx12Context.h"  // For HUDSnapshot
 #include <cmath>
 #include <cstdio>
 #include <algorithm>  // For std::sort, std::unique
 #include <Windows.h>  // For OutputDebugStringA
 
-// Day3.11 Debug: Uncomment to log when Y-resolve introduces XZ penetration
-// #define DEBUG_Y_XZ_PEN
-
 using namespace DirectX;
-
-// Day3.11 Phase 2: Capsule geometry helpers
-namespace
-{
-    DirectX::XMFLOAT3 ClosestPointOnSegment(
-        const DirectX::XMFLOAT3& A, const DirectX::XMFLOAT3& B, const DirectX::XMFLOAT3& P)
-    {
-        float ABx = B.x - A.x, ABy = B.y - A.y, ABz = B.z - A.z;
-        float APx = P.x - A.x, APy = P.y - A.y, APz = P.z - A.z;
-        float dotABAB = ABx * ABx + ABy * ABy + ABz * ABz;
-        if (dotABAB < 1e-8f) return A;
-        float t = (APx * ABx + APy * ABy + APz * ABz) / dotABAB;
-        t = (t < 0.0f) ? 0.0f : ((t > 1.0f) ? 1.0f : t);
-        return { A.x + t * ABx, A.y + t * ABy, A.z + t * ABz };
-    }
-
-    DirectX::XMFLOAT3 ClosestPointOnAABB(const DirectX::XMFLOAT3& P, const Engine::AABB& box)
-    {
-        auto clamp = [](float v, float lo, float hi) { return (v < lo) ? lo : ((v > hi) ? hi : v); };
-        return { clamp(P.x, box.minX, box.maxX), clamp(P.y, box.minY, box.maxY), clamp(P.z, box.minZ, box.maxZ) };
-    }
-
-    void ClosestPointsSegmentAABB(const DirectX::XMFLOAT3& segA, const DirectX::XMFLOAT3& segB,
-        const Engine::AABB& box, DirectX::XMFLOAT3& outOnSeg, DirectX::XMFLOAT3& outOnBox)
-    {
-        DirectX::XMFLOAT3 onSeg = { (segA.x + segB.x) * 0.5f, (segA.y + segB.y) * 0.5f, (segA.z + segB.z) * 0.5f };
-        for (int i = 0; i < 4; ++i) {
-            DirectX::XMFLOAT3 onBox = ClosestPointOnAABB(onSeg, box);
-            onSeg = ClosestPointOnSegment(segA, segB, onBox);
-        }
-        outOnSeg = onSeg;
-        outOnBox = ClosestPointOnAABB(onSeg, box);
-    }
-
-    DirectX::XMFLOAT3 FindMinPenetrationAxis(const DirectX::XMFLOAT3& pt, const Engine::AABB& box, float& outDepth)
-    {
-        float d[6] = { pt.x - box.minX, box.maxX - pt.x, pt.y - box.minY, box.maxY - pt.y, pt.z - box.minZ, box.maxZ - pt.z };
-        DirectX::XMFLOAT3 n[6] = { {-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1} };
-        int best = 0;
-        for (int i = 1; i < 6; ++i) if (d[i] < d[best]) best = i;
-        outDepth = d[best];
-        return n[best];
-    }
-
-    struct CapsuleOverlapResult { bool hit; DirectX::XMFLOAT3 normal; float depth; };
-
-    CapsuleOverlapResult CapsuleAABBOverlap(float feetY, float posX, float posZ, float r, float hh, const Engine::AABB& box)
-    {
-        CapsuleOverlapResult res = { false, {0,0,0}, 0.0f };
-        DirectX::XMFLOAT3 segA = { posX, feetY + r, posZ };
-        DirectX::XMFLOAT3 segB = { posX, feetY + r + 2.0f * hh, posZ };
-        DirectX::XMFLOAT3 onSeg, onBox;
-        ClosestPointsSegmentAABB(segA, segB, box, onSeg, onBox);
-        float dx = onSeg.x - onBox.x, dy = onSeg.y - onBox.y, dz = onSeg.z - onBox.z;
-        float distSq = dx * dx + dy * dy + dz * dz;
-#ifdef DEBUG_Y_XZ_PEN
-        {
-            float dist = sqrtf(distSq);
-            char buf[200];
-            sprintf_s(buf, "[OVERLAP_DETAIL] onSeg=(%.3f,%.3f,%.3f) onBox=(%.3f,%.3f,%.3f) dist=%.4f r=%.4f diff=%.6f\n",
-                onSeg.x, onSeg.y, onSeg.z, onBox.x, onBox.y, onBox.z, dist, r, r - dist);
-            OutputDebugStringA(buf);
-        }
-#endif
-        if (distSq > r * r) return res;
-        res.hit = true;
-        float dist = sqrtf(distSq);
-        if (dist > 1e-6f) {
-            float inv = 1.0f / dist;
-            // Push normal points FROM box TOWARD capsule (to push capsule OUT)
-            // dx,dy,dz = onSeg - onBox already points in correct direction
-            res.normal = { dx * inv, dy * inv, dz * inv };
-            res.depth = r - dist;
-#ifdef DEBUG_CAPSULE_OVERLAP
-            char buf[128];
-            sprintf_s(buf, "[OVERLAP] dist=%.4f depth=%.4f n=(%.2f,%.2f,%.2f)\n",
-                dist, res.depth, res.normal.x, res.normal.y, res.normal.z);
-            OutputDebugStringA(buf);
-#endif
-        } else {
-            res.normal = FindMinPenetrationAxis(onSeg, box, res.depth);
-            res.depth += r;
-        }
-        return res;
-    }
-
-    // Day3.11 Phase 3: Slab method for segment-AABB sweep (XZ only)
-    struct SweepResult { bool hit; float t; float normalX; float normalZ; };
-
-    SweepResult SegmentAABBSweepXZ(float startX, float startZ, float dx, float dz,
-                                   float boxMinX, float boxMaxX, float boxMinZ, float boxMaxZ)
-    {
-        SweepResult res = { false, 1.0f, 0.0f, 0.0f };
-        const float EPS = 1e-8f;
-
-        // X slab
-        float invDx = (fabsf(dx) > EPS) ? (1.0f / dx) : (dx >= 0 ? 1e8f : -1e8f);
-        float t1x = (boxMinX - startX) * invDx;
-        float t2x = (boxMaxX - startX) * invDx;
-        float tNearX = fminf(t1x, t2x);
-        float tFarX = fmaxf(t1x, t2x);
-
-        // Z slab
-        float invDz = (fabsf(dz) > EPS) ? (1.0f / dz) : (dz >= 0 ? 1e8f : -1e8f);
-        float t1z = (boxMinZ - startZ) * invDz;
-        float t2z = (boxMaxZ - startZ) * invDz;
-        float tNearZ = fminf(t1z, t2z);
-        float tFarZ = fmaxf(t1z, t2z);
-
-        float tEnter = fmaxf(tNearX, tNearZ);
-        float tExit = fminf(tFarX, tFarZ);
-
-        if (tEnter > tExit || tExit < 0.0f || tEnter > 1.0f)
-            return res;
-
-        // FIX: If starting inside/at boundary (tEnter <= 0), only block if moving deeper
-        // Allow escape if movement takes us toward the exit face
-        if (tEnter <= 0.0f)
-        {
-            // We're inside or at boundary. Check if movement is toward exit.
-            // tExit > 0 means we'll exit eventually, but we need to check direction.
-            // If the "entering" axis has tNear < 0, we're already past that face.
-            // Only block if we're moving toward a face we haven't crossed yet.
-
-            // Simple heuristic: if BOTH tNearX and tNearZ are negative (fully inside),
-            // allow movement (let cleanup handle any resulting penetration)
-            if (tNearX < -0.001f && tNearZ < -0.001f)
-                return res;  // Fully inside, allow escape
-        }
-
-        res.hit = true;
-        res.t = fmaxf(tEnter, 0.0f);
-
-        // Determine hit normal (which axis entered last)
-        if (tNearX > tNearZ)
-            res.normalX = (dx > 0) ? -1.0f : 1.0f;
-        else
-            res.normalZ = (dz > 0) ? -1.0f : 1.0f;
-
-        return res;
-    }
-
-    // Sweep capsule (both P0 and P1) against expanded AABB, return earliest hit
-    // FIX: Added onGround parameter to use body-only Y-overlap when grounded
-    SweepResult SweepCapsuleVsCubeXZ(float posX, float posZ, float feetY, float r, float hh,
-                                      float dx, float dz, const Engine::AABB& cube, bool onGround)
-    {
-        // Expand cube by radius (Minkowski sum for XZ)
-        float expMinX = cube.minX - r;
-        float expMaxX = cube.maxX + r;
-        float expMinZ = cube.minZ - r;
-        float expMaxZ = cube.maxZ + r;
-
-        // FIX: When grounded, include bottom hemisphere for step-height obstacle detection.
-        // The SUPPORT_EPS check below (line 188) prevents false hits on cubes we're standing ON.
-        float capMinY, capMaxY;
-        if (onGround)
-        {
-            // Grounded: include full capsule so we detect step-height obstacles
-            capMinY = feetY;
-            capMaxY = feetY + 2.0f * r + 2.0f * hh;
-        }
-        else
-        {
-            // Airborne: use full capsule height
-            capMinY = feetY;
-            capMaxY = feetY + 2.0f * r + 2.0f * hh;
-        }
-
-        // Y overlap check
-        if (capMaxY <= cube.minY || capMinY >= cube.maxY)
-            return { false, 1.0f, 0.0f, 0.0f };  // No Y overlap, skip
-
-        // Additional check: if grounded and standing ON TOP of this cube, skip
-        // (feet at or above cube top = support, not wall)
-        const float SUPPORT_EPS = 0.05f;
-        if (onGround && feetY >= cube.maxY - SUPPORT_EPS)
-            return { false, 1.0f, 0.0f, 0.0f };
-
-        // Sweep P0 and P1 (both at same XZ since capsule is vertical)
-        SweepResult res = SegmentAABBSweepXZ(posX, posZ, dx, dz, expMinX, expMaxX, expMinZ, expMaxZ);
-        return res;
-    }
-
-    // Clip velocity onto plane (2D XZ version)
-    void ClipVelocityXZ(float& dx, float& dz, float normalX, float normalZ)
-    {
-        const float OVERCLIP = 1.001f;
-        float backoff = (dx * normalX + dz * normalZ) * OVERCLIP;
-        dx -= normalX * backoff;
-        dz -= normalZ * backoff;
-        const float STOP_EPS = 0.001f;
-        if (fabsf(dx) < STOP_EPS) dx = 0.0f;
-        if (fabsf(dz) < STOP_EPS) dz = 0.0f;
-    }
-}
 
 namespace Engine
 {
+
+// PR2.8: SceneView adapter — bridges WorldState private spatial data to module
+class WorldStateSceneAdapter : public Collision::SceneView {
+    const WorldState& m_ws;
+public:
+    explicit WorldStateSceneAdapter(const WorldState& ws) : m_ws(ws) {}
+    std::vector<uint16_t> QueryCandidates(const AABB& box) const override {
+        return m_ws.QuerySpatialHash(box);
+    }
+    AABB GetCubeAABB(uint16_t idx) const override {
+        return m_ws.GetCubeAABB(idx);
+    }
+};
     void WorldState::Initialize()
     {
         // Reset pawn to spawn position
@@ -304,8 +118,26 @@ namespace Engine
         // Reset collision stats for this tick
         m_collisionStats = CollisionStats{};
 
-        // Day3.11 Phase 2: Capsule depenetration safety net
-        ResolveOverlaps_Capsule();
+        // --- Pre-solver depenetration (PR2.8: module call) ---
+        {
+            WorldStateSceneAdapter sceneView(*this);
+            Collision::CapsuleGeom geom = {
+                m_config.capsuleRadius, m_config.capsuleHalfHeight,
+                m_config.pawnHalfExtentX, m_config.pawnHalfExtentZ, m_config.pawnHeight
+            };
+            auto depen = Collision::DepenetrateInPlace(
+                sceneView, geom, m_pawn.posX, m_pawn.posY, m_pawn.posZ, m_pawn.onGround);
+            m_pawn.posX = depen.posX;
+            m_pawn.posY = depen.posY;
+            m_pawn.posZ = depen.posZ;
+            m_pawn.onGround = depen.onGround;
+            m_collisionStats.depenApplied = depen.depenApplied;
+            m_collisionStats.depenTotalMag = depen.depenTotalMag;
+            m_collisionStats.depenClampTriggered = depen.depenClampTriggered;
+            m_collisionStats.depenMaxSingleMag = depen.depenMaxSingleMag;
+            m_collisionStats.depenOverlapCount = depen.depenOverlapCount;
+            m_collisionStats.depenIterations = depen.depenIterations;
+        }
 
         // 1. Apply yaw rotation [LOOK-UNIFIED] pre-computed delta from Action layer
         m_view.yaw += input.yawDelta;
@@ -383,237 +215,89 @@ namespace Engine
             m_justJumpedThisTick = true;  // Day3.5: Prevent support query from clearing onGround
         }
 
-        // Part 2: Axis-separated collision resolution
-        // Day3.5: onGround is now determined by QuerySupport, not reset here
-
-        // Day3.4: Apply velocity to get proposed position
-        float newX, newZ;
-        float newY;
-
-        // Day3.12 Phase 4A: Capsule Y uses sweep when enabled
-        if (m_config.enableYSweep)
+        // --- Main collision solver (PR2.8: module call) ---
         {
-            float reqDy = m_pawn.velY * fixedDt;
-            float appliedDy = 0.0f;
-            SweepY_Capsule(reqDy, appliedDy);
-            newY = m_pawn.posY + appliedDy;
-        }
-        else
-        {
-            newY = m_pawn.posY + m_pawn.velY * fixedDt;
-        }
+            WorldStateSceneAdapter sceneView(*this);
+            Collision::CapsuleMoveRequest req = {};
+            req.posX = m_pawn.posX;  req.posY = m_pawn.posY;  req.posZ = m_pawn.posZ;
+            req.velX = m_pawn.velX;  req.velY = m_pawn.velY;  req.velZ = m_pawn.velZ;
+            req.onGround = m_pawn.onGround;
+            req.justJumped = m_justJumpedThisTick;
+            req.fixedDt = fixedDt;
+            req.geom = { m_config.capsuleRadius, m_config.capsuleHalfHeight,
+                         m_config.pawnHalfExtentX, m_config.pawnHalfExtentZ, m_config.pawnHeight };
+            req.enableYSweep = m_config.enableYSweep;
+            req.enableStepUp = m_config.enableStepUp;
+            req.maxStepHeight = m_config.maxStepHeight;
+            req.sweepSkinY = m_config.sweepSkinY;
+            req.floor = { m_config.floorY, m_config.floorMinX, m_config.floorMaxX,
+                          m_config.floorMinZ, m_config.floorMaxZ };
+            req.cubeHalfXZ = m_config.cubeHalfXZ;
+            req.cubeMinY = m_config.cubeMinY;
+            req.cubeMaxY = m_config.cubeMaxY;
 
-        // Day3.11 Phase 3: Capsule XZ uses sweep/slide
-        bool capsuleZeroVelX = false, capsuleZeroVelZ = false;
-        {
-            float reqDx = m_pawn.velX * fixedDt;
-            float reqDz = m_pawn.velZ * fixedDt;
-            float appliedDx = 0.0f, appliedDz = 0.0f;
-            SweepXZ_Capsule(reqDx, reqDz, appliedDx, appliedDz, capsuleZeroVelX, capsuleZeroVelZ);
-            newX = m_pawn.posX + appliedDx;
-            newZ = m_pawn.posZ + appliedDz;
+            auto result = Collision::SolveCapsuleMovement(sceneView, req, m_collisionStats);
 
-            // FIX: Post-sweep XZ cleanup (single iteration)
-            ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
-
-            // Day3.12+ DEBUG: Step-up gate condition logging
-#define DEBUG_STEP_GATE
-#ifdef DEBUG_STEP_GATE
+#if defined(_DEBUG)
+            if (m_config.enableYSweep)
             {
-                float xzMag = sqrtf(m_collisionStats.sweepNormalX * m_collisionStats.sweepNormalX +
-                                    m_collisionStats.sweepNormalZ * m_collisionStats.sweepNormalZ);
-                static bool s_lastStepGateResult = false;
-                bool gateResult = m_config.enableStepUp && m_collisionStats.sweepHit &&
-                                  IsWallLike(m_collisionStats.sweepNormalX, m_collisionStats.sweepNormalZ) &&
-                                  m_pawn.onGround;
-                if (gateResult != s_lastStepGateResult || gateResult) {
+                // Snapshot: reuse the same req (already built above)
+                CollisionStats legacyStats = {};
+                auto legacyResult = Collision::SolveCapsuleMovement_WithAxisY(
+                    sceneView, req, legacyStats);
+
+                constexpr float POS_EPS = 1e-4f;
+                constexpr float VEL_EPS = 0.01f;
+
+                float posDiff = fabsf(result.posX - legacyResult.posX)
+                              + fabsf(result.posY - legacyResult.posY)
+                              + fabsf(result.posZ - legacyResult.posZ);
+                float velDiff = fabsf(result.velX - legacyResult.velX)
+                              + fabsf(result.velY - legacyResult.velY)
+                              + fabsf(result.velZ - legacyResult.velZ);
+                bool groundDiff = (result.onGround != legacyResult.onGround);
+
+                if (posDiff > POS_EPS || velDiff > VEL_EPS || groundDiff)
+                {
+                    char buf[320];
+                    sprintf_s(buf,
+                        "[LEGACY_COMPARE_DIFF] pos=(%.4f,%.4f,%.4f)vs(%.4f,%.4f,%.4f) "
+                        "vel=(%.3f,%.3f,%.3f)vs(%.3f,%.3f,%.3f) gnd=%d/%d\n",
+                        result.posX, result.posY, result.posZ,
+                        legacyResult.posX, legacyResult.posY, legacyResult.posZ,
+                        result.velX, result.velY, result.velZ,
+                        legacyResult.velX, legacyResult.velY, legacyResult.velZ,
+                        result.onGround?1:0, legacyResult.onGround?1:0);
+                    OutputDebugStringA(buf);
+                }
+
+                // Throttled summary every 600 ticks (10s @ 60Hz)
+                static uint32_t s_compareCount = 0;
+                static float s_maxPosDiff = 0.0f, s_maxVelDiff = 0.0f;
+                static uint32_t s_diffCount = 0;
+                s_compareCount++;
+                if (posDiff > s_maxPosDiff) s_maxPosDiff = posDiff;
+                if (velDiff > s_maxVelDiff) s_maxVelDiff = velDiff;
+                if (posDiff > POS_EPS || velDiff > VEL_EPS || groundDiff) s_diffCount++;
+                if (s_compareCount % 600 == 0)
+                {
                     char buf[200];
-                    sprintf_s(buf, "[STEP_GATE] enable=%d hit=%d wallLike=%d (xzMag=%.3f) onGround=%d => %s\n",
-                        m_config.enableStepUp, m_collisionStats.sweepHit,
-                        IsWallLike(m_collisionStats.sweepNormalX, m_collisionStats.sweepNormalZ), xzMag,
-                        m_pawn.onGround, gateResult ? "PASS" : "FAIL");
+                    sprintf_s(buf, "[LEGACY_COMPARE] maxPos=%.6f maxVel=%.4f diffs=%u total=%u\n",
+                        s_maxPosDiff, s_maxVelDiff, s_diffCount, s_compareCount);
                     OutputDebugStringA(buf);
-                    s_lastStepGateResult = gateResult;
+                    s_maxPosDiff = 0.0f; s_maxVelDiff = 0.0f; s_diffCount = 0;
                 }
             }
 #endif
 
-            // Day3.12 Phase 4B: Step-up when blocked by wall-like surface
-            if (m_config.enableStepUp && m_collisionStats.sweepHit &&
-                IsWallLike(m_collisionStats.sweepNormalX, m_collisionStats.sweepNormalZ) &&
-                m_pawn.onGround)
-            {
-                float stepOutX, stepOutY, stepOutZ;
-                if (TryStepUp_Capsule(m_pawn.posX, newY, m_pawn.posZ, reqDx, reqDz,
-                                      stepOutX, stepOutY, stepOutZ))
-                {
-                    newX = stepOutX;
-                    newY = stepOutY;
-                    newZ = stepOutZ;
-                    capsuleZeroVelX = false;  // Don't zero velocity on step success
-                    capsuleZeroVelZ = false;
-
-                    // Day3.12+ DEBUG: Verify step-up integration
-#define DEBUG_STEP_INTEGRATION
-#ifdef DEBUG_STEP_INTEGRATION
-                    {
-                        char buf[160];
-                        sprintf_s(buf, "[STEP_APPLIED] prev=(%.2f,%.2f,%.2f) new=(%.2f,%.2f,%.2f) dY=%.3f\n",
-                            m_pawn.posX, m_pawn.posY, m_pawn.posZ, newX, newY, newZ, newY - m_pawn.posY);
-                        OutputDebugStringA(buf);
-                    }
-#endif
-                }
-            }
-
-            // FIX: Higher-level velocity zeroing (after all sweep/slide logic)
-            if (capsuleZeroVelX) m_pawn.velX = 0.0f;
-            if (capsuleZeroVelZ) m_pawn.velZ = 0.0f;
-        }
-
-        // Day3.9: Store pawn AABB bottom before collision resolution (for anti-step-up)
-        AABB pawnPre = BuildPawnAABB(newX, newY, newZ);
-        float prevPawnBottom = pawnPre.minY;
-
-        // Day3.4: Iterative collision resolution (X→Z→Y per iteration)
-        const int MAX_ITERATIONS = 8;
-        const float CONVERGENCE_EPSILON = 0.001f;
-        bool converged = false;
-
-        for (int iter = 0; iter < MAX_ITERATIONS; ++iter)
-        {
-            float totalDelta = 0.0f;
-
-            // Day3.11: XZ cleanup in iteration loop
-            // ResolveAxis(Y) can push capsule into wall XZ, need cleanup each iteration
-            {
-                float prevX = newX, prevZ = newZ;
-                ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
-                totalDelta += fabsf(newX - prevX) + fabsf(newZ - prevZ);
-            }
-
-            // Y axis (both modes)
-            float prevY = newY;
-#ifdef DEBUG_Y_XZ_PEN
-            float preYPenXZ = ScanMaxXZPenetration(newX, newY, newZ);
-#endif
-            ResolveAxis(newY, newX, newY, newZ, Axis::Y, prevPawnBottom);
-            totalDelta += fabsf(newY - prevY);
-
-#ifdef DEBUG_Y_XZ_PEN
-            {
-                float postYPenXZ = ScanMaxXZPenetration(newX, newY, newZ);
-                if (postYPenXZ > preYPenXZ + 0.001f)
-                {
-                    char buf[128];
-                    sprintf_s(buf, "[POST_Y_PEN] Y-resolve introduced XZ pen: pre=%.4f post=%.4f\n",
-                        preYPenXZ, postYPenXZ);
-                    OutputDebugStringA(buf);
-                }
-            }
-#endif
-
-            // Day3.11 Fix: Post-Y XZ cleanup
-            // Y-resolve can push capsule into walls, creating new XZ penetration
-            // Must run cleanup AFTER Y-resolve to maintain XZ invariant
-            {
-                float prevX2 = newX, prevZ2 = newZ;
-                ResolveXZ_Capsule_Cleanup(newX, newZ, newY);
-                totalDelta += fabsf(newX - prevX2) + fabsf(newZ - prevZ2);
-            }
-
-            m_collisionStats.iterationsUsed = static_cast<uint8_t>(iter + 1);
-
-            // Convergence check: if total correction is negligible, we've converged
-            if (totalDelta < CONVERGENCE_EPSILON)
-            {
-                converged = true;
-                break;
-            }
-        }
-
-        // hitMaxIter = true ONLY if we ran all iterations AND did NOT converge
-        m_collisionStats.hitMaxIter = (m_collisionStats.iterationsUsed == MAX_ITERATIONS && !converged);
-
-        // Commit final position
-        m_pawn.posX = newX;
-        m_pawn.posY = newY;
-        m_pawn.posZ = newZ;
-
-        // Reset floor clamp flag before support query
-        m_didFloorClampThisTick = false;
-
-        // Day3.5: Query support (ALWAYS for HUD)
-        SupportResult support = QuerySupport(m_pawn.posX, m_pawn.posY, m_pawn.posZ, m_pawn.velY);
-
-        // Day3.6: Floor penetration recovery (handle overshoots beyond epsilon)
-        if (support.source == SupportSource::NONE && m_pawn.velY <= 0.0f)
-        {
-            bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
-                                  m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
-            // If pawn is below floor and in bounds, force floor recovery
-            if (inFloorBounds && m_pawn.posY < m_config.floorY)
-            {
-                float overshoot = m_config.floorY - m_pawn.posY;
-                char buf[256];
-                sprintf_s(buf, "[FLOOR_RECOVERY] posY=%.3f overshoot=%.3f velY=%.2f\n",
-                    m_pawn.posY, overshoot, m_pawn.velY);
-                OutputDebugStringA(buf);
-
-                // Force floor support
-                support.source = SupportSource::FLOOR;
-                support.supportY = m_config.floorY;
-                support.cubeId = -1;
-                support.gap = overshoot;
-            }
-        }
-
-        // Copy to collision stats for HUD
-        m_collisionStats.supportSource = support.source;
-        m_collisionStats.supportY = support.supportY;
-        m_collisionStats.supportCubeId = support.cubeId;
-        m_collisionStats.supportGap = support.gap;
-        m_collisionStats.snappedThisTick = false;
-
-        // Day3.5: Support application
-        // Safety C: Rising case - clear onGround
-        if (!m_justJumpedThisTick && m_pawn.velY > 0.0f)
-        {
-            m_pawn.onGround = false;
-        }
-        // Falling or standing case
-        else if (!m_justJumpedThisTick && m_pawn.velY <= 0.0f)
-        {
-            if (support.source != SupportSource::NONE)
-            {
-                // Apply snap
-                if (m_pawn.posY != support.supportY)
-                {
-                    m_pawn.posY = support.supportY;
-                    m_collisionStats.snappedThisTick = true;
-                    m_didFloorClampThisTick = true;
-                }
-                m_pawn.velY = 0.0f;
-                m_pawn.onGround = true;
-            }
-            else
-            {
-                m_pawn.onGround = false;
-            }
-        }
-        // If justJumped: don't touch onGround (already set false in jump)
-
-        // Gap anomaly detection
-        if (support.source == SupportSource::NONE && fabsf(m_pawn.posY - 3.0f) < 0.02f)
-        {
-            bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
-                                  m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
-            char buf[320];
-            sprintf_s(buf, "[GAP_ANOMALY] px=%.2f pz=%.2f py=%.3f inFloor=%d gap=%.3f foot=[%.2f..%.2f] cand=%u\n",
-                m_pawn.posX, m_pawn.posZ, m_pawn.posY, inFloorBounds ? 1 : 0, support.gap,
-                m_pawn.posX - m_config.pawnHalfExtentX, m_pawn.posX + m_config.pawnHalfExtentX,
-                support.candidateCount);
-            OutputDebugStringA(buf);
+            m_pawn.posX = result.posX;
+            m_pawn.posY = result.posY;
+            m_pawn.posZ = result.posZ;
+            m_pawn.velX = result.velX;
+            m_pawn.velY = result.velY;
+            m_pawn.velZ = result.velZ;
+            m_pawn.onGround = result.onGround;
+            m_didFloorClampThisTick = m_collisionStats.snappedThisTick;
         }
 
         m_justJumpedThisTick = false;  // Reset for next tick
@@ -889,20 +573,6 @@ namespace Engine
         OutputDebugStringA(buf);
     }
 
-    AABB WorldState::BuildPawnAABB(float px, float py, float pz) const
-    {
-        // Pawn AABB: feet at posY, head at posY+height
-        // Day3.7: Axis-aware footprint (X=1.4 for arms, Z=0.4 tight)
-        AABB aabb;
-        aabb.minX = px - m_config.pawnHalfExtentX;
-        aabb.maxX = px + m_config.pawnHalfExtentX;
-        aabb.minY = py;
-        aabb.maxY = py + m_config.pawnHeight;
-        aabb.minZ = pz - m_config.pawnHalfExtentZ;
-        aabb.maxZ = pz + m_config.pawnHalfExtentZ;
-        return aabb;
-    }
-
     AABB WorldState::GetCubeAABB(uint16_t cubeIdx) const
     {
         // Day3.12 Phase 4B+: Extra colliders (ID >= EXTRA_BASE)
@@ -985,978 +655,10 @@ namespace Engine
         return candidates;
     }
 
-    SupportResult WorldState::QuerySupport(float px, float py, float pz, float velY) const
-    {
-        SupportResult result;
-        const float SUPPORT_EPSILON = 0.05f;
-        float pawnBottom = py;
-
-        // Early-out when rising (still return result for HUD)
-        if (velY > 0.0f) return result;
-
-        // Build query AABB with Y expanded
-        AABB queryAABB = BuildPawnAABB(px, py, pz);
-        queryAABB.minY -= SUPPORT_EPSILON;
-        queryAABB.maxY += SUPPORT_EPSILON;
-
-        // 1. Check floor support
-        bool inFloorBounds = (px >= m_config.floorMinX && px <= m_config.floorMaxX &&
-                              pz >= m_config.floorMinZ && pz <= m_config.floorMaxZ);
-        if (inFloorBounds && fabsf(pawnBottom - m_config.floorY) < SUPPORT_EPSILON &&
-            pawnBottom >= m_config.floorY - SUPPORT_EPSILON)  // Safety: not below floor
-        {
-            result.source = SupportSource::FLOOR;
-            result.supportY = m_config.floorY;
-            result.cubeId = -1;
-            result.gap = fabsf(pawnBottom - m_config.floorY);
-        }
-
-        // 2. Check cube support (pick highest)
-        float pawnMinX = queryAABB.minX;
-        float pawnMaxX = queryAABB.maxX;
-        float pawnMinZ = queryAABB.minZ;
-        float pawnMaxZ = queryAABB.maxZ;
-
-        auto candidates = QuerySpatialHash(queryAABB);
-        result.candidateCount = static_cast<uint32_t>(candidates.size());
-
-        for (uint16_t cubeIdx : candidates)
-        {
-            AABB cube = GetCubeAABB(cubeIdx);
-
-            // XZ footprint overlap (inclusive)
-            bool xzOverlap = (pawnMinX <= cube.maxX && pawnMaxX >= cube.minX &&
-                              pawnMinZ <= cube.maxZ && pawnMaxZ >= cube.minZ);
-            if (!xzOverlap) continue;
-
-            float cubeTop = cube.maxY;
-            float dist = fabsf(pawnBottom - cubeTop);
-
-            // Safety B: Only support from above (pawnBottom >= cubeTop - SUPPORT_EPSILON)
-            if (pawnBottom < cubeTop - SUPPORT_EPSILON) continue;
-
-            // Safety A: Select cube if better than current
-            if (dist < SUPPORT_EPSILON && (result.source == SupportSource::NONE || cubeTop > result.supportY))
-            {
-                result.source = SupportSource::CUBE;
-                result.supportY = cubeTop;
-                result.cubeId = cubeIdx;
-                result.gap = dist;
-            }
-        }
-
-        return result;
-    }
-
-    void WorldState::ResolveAxis(float& posAxis, float currentPosX, float currentPosY, float currentPosZ, Axis axis, float prevPawnBottom)
-    {
-        // Build pawn AABB at proposed position
-        float px = (axis == Axis::X) ? posAxis : currentPosX;
-        float py = (axis == Axis::Y) ? posAxis : currentPosY;
-        float pz = (axis == Axis::Z) ? posAxis : currentPosZ;
-        AABB pawn = BuildPawnAABB(px, py, pz);
-
-        auto candidates = QuerySpatialHash(pawn);
-        m_collisionStats.candidatesChecked += static_cast<uint32_t>(candidates.size());
-
-        // Find deepest penetration cube (stability: avoid multi-cube jitter)
-        float deepestPen = 0.0f;
-        int deepestCubeIdx = -1;
-        float deepestCubeTop = 0.0f;
-
-        for (uint16_t cubeIdx : candidates)
-        {
-            AABB cube = GetCubeAABB(cubeIdx);
-            if (!IntersectsAABB(pawn, cube)) continue;
-
-            // Day3.9: Anti-step-up guard for Y axis
-            // Day3.12 Phase 4A: Skip this guard for Capsule mode when Y sweep is enabled
-            // (Y is already handled by SweepY_Capsule, so we don't need penetration-based Y resolution)
-            if (axis == Axis::Y)
-            {
-                // When enableYSweep, Y is handled by sweep - skip Y resolution entirely
-                if (m_config.enableYSweep)
-                    continue;
-
-                float cubeTop = cube.maxY;
-
-                // Compute what the Y delta would be
-                float penY = SignedPenetrationAABB(pawn, cube, Axis::Y);
-                float deltaY = penY;  // Penetration is already signed correctly
-
-                // wouldPushUp = the correction would move pawn upward
-                bool wouldPushUp = (deltaY > 0.0f);
-
-                // Only allow upward correction if truly landing from above:
-                // - prevPawnBottom (AABB minY before collision) was at or above cubeTop
-                // - AND velocity is downward or zero (falling/landing)
-                bool wasAboveTop = (prevPawnBottom >= cubeTop - 0.01f);
-                bool fallingOrLanding = (m_pawn.velY <= 0.0f);
-                bool isLandingFromAbove = wasAboveTop && fallingOrLanding;
-
-                if (wouldPushUp && !isLandingFromAbove)
-                {
-                    // Wall contact trying to push up - skip this cube for Y
-                    m_collisionStats.yStepUpSkipped = true;
-                    continue;
-                }
-            }
-
-            // Day3.4: Count actual intersections (summed, not deduplicated)
-            m_collisionStats.contacts++;
-
-            float pen = SignedPenetrationAABB(pawn, cube, axis);
-
-            // Day3.4: Track max penetration for diagnostics
-            if (fabsf(pen) > m_collisionStats.maxPenetrationAbs)
-                m_collisionStats.maxPenetrationAbs = fabsf(pen);
-
-            if (fabsf(pen) > fabsf(deepestPen))
-            {
-                deepestPen = pen;
-                deepestCubeIdx = cubeIdx;
-                deepestCubeTop = cube.maxY;
-            }
-        }
-
-        // Apply only the deepest correction
-        if (deepestCubeIdx >= 0 && deepestPen != 0.0f)
-        {
-            posAxis += deepestPen;
-
-            if (axis == Axis::Y)
-            {
-                m_collisionStats.yDeltaApplied = deepestPen;  // Signed penetration = signed delta
-            }
-
-            m_collisionStats.penetrationsResolved++;
-            m_collisionStats.lastHitCubeId = deepestCubeIdx;
-            m_collisionStats.lastAxisResolved = axis;
-
-            // Debug log for collision proof
-            char buf[128];
-            const char* axisName = (axis == Axis::X) ? "X" : (axis == Axis::Y) ? "Y" : "Z";
-            sprintf_s(buf, "[Collision] cube=%d axis=%s pen=%.3f\n", deepestCubeIdx, axisName, deepestPen);
-            OutputDebugStringA(buf);
-
-            // Zero velocity on this axis
-            if (axis == Axis::X) m_pawn.velX = 0.0f;
-            if (axis == Axis::Z) m_pawn.velZ = 0.0f;
-            if (axis == Axis::Y)
-            {
-                // Day3.5: onGround is now determined by QuerySupport, not here
-                m_pawn.velY = 0.0f;
-            }
-        }
-    }
-
-    // Day3.11 Phase 2: Capsule depenetration safety net
-    void WorldState::ResolveOverlaps_Capsule()
-    {
-        const int MAX_DEPEN_ITERS = 4;
-        const float MIN_DEPEN_DIST = 0.001f;
-        const float MAX_DEPEN_CLAMP = 1.0f;
-        const float MAX_TOTAL_CLAMP = 2.0f;
-
-        // Reset depen stats (these are protected from overwrite per contract)
-        m_collisionStats.depenApplied = false;
-        m_collisionStats.depenTotalMag = 0.0f;
-        m_collisionStats.depenClampTriggered = false;
-        m_collisionStats.depenMaxSingleMag = 0.0f;
-        m_collisionStats.depenOverlapCount = 0;
-        m_collisionStats.depenIterations = 0;
-
-        float r = m_config.capsuleRadius;
-        float hh = m_config.capsuleHalfHeight;
-
-        for (int iter = 0; iter < MAX_DEPEN_ITERS; ++iter)
-        {
-            m_collisionStats.depenIterations = static_cast<uint32_t>(iter + 1);
-
-            AABB capAABB;
-            capAABB.minX = m_pawn.posX - r;  capAABB.maxX = m_pawn.posX + r;
-            capAABB.minY = m_pawn.posY;       capAABB.maxY = m_pawn.posY + 2.0f * r + 2.0f * hh;
-            capAABB.minZ = m_pawn.posZ - r;  capAABB.maxZ = m_pawn.posZ + r;
-
-            std::vector<uint16_t> candidates = QuerySpatialHash(capAABB);
-            std::sort(candidates.begin(), candidates.end());
-            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-
-            float pushX = 0.0f, pushY = 0.0f, pushZ = 0.0f;
-            uint32_t overlapCount = 0;
-
-            for (uint16_t idx : candidates)
-            {
-                AABB cube = GetCubeAABB(idx);
-                CapsuleOverlapResult ov = CapsuleAABBOverlap(m_pawn.posY, m_pawn.posX, m_pawn.posZ, r, hh, cube);
-                if (ov.hit && ov.depth > MIN_DEPEN_DIST)
-                {
-                    overlapCount++;
-                    float clampedD = (ov.depth > MAX_DEPEN_CLAMP) ? MAX_DEPEN_CLAMP : ov.depth;
-                    if (ov.depth > MAX_DEPEN_CLAMP) m_collisionStats.depenClampTriggered = true;
-                    if (clampedD > m_collisionStats.depenMaxSingleMag) m_collisionStats.depenMaxSingleMag = clampedD;
-                    pushX += ov.normal.x * clampedD;
-                    pushY += ov.normal.y * clampedD;
-                    pushZ += ov.normal.z * clampedD;
-                }
-            }
-            m_collisionStats.depenOverlapCount = overlapCount;
-            if (overlapCount == 0) break;
-
-            float mag = sqrtf(pushX * pushX + pushY * pushY + pushZ * pushZ);
-            if (mag < MIN_DEPEN_DIST) break;  // Negligible push, stop
-
-            if (mag > MAX_TOTAL_CLAMP) {
-                float s = MAX_TOTAL_CLAMP / mag;
-                pushX *= s; pushY *= s; pushZ *= s;
-                mag = MAX_TOTAL_CLAMP;
-                m_collisionStats.depenClampTriggered = true;
-            }
-
-            m_pawn.posX += pushX;
-            m_pawn.posY += pushY;
-            m_pawn.posZ += pushZ;
-            m_collisionStats.depenApplied = true;
-            m_collisionStats.depenTotalMag += mag;
-
-            char buf[128];
-            sprintf_s(buf, "[DEPEN] iter=%d mag=%.4f clamp=%d cnt=%u\n",
-                iter, mag, m_collisionStats.depenClampTriggered ? 1 : 0, overlapCount);
-            OutputDebugStringA(buf);
-        }
-
-        if (m_collisionStats.depenApplied)
-        {
-            m_pawn.onGround = false;  // Avoid stale state
-            char buf[128];
-            sprintf_s(buf, "[DEPEN] DONE iters=%u total=%.4f clamp=%d pos=(%.2f,%.2f,%.2f)\n",
-                m_collisionStats.depenIterations, m_collisionStats.depenTotalMag,
-                m_collisionStats.depenClampTriggered ? 1 : 0,
-                m_pawn.posX, m_pawn.posY, m_pawn.posZ);
-            OutputDebugStringA(buf);
-        }
-    }
-
-    // Day3.11 Phase 3: Capsule XZ sweep/slide
-    // FIX: Added outZeroVelX/Z flags to defer velocity zeroing to caller
-    void WorldState::SweepXZ_Capsule(float reqDx, float reqDz, float& outAppliedDx, float& outAppliedDz,
-                                     bool& outZeroVelX, bool& outZeroVelZ)
-    {
-        const float SKIN_WIDTH = 0.01f;
-        const int MAX_SWEEPS = 4;  // FIX: Corner contacts need 3+ iterations to fully resolve
-
-        float r = m_config.capsuleRadius;
-        float hh = m_config.capsuleHalfHeight;
-        float feetY = m_pawn.posY;
-        bool onGround = m_pawn.onGround;
-
-        // Initialize output flags
-        outZeroVelX = false;
-        outZeroVelZ = false;
-
-        // Reset sweep stats
-        m_collisionStats.sweepHit = false;
-        m_collisionStats.sweepTOI = 1.0f;
-        m_collisionStats.sweepHitCubeIdx = -1;
-        m_collisionStats.sweepCandCount = 0;
-        m_collisionStats.sweepReqDx = reqDx;
-        m_collisionStats.sweepReqDz = reqDz;
-        m_collisionStats.sweepAppliedDx = 0.0f;
-        m_collisionStats.sweepAppliedDz = 0.0f;
-        m_collisionStats.sweepSlideDx = 0.0f;
-        m_collisionStats.sweepSlideDz = 0.0f;
-        m_collisionStats.sweepNormalX = 0.0f;
-        m_collisionStats.sweepNormalZ = 0.0f;
-
-        float dx = reqDx, dz = reqDz;
-        float totalAppliedDx = 0.0f, totalAppliedDz = 0.0f;
-
-        for (int sweep = 0; sweep < MAX_SWEEPS; ++sweep)
-        {
-            float deltaMag = sqrtf(dx * dx + dz * dz);
-            if (deltaMag < 0.0001f) break;
-
-            // Build swept AABB for broadphase
-            float curX = m_pawn.posX + totalAppliedDx;
-            float curZ = m_pawn.posZ + totalAppliedDz;
-            AABB sweptAABB;
-            sweptAABB.minX = fminf(curX - r, curX - r + dx);
-            sweptAABB.maxX = fmaxf(curX + r, curX + r + dx);
-            sweptAABB.minY = feetY;
-            sweptAABB.maxY = feetY + 2.0f * r + 2.0f * hh;
-            sweptAABB.minZ = fminf(curZ - r, curZ - r + dz);
-            sweptAABB.maxZ = fmaxf(curZ + r, curZ + r + dz);
-
-            std::vector<uint16_t> candidates = QuerySpatialHash(sweptAABB);
-            std::sort(candidates.begin(), candidates.end());
-            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-            m_collisionStats.sweepCandCount = static_cast<uint32_t>(candidates.size());
-
-            // Find earliest hit
-            SweepResult earliest = { false, 1.0f, 0.0f, 0.0f };
-            int earliestCubeIdx = -1;
-
-            for (uint16_t cubeIdx : candidates)
-            {
-                AABB cube = GetCubeAABB(cubeIdx);
-                SweepResult hit = SweepCapsuleVsCubeXZ(curX, curZ, feetY, r, hh, dx, dz, cube, onGround);
-                if (hit.hit)
-                {
-                    if (hit.t < earliest.t || (!earliest.hit))
-                    {
-                        earliest = hit;
-                        earliestCubeIdx = cubeIdx;
-                    }
-                    else if (fabsf(hit.t - earliest.t) < 1e-6f && cubeIdx < earliestCubeIdx)
-                    {
-                        earliest = hit;
-                        earliestCubeIdx = cubeIdx;  // Tie-break by ID for determinism
-                    }
-                }
-            }
-
-            if (!earliest.hit)
-            {
-                // No collision, apply full remaining delta
-                totalAppliedDx += dx;
-                totalAppliedDz += dz;
-
-                if (sweep == 0)
-                {
-                    char buf[128];
-                    sprintf_s(buf, "[SWEEP] req=(%.3f,%.3f) cand=%u hit=0\n", reqDx, reqDz, m_collisionStats.sweepCandCount);
-                    OutputDebugStringA(buf);
-                }
-                break;
-            }
-
-            // Hit detected
-            m_collisionStats.sweepHit = true;
-            m_collisionStats.sweepTOI = earliest.t;
-            m_collisionStats.sweepHitCubeIdx = earliestCubeIdx;
-            m_collisionStats.sweepNormalX = earliest.normalX;
-            m_collisionStats.sweepNormalZ = earliest.normalZ;
-
-            // Move to contact (with skin offset)
-            // FIX: Clamp skin offset to never eat more than 50% of TOI
-            // Prevents safeT=0 trap when TOI is small relative to SKIN_WIDTH/deltaMag
-            float skinParam = SKIN_WIDTH / deltaMag;
-            float clampedSkin = fminf(skinParam, earliest.t * 0.5f);
-            float safeT = fmaxf(0.0f, earliest.t - clampedSkin);
-            totalAppliedDx += dx * safeT;
-            totalAppliedDz += dz * safeT;
-
-            char buf[160];
-            sprintf_s(buf, "[SWEEP] req=(%.3f,%.3f) cand=%u hit=1 toi=%.4f n=(%.2f,%.2f) cube=%d\n",
-                reqDx, reqDz, m_collisionStats.sweepCandCount, earliest.t, earliest.normalX, earliest.normalZ, earliestCubeIdx);
-            OutputDebugStringA(buf);
-
-            // Compute slide for remaining motion
-            float remainT = 1.0f - safeT;
-            float remDx = dx * remainT;
-            float remDz = dz * remainT;
-
-            ClipVelocityXZ(remDx, remDz, earliest.normalX, earliest.normalZ);
-
-            m_collisionStats.sweepSlideDx = remDx;
-            m_collisionStats.sweepSlideDz = remDz;
-
-            if (sweep == 0)
-            {
-                char slideBuf[128];
-                sprintf_s(slideBuf, "[SLIDE] rem=(%.3f,%.3f) slide=(%.3f,%.3f)\n",
-                    dx * remainT, dz * remainT, remDx, remDz);
-                OutputDebugStringA(slideBuf);
-            }
-
-            // Continue with slide delta for next sweep iteration
-            dx = remDx;
-            dz = remDz;
-
-            // FIX: Set flags for caller to zero velocity (instead of zeroing here)
-            if (earliest.normalX != 0.0f) outZeroVelX = true;
-            if (earliest.normalZ != 0.0f) outZeroVelZ = true;
-        }
-
-        m_collisionStats.sweepAppliedDx = totalAppliedDx;
-        m_collisionStats.sweepAppliedDz = totalAppliedDz;
-        outAppliedDx = totalAppliedDx;
-        outAppliedDz = totalAppliedDz;
-    }
-
-    // Day3.12 Phase 4A: Capsule Y sweep for vertical movement (falling/jumping)
-    void WorldState::SweepY_Capsule(float reqDy, float& outAppliedDy)
-    {
-        const float SKIN_WIDTH = m_config.sweepSkinY;
-
-        float r = m_config.capsuleRadius;
-        float hh = m_config.capsuleHalfHeight;
-        float feetY = m_pawn.posY;
-        float totalHeight = 2.0f * r + 2.0f * hh;
-
-        // Reset Y sweep stats
-        m_collisionStats.sweepYHit = false;
-        m_collisionStats.sweepYTOI = 1.0f;
-        m_collisionStats.sweepYHitCubeIdx = -1;
-        m_collisionStats.sweepYReqDy = reqDy;
-        m_collisionStats.sweepYAppliedDy = 0.0f;
-
-        // Early-out for no movement
-        if (fabsf(reqDy) < 0.0001f)
-        {
-            outAppliedDy = 0.0f;
-            return;
-        }
-
-        // Build swept AABB for broadphase (capsule footprint + Y sweep range)
-        float curX = m_pawn.posX;
-        float curZ = m_pawn.posZ;
-        AABB sweptAABB;
-        sweptAABB.minX = curX - r;
-        sweptAABB.maxX = curX + r;
-        sweptAABB.minZ = curZ - r;
-        sweptAABB.maxZ = curZ + r;
-        if (reqDy < 0.0f)
-        {
-            // Falling: sweep from current bottom to proposed bottom
-            sweptAABB.minY = feetY + reqDy;
-            sweptAABB.maxY = feetY + totalHeight;
-        }
-        else
-        {
-            // Rising: sweep from current top to proposed top
-            sweptAABB.minY = feetY;
-            sweptAABB.maxY = feetY + totalHeight + reqDy;
-        }
-
-        std::vector<uint16_t> candidates = QuerySpatialHash(sweptAABB);
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-
-        // Find earliest Y hit
-        float earliestTOI = 1.0f;
-        int earliestCubeIdx = -1;
-
-        for (uint16_t cubeIdx : candidates)
-        {
-            AABB cube = GetCubeAABB(cubeIdx);
-
-            // XZ overlap check (capsule footprint vs cube)
-            float expMinX = cube.minX - r;
-            float expMaxX = cube.maxX + r;
-            float expMinZ = cube.minZ - r;
-            float expMaxZ = cube.maxZ + r;
-            if (curX < expMinX || curX > expMaxX || curZ < expMinZ || curZ > expMaxZ)
-                continue;  // No XZ overlap
-
-            float toi = 1.0f;
-            bool hit = false;
-
-            if (reqDy < 0.0f)
-            {
-                // Falling: capsule bottom (feetY) sweeps toward cube.maxY
-                // TOI = (cube.maxY - feetY) / reqDy (reqDy is negative)
-                // Hit occurs when feetY + reqDy*t = cube.maxY
-                // t = (cube.maxY - feetY) / reqDy
-                if (feetY > cube.maxY)  // Currently above cube top
-                {
-                    float dist = feetY - cube.maxY;
-                    toi = dist / (-reqDy);  // reqDy is negative, so -reqDy is positive
-                    if (toi >= 0.0f && toi <= 1.0f)
-                        hit = true;
-                }
-            }
-            else
-            {
-                // Rising: capsule top (feetY + totalHeight) sweeps toward cube.minY
-                // Hit occurs when (feetY + totalHeight) + reqDy*t = cube.minY
-                // t = (cube.minY - (feetY + totalHeight)) / reqDy
-                float headY = feetY + totalHeight;
-                if (headY < cube.minY)  // Currently below cube bottom
-                {
-                    float dist = cube.minY - headY;
-                    toi = dist / reqDy;
-                    if (toi >= 0.0f && toi <= 1.0f)
-                        hit = true;
-                }
-            }
-
-            if (hit && toi < earliestTOI)
-            {
-                earliestTOI = toi;
-                earliestCubeIdx = cubeIdx;
-            }
-            else if (hit && fabsf(toi - earliestTOI) < 1e-6f && cubeIdx < earliestCubeIdx)
-            {
-                earliestCubeIdx = cubeIdx;  // Tie-break by ID for determinism
-            }
-        }
-
-        // Also check floor collision when falling
-        if (reqDy < 0.0f)
-        {
-            // Floor is at Y = floorY. Feet landing on floor.
-            if (feetY > m_config.floorY &&
-                curX >= m_config.floorMinX && curX <= m_config.floorMaxX &&
-                curZ >= m_config.floorMinZ && curZ <= m_config.floorMaxZ)
-            {
-                float dist = feetY - m_config.floorY;
-                float floorTOI = dist / (-reqDy);
-                if (floorTOI >= 0.0f && floorTOI <= 1.0f && floorTOI < earliestTOI)
-                {
-                    earliestTOI = floorTOI;
-                    earliestCubeIdx = -2;  // Special marker for floor
-                }
-            }
-        }
-
-        if (earliestCubeIdx == -1 && earliestTOI >= 1.0f)
-        {
-            // No collision, apply full delta
-            outAppliedDy = reqDy;
-            m_collisionStats.sweepYAppliedDy = reqDy;
-
-            char buf[128];
-            sprintf_s(buf, "[SWEEP_Y] req=%.3f cand=%zu hit=0\n", reqDy, candidates.size());
-            OutputDebugStringA(buf);
-        }
-        else
-        {
-            // Hit detected
-            m_collisionStats.sweepYHit = true;
-            m_collisionStats.sweepYTOI = earliestTOI;
-            m_collisionStats.sweepYHitCubeIdx = earliestCubeIdx;
-
-            // Move to contact with skin offset
-            float deltaMag = fabsf(reqDy);
-            float skinParam = SKIN_WIDTH / deltaMag;
-            float clampedSkin = fminf(skinParam, earliestTOI * 0.5f);
-            float safeT = fmaxf(0.0f, earliestTOI - clampedSkin);
-            outAppliedDy = reqDy * safeT;
-            m_collisionStats.sweepYAppliedDy = outAppliedDy;
-
-            // Zero velocity on collision
-            if (reqDy < 0.0f && m_pawn.velY < 0.0f)
-                m_pawn.velY = 0.0f;  // Landing
-            if (reqDy > 0.0f && m_pawn.velY > 0.0f)
-                m_pawn.velY = 0.0f;  // Ceiling bump
-
-            char buf[128];
-            sprintf_s(buf, "[SWEEP_Y] req=%.3f cand=%zu hit=1 toi=%.4f cube=%d applied=%.3f\n",
-                reqDy, candidates.size(), earliestTOI, earliestCubeIdx, outAppliedDy);
-            OutputDebugStringA(buf);
-        }
-    }
-
-    // Day3.11 Phase 3 Fix: XZ-only cleanup pass for residual penetrations
-    void WorldState::ResolveXZ_Capsule_Cleanup(float& newX, float& newZ, float newY)
-    {
-        const float MAX_XZ_CLEANUP = 1.6f;  // Must cover capsuleRadius (1.4f) + margin
-        const float MIN_CLEANUP_DIST = 0.001f;
-
-        float r = m_config.capsuleRadius;
-        float hh = m_config.capsuleHalfHeight;
-
-        AABB capAABB;
-        capAABB.minX = newX - r;  capAABB.maxX = newX + r;
-        capAABB.minY = newY;       capAABB.maxY = newY + 2.0f * r + 2.0f * hh;
-        capAABB.minZ = newZ - r;  capAABB.maxZ = newZ + r;
-
-        std::vector<uint16_t> candidates = QuerySpatialHash(capAABB);
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-
-#ifdef DEBUG_Y_XZ_PEN
-        if (!candidates.empty())
-        {
-            char buf[128];
-            sprintf_s(buf, "[CLEANUP_QUERY] pos=(%.2f,%.2f,%.2f) cand=%zu\n",
-                newX, newY, newZ, candidates.size());
-            OutputDebugStringA(buf);
-        }
-#endif
-
-        float pushX = 0.0f, pushZ = 0.0f;
-
-        for (uint16_t idx : candidates)
-        {
-            AABB cube = GetCubeAABB(idx);
-            CapsuleOverlapResult ov = CapsuleAABBOverlap(newY, newX, newZ, r, hh, cube);
-#ifdef DEBUG_Y_XZ_PEN
-            {
-                char buf[180];
-                sprintf_s(buf, "[CLEANUP_TEST] idx=%d hit=%d depth=%.4f n=(%.2f,%.2f,%.2f) cube=(%.1f-%.1f,%.1f-%.1f,%.1f-%.1f)\n",
-                    idx, ov.hit ? 1 : 0, ov.depth, ov.normal.x, ov.normal.y, ov.normal.z,
-                    cube.minX, cube.maxX, cube.minY, cube.maxY, cube.minZ, cube.maxZ);
-                OutputDebugStringA(buf);
-            }
-#endif
-            if (ov.hit && ov.depth > MIN_CLEANUP_DIST)
-            {
-                char buf[160];
-                sprintf_s(buf, "[CLEANUP_CUBE] idx=%d depth=%.4f n=(%.3f,%.3f,%.3f)\n",
-                    idx, ov.depth, ov.normal.x, ov.normal.y, ov.normal.z);
-                OutputDebugStringA(buf);
-                // XZ components only
-                pushX += ov.normal.x * ov.depth;
-                pushZ += ov.normal.z * ov.depth;
-            }
-        }
-
-        float mag = sqrtf(pushX * pushX + pushZ * pushZ);
-        if (mag > MAX_XZ_CLEANUP)
-        {
-            float s = MAX_XZ_CLEANUP / mag;
-            pushX *= s;
-            pushZ *= s;
-        }
-
-        if (mag > MIN_CLEANUP_DIST)
-        {
-            newX += pushX;
-            newZ += pushZ;
-            char buf[96];
-            sprintf_s(buf, "[XZ_CLEANUP] push=(%.4f,%.4f)\n", pushX, pushZ);
-            OutputDebugStringA(buf);
-        }
-    }
-
-    // Day3.11 Phase 3 Debug: Scan max XZ penetration depth (for instrumentation)
-    float WorldState::ScanMaxXZPenetration(float posX, float posY, float posZ)
-    {
-        float r = m_config.capsuleRadius;
-        float hh = m_config.capsuleHalfHeight;
-
-        AABB capAABB;
-        capAABB.minX = posX - r;  capAABB.maxX = posX + r;
-        capAABB.minY = posY;       capAABB.maxY = posY + 2.0f * r + 2.0f * hh;
-        capAABB.minZ = posZ - r;  capAABB.maxZ = posZ + r;
-
-        std::vector<uint16_t> candidates = QuerySpatialHash(capAABB);
-
-        float maxPen = 0.0f;
-        for (uint16_t idx : candidates)
-        {
-            AABB cube = GetCubeAABB(idx);
-            CapsuleOverlapResult ov = CapsuleAABBOverlap(posY, posX, posZ, r, hh, cube);
-            if (ov.hit)
-            {
-                // XZ component of penetration (ignore Y-dominant contacts)
-                float xzNormalMag = sqrtf(ov.normal.x * ov.normal.x + ov.normal.z * ov.normal.z);
-                if (xzNormalMag > 0.3f)  // Wall-like contact
-                {
-                    float xzPen = ov.depth * xzNormalMag;
-                    if (xzPen > maxPen) maxPen = xzPen;
-                }
-            }
-        }
-        return maxPen;
-    }
-
-    // Day3.12 Phase 4B: Check if collision normal is wall-like (horizontal)
-    bool WorldState::IsWallLike(float normalX, float normalZ) const
-    {
-        // Wall-like = normal is mostly horizontal (Y component small)
-        // Since we only have XZ components from sweep, check magnitude
-        float xzMag = sqrtf(normalX * normalX + normalZ * normalZ);
-        return xzMag > 0.8f;  // Normal is >80% horizontal
-    }
-
-    // Day3.12 Phase 4B: Probe Y sweep at arbitrary pose (no stats mutation)
-    float WorldState::ProbeY(float posX, float posY, float posZ, float reqDy, int& hitCubeIdx)
-    {
-        const float SKIN_WIDTH = m_config.sweepSkinY;
-        float r = m_config.capsuleRadius;
-        float hh = m_config.capsuleHalfHeight;
-        float totalHeight = 2.0f * r + 2.0f * hh;
-
-        hitCubeIdx = -1;
-
-        if (fabsf(reqDy) < 0.0001f)
-            return 0.0f;
-
-        // Build swept AABB for broadphase
-        AABB sweptAABB;
-        sweptAABB.minX = posX - r;
-        sweptAABB.maxX = posX + r;
-        sweptAABB.minZ = posZ - r;
-        sweptAABB.maxZ = posZ + r;
-        if (reqDy < 0.0f)
-        {
-            sweptAABB.minY = posY + reqDy;
-            sweptAABB.maxY = posY + totalHeight;
-        }
-        else
-        {
-            sweptAABB.minY = posY;
-            sweptAABB.maxY = posY + totalHeight + reqDy;
-        }
-
-        std::vector<uint16_t> candidates = QuerySpatialHash(sweptAABB);
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-
-        float earliestTOI = 1.0f;
-        int earliestCube = -1;
-
-        for (uint16_t cubeIdx : candidates)
-        {
-            AABB cube = GetCubeAABB(cubeIdx);
-
-            // XZ overlap check
-            float expMinX = cube.minX - r;
-            float expMaxX = cube.maxX + r;
-            float expMinZ = cube.minZ - r;
-            float expMaxZ = cube.maxZ + r;
-            if (posX < expMinX || posX > expMaxX || posZ < expMinZ || posZ > expMaxZ)
-                continue;
-
-            float toi = 1.0f;
-            bool hit = false;
-
-            if (reqDy < 0.0f)
-            {
-                // Falling
-                if (posY > cube.maxY)
-                {
-                    float dist = posY - cube.maxY;
-                    toi = dist / (-reqDy);
-                    if (toi >= 0.0f && toi <= 1.0f)
-                        hit = true;
-                }
-            }
-            else
-            {
-                // Rising
-                float headY = posY + totalHeight;
-                if (headY < cube.minY)
-                {
-                    float dist = cube.minY - headY;
-                    toi = dist / reqDy;
-                    if (toi >= 0.0f && toi <= 1.0f)
-                        hit = true;
-                }
-            }
-
-            if (hit && toi < earliestTOI)
-            {
-                earliestTOI = toi;
-                earliestCube = cubeIdx;
-            }
-            else if (hit && fabsf(toi - earliestTOI) < 1e-6f && cubeIdx < earliestCube)
-            {
-                earliestCube = cubeIdx;
-            }
-        }
-
-        // Also check floor when falling
-        if (reqDy < 0.0f && posY > m_config.floorY &&
-            posX >= m_config.floorMinX && posX <= m_config.floorMaxX &&
-            posZ >= m_config.floorMinZ && posZ <= m_config.floorMaxZ)
-        {
-            float dist = posY - m_config.floorY;
-            float floorTOI = dist / (-reqDy);
-            if (floorTOI >= 0.0f && floorTOI <= 1.0f && floorTOI < earliestTOI)
-            {
-                earliestTOI = floorTOI;
-                earliestCube = -2;  // Floor marker
-            }
-        }
-
-        if (earliestCube == -1 && earliestTOI >= 1.0f)
-        {
-            hitCubeIdx = -1;
-            return reqDy;
-        }
-
-        hitCubeIdx = earliestCube;
-        float deltaMag = fabsf(reqDy);
-        float skinParam = SKIN_WIDTH / deltaMag;
-        float clampedSkin = fminf(skinParam, earliestTOI * 0.5f);
-        float safeT = fmaxf(0.0f, earliestTOI - clampedSkin);
-        return reqDy * safeT;
-    }
-
-    // Day3.12 Phase 4B: Probe XZ sweep at arbitrary pose (no stats mutation)
-    float WorldState::ProbeXZ(float posX, float posY, float posZ, float reqDx, float reqDz,
-                              float& outNormalX, float& outNormalZ, int& hitCubeIdx)
-    {
-        const float SKIN_WIDTH = 0.01f;
-        float r = m_config.capsuleRadius;
-        float hh = m_config.capsuleHalfHeight;
-
-        outNormalX = 0.0f;
-        outNormalZ = 0.0f;
-        hitCubeIdx = -1;
-
-        float deltaMag = sqrtf(reqDx * reqDx + reqDz * reqDz);
-        if (deltaMag < 0.0001f)
-            return 1.0f;  // Return TOI=1 for no movement
-
-        // Build swept AABB for broadphase
-        AABB sweptAABB;
-        sweptAABB.minX = fminf(posX - r, posX - r + reqDx);
-        sweptAABB.maxX = fmaxf(posX + r, posX + r + reqDx);
-        sweptAABB.minY = posY;
-        sweptAABB.maxY = posY + 2.0f * r + 2.0f * hh;
-        sweptAABB.minZ = fminf(posZ - r, posZ - r + reqDz);
-        sweptAABB.maxZ = fmaxf(posZ + r, posZ + r + reqDz);
-
-        std::vector<uint16_t> candidates = QuerySpatialHash(sweptAABB);
-        std::sort(candidates.begin(), candidates.end());
-        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-
-        SweepResult earliest = { false, 1.0f, 0.0f, 0.0f };
-        int earliestCube = -1;
-
-        for (uint16_t cubeIdx : candidates)
-        {
-            AABB cube = GetCubeAABB(cubeIdx);
-            // Use body-only Y overlap (not grounded for probe)
-            SweepResult hit = SweepCapsuleVsCubeXZ(posX, posZ, posY, r, hh, reqDx, reqDz, cube, false);
-            if (hit.hit)
-            {
-                if (hit.t < earliest.t || (!earliest.hit))
-                {
-                    earliest = hit;
-                    earliestCube = cubeIdx;
-                }
-                else if (fabsf(hit.t - earliest.t) < 1e-6f && cubeIdx < earliestCube)
-                {
-                    earliest = hit;
-                    earliestCube = cubeIdx;
-                }
-            }
-        }
-
-        if (!earliest.hit)
-        {
-            return 1.0f;  // Full travel, no hit
-        }
-
-        hitCubeIdx = earliestCube;
-        outNormalX = earliest.normalX;
-        outNormalZ = earliest.normalZ;
-
-        // Return TOI with skin offset
-        float skinParam = SKIN_WIDTH / deltaMag;
-        float clampedSkin = fminf(skinParam, earliest.t * 0.5f);
-        return fmaxf(0.0f, earliest.t - clampedSkin);
-    }
-
-    // Day3.12 Phase 4B: Try step-up maneuver
-    bool WorldState::TryStepUp_Capsule(float startX, float startY, float startZ,
-                                        float reqDx, float reqDz,
-                                        float& outX, float& outY, float& outZ)
-    {
-        float maxStep = m_config.maxStepHeight;
-        float r = m_config.capsuleRadius;
-        float hh = m_config.capsuleHalfHeight;
-        const float SETTLE_EXTRA = 2.0f * m_config.sweepSkinY;
-
-        // Reset step diagnostics
-        m_collisionStats.stepTry = true;
-        m_collisionStats.stepSuccess = false;
-        m_collisionStats.stepFailMask = STEP_FAIL_NONE;
-        m_collisionStats.stepHeightUsed = 0.0f;
-        m_collisionStats.stepCubeIdx = -1;
-
-        // Phase 1: Probe UP by maxStepHeight
-        int upHitCube = -1;
-        float appliedUpDy = ProbeY(startX, startY, startZ, maxStep, upHitCube);
-
-        if (upHitCube != -1 && appliedUpDy < maxStep * 0.9f)
-        {
-            // Ceiling blocked us before reaching step height
-            m_collisionStats.stepFailMask |= STEP_FAIL_UP_BLOCKED;
-            char buf[128];
-            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (UP_BLOCKED appliedUp=%.3f)\n",
-                m_collisionStats.stepFailMask, appliedUpDy);
-            OutputDebugStringA(buf);
-            return false;
-        }
-
-        float raisedY = startY + appliedUpDy;
-
-        // Phase 2: Probe FORWARD at raised height
-        float fwdNormalX = 0.0f, fwdNormalZ = 0.0f;
-        int fwdHitCube = -1;
-        float fwdTOI = ProbeXZ(startX, raisedY, startZ, reqDx, reqDz, fwdNormalX, fwdNormalZ, fwdHitCube);
-
-        // Check if forward is still blocked (same obstacle or minimal progress)
-        if (fwdHitCube != -1 && fwdTOI < 0.1f)
-        {
-            // Still blocked - obstacle is too tall
-            m_collisionStats.stepFailMask |= STEP_FAIL_FWD_BLOCKED;
-            char buf[128];
-            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (FWD_BLOCKED toi=%.3f cube=%d)\n",
-                m_collisionStats.stepFailMask, fwdTOI, fwdHitCube);
-            OutputDebugStringA(buf);
-            return false;
-        }
-
-        float fwdX = startX + reqDx * fwdTOI;
-        float fwdZ = startZ + reqDz * fwdTOI;
-
-        // Phase 3: Settle DOWN to find ground
-        float settleMax = maxStep + SETTLE_EXTRA;
-        int downHitCube = -1;
-        float appliedDownDy = ProbeY(fwdX, raisedY, fwdZ, -settleMax, downHitCube);
-
-        if (downHitCube == -1)
-        {
-            // No ground found within settle range
-            m_collisionStats.stepFailMask |= STEP_FAIL_NO_GROUND;
-            char buf[128];
-            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (NO_GROUND settleMax=%.3f)\n",
-                m_collisionStats.stepFailMask, settleMax);
-            OutputDebugStringA(buf);
-            return false;
-        }
-
-        float settledY = raisedY + appliedDownDy;
-
-        // Phase 4: Validate - don't step into holes (settledY >= startY - epsilon)
-        const float HOLE_EPSILON = 0.05f;
-        if (settledY < startY - HOLE_EPSILON)
-        {
-            // This would be stepping down into a hole, not up onto a step
-            m_collisionStats.stepFailMask |= STEP_FAIL_NO_GROUND;
-            char buf[128];
-            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (HOLE settledY=%.3f < startY=%.3f)\n",
-                m_collisionStats.stepFailMask, settledY, startY);
-            OutputDebugStringA(buf);
-            return false;
-        }
-
-        // Optional: Check for residual penetration at final pose
-        float penCheck = ScanMaxXZPenetration(fwdX, settledY, fwdZ);
-        if (penCheck > 0.01f)
-        {
-            m_collisionStats.stepFailMask |= STEP_FAIL_PENETRATION;
-            char buf[128];
-            sprintf_s(buf, "[STEP_UP] try=1 ok=0 mask=0x%02X (PENETRATION pen=%.4f)\n",
-                m_collisionStats.stepFailMask, penCheck);
-            OutputDebugStringA(buf);
-            return false;
-        }
-
-        // Success! Commit the step-up
-        outX = fwdX;
-        outY = settledY;
-        outZ = fwdZ;
-
-        m_collisionStats.stepSuccess = true;
-        m_collisionStats.stepHeightUsed = settledY - startY;
-        m_collisionStats.stepCubeIdx = downHitCube;
-
-        char buf[160];
-        sprintf_s(buf, "[STEP_UP] try=1 ok=1 mask=0x00 h=%.3f cube=%d pos=(%.2f,%.2f,%.2f)\n",
-            m_collisionStats.stepHeightUsed, downHitCube, outX, outY, outZ);
-        OutputDebugStringA(buf);
-
-        return true;
-    }
+    // PR2.8: QuerySupport, ResolveAxis, ResolveOverlaps_Capsule, SweepXZ_Capsule,
+    // SweepY_Capsule, ResolveXZ_Capsule_Cleanup, ScanMaxXZPenetration, IsWallLike,
+    // ProbeY, ProbeXZ, TryStepUp_Capsule, BuildPawnAABB — all moved to
+    // Engine/Collision/CapsuleMovement.cpp
 
     void WorldState::TickFrame(float frameDt)
     {
