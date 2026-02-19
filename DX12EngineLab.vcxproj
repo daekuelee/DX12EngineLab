@@ -138,6 +138,9 @@
     <ClInclude Include="Engine\Collision\CollisionTypes.h" />
     <ClInclude Include="Engine\Collision\CollisionSceneView.h" />
     <ClInclude Include="Engine\Collision\CapsuleMovement.h" />
+    <ClInclude Include="Engine\Collision\CollisionWorld.h" />
+    <ClInclude Include="Engine\Collision\CctTypes.h" />
+    <ClInclude Include="Engine\Collision\KinematicCharacterController.h" />
     <ClInclude Include="Engine\Collision\SceneQuery\SqMath.h" />
     <ClInclude Include="Engine\Collision\SceneQuery\SqTypes.h" />
     <ClInclude Include="Engine\Collision\SceneQuery\SqDistance.h" />
@@ -183,6 +186,8 @@
     <ClCompile Include="Engine\FrameClock.cpp" />
     <ClCompile Include="Engine\WorldState.cpp" />
     <ClCompile Include="Engine\Collision\CapsuleMovement.cpp" />
+    <ClCompile Include="Engine\Collision\CollisionWorld.cpp" />
+    <ClCompile Include="Engine\Collision\KinematicCharacterController.cpp" />
     <ClCompile Include="Engine\WorldTypes_compilecheck.cpp" />
     <ClCompile Include="Input\HotkeyRouter.cpp" />
     <ClCompile Include="Input\GameplayInputSystem.cpp" />

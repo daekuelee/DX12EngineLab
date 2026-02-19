@@ -1,6 +1,6 @@
 #include "WorldState.h"
 #include "Collision/CapsuleMovement.h"
-#include "Collision/SceneQuery/SqQuery.h"  // PR3.7: Full SceneQuery stack
+#include "Collision/CollisionWorld.h"
 #include "../Renderer/DX12/Dx12Context.h"  // For HUDSnapshot
 #include <cmath>
 #include <cstdio>
@@ -60,8 +60,29 @@ public:
         // Part 2: Build spatial grid for cube collision
         BuildSpatialGrid();
 
-        // PR3.7: Build SceneQuery BVH (parallel accel structure, same cube AABBs)
-        BuildSceneQueryBVH();
+        // Phase A: Build CollisionWorld (BVH from cube AABBs)
+        BuildCollisionWorld();
+
+        // Phase B: Construct KCC (shadow controller, ticked in _DEBUG)
+        {
+            Collision::CctCapsule geom;
+            geom.radius     = m_config.capsuleRadius;
+            geom.halfHeight = m_config.capsuleHalfHeight;
+
+            Collision::CctConfig cctCfg;
+            cctCfg.gravity    = m_config.gravity;
+            cctCfg.jumpSpeed  = m_config.jumpVelocity;
+            cctCfg.stepHeight = m_config.maxStepHeight;
+            cctCfg.fallSpeed  = 55.0f;
+
+            m_cct = std::make_unique<Collision::KinematicCharacterController>(
+                &m_collisionWorld, geom, cctCfg);
+
+            // Sync initial position to pawn spawn
+            Collision::CctState initState;
+            initState.posFeet = {m_pawn.posX, m_pawn.posY, m_pawn.posZ};
+            m_cct->setState(initState);
+        }
 
         // Day3.12: Mutual exclusion - StepUpGridTest overrides T1/T2/T3 fixtures
         if (m_config.enableStepUpGridTest)
@@ -227,6 +248,13 @@ public:
             m_justJumpedThisTick = true;  // Day3.5: Prevent support query from clearing onGround
         }
 
+        // Phase B: save lateral walkMove for KCC shadow (before solver overwrites pawn)
+#if defined(_DEBUG)
+        Collision::CctInput cctInput;
+        cctInput.walkMove = {m_pawn.velX * fixedDt, 0.0f, m_pawn.velZ * fixedDt};
+        cctInput.jump = input.jump;
+#endif
+
         // --- Main collision solver (PR2.8: module call) ---
         {
             WorldStateSceneAdapter sceneView(*this);
@@ -311,6 +339,50 @@ public:
             m_pawn.onGround = result.onGround;
             m_didFloorClampThisTick = m_collisionStats.snappedThisTick;
         }
+
+        // Phase B: KCC shadow path — tick controller, compare with old path
+#if defined(_DEBUG)
+        if (m_cct)
+        {
+            m_cct->Tick(cctInput, fixedDt);
+
+            const auto& cctState = m_cct->getState();
+            const auto& cctDebug = m_cct->getDebug();
+
+            float posDiff = fabsf(m_pawn.posX - cctState.posFeet.x)
+                          + fabsf(m_pawn.posY - cctState.posFeet.y)
+                          + fabsf(m_pawn.posZ - cctState.posFeet.z);
+            float velDiff = fabsf(m_pawn.velX - cctState.vel.x)
+                          + fabsf(m_pawn.velY - cctState.vel.y)
+                          + fabsf(m_pawn.velZ - cctState.vel.z);
+
+            // Throttled summary every 600 ticks (10s @ 60Hz)
+            static uint32_t s_cctTicks = 0;
+            static float s_cctMaxPos = 0.0f;
+            static float s_cctMaxVel = 0.0f;
+            static uint32_t s_cctGndDiffs = 0;
+            s_cctTicks++;
+            if (posDiff > s_cctMaxPos) s_cctMaxPos = posDiff;
+            if (velDiff > s_cctMaxVel) s_cctMaxVel = velDiff;
+            if (m_pawn.onGround != cctState.onGround) s_cctGndDiffs++;
+
+            if (s_cctTicks % 600 == 0)
+            {
+                char buf[320];
+                sprintf_s(buf,
+                    "[CCT_COMPARE] ticks=%u maxPosDiff=%.4f maxVelDiff=%.4f gndDiffs=%u "
+                    "cctPos=(%.2f,%.2f,%.2f) cctGnd=%d dxCorr=%.6f vDotUp=%.4f\n",
+                    s_cctTicks, s_cctMaxPos, s_cctMaxVel, s_cctGndDiffs,
+                    cctState.posFeet.x, cctState.posFeet.y, cctState.posFeet.z,
+                    cctState.onGround ? 1 : 0,
+                    cctDebug.dxCorrMag, cctDebug.vNextDotUp);
+                OutputDebugStringA(buf);
+                s_cctMaxPos = 0.0f;
+                s_cctMaxVel = 0.0f;
+                s_cctGndDiffs = 0;
+            }
+        }
+#endif
 
         m_justJumpedThisTick = false;  // Reset for next tick
 
@@ -435,6 +507,14 @@ public:
         m_pawn.onGround = false;
         m_collisionStats = CollisionStats{};
 
+        // Phase B: Sync KCC shadow state on respawn
+        if (m_cct)
+        {
+            Collision::CctState respawn;
+            respawn.posFeet = {m_config.spawnX, m_config.spawnY, m_config.spawnZ};
+            m_cct->setState(respawn);
+        }
+
         char buf[128];
         sprintf_s(buf, "[RESPAWN] ctrl=Capsule stats_cleared=1 pos=(%.1f,%.1f,%.1f)\n",
                   m_pawn.posX, m_pawn.posY, m_pawn.posZ);
@@ -469,33 +549,27 @@ public:
         OutputDebugStringA("[Collision] Built spatial hash: 10000 cubes in 100x100 grid\n");
     }
 
-    // PR3.7: Build SceneQuery BVH from the same 10000 cube AABBs.
-    // Cubes are fed as PrimType::Aabb. Narrowphase triangulates on-the-fly.
-    void WorldState::BuildSceneQueryBVH()
+    // Phase A: Build CollisionWorld from the same 10000 cube AABBs.
+    // Cubes are fed as ColliderDesc (Solid AABB). BVH built inside CollisionWorld.
+    void WorldState::BuildCollisionWorld()
     {
-        namespace sq = Collision::sq;
+        namespace coll = Collision;
 
-        // Build AABB array from the same cube geometry as spatial hash
         const uint32_t cubeCount = GRID_SIZE * GRID_SIZE;
-        m_sqAabbs.resize(cubeCount);
+        std::vector<coll::ColliderDesc> descs(cubeCount);
         for (uint32_t i = 0; i < cubeCount; ++i) {
             AABB engineAABB = GetCubeAABB(static_cast<uint16_t>(i));
-            m_sqAabbs[i] = {
+            descs[i].bounds = {
                 engineAABB.minX, engineAABB.minY, engineAABB.minZ,
                 engineAABB.maxX, engineAABB.maxY, engineAABB.maxZ
             };
+            descs[i].shape   = coll::ColliderShape::AABB;
+            descs[i].kind    = coll::ColliderKind::Solid;
+            descs[i].mask    = coll::Q_Solid;
+            descs[i].userTag = i;
         }
 
-        // Build BVH: AABBs only, no OBBs or triangles
-        m_bvh = sq::BuildStaticBVH(
-            m_sqAabbs.data(), cubeCount,
-            nullptr, 0,   // no OBBs
-            nullptr, 0);  // no triangles
-
-        char buf[128];
-        sprintf_s(buf, "[SQ_BVH] built %u nodes from %u prims\n",
-                  (uint32_t)m_bvh.nodes.size(), (uint32_t)m_bvh.prims.size());
-        OutputDebugStringA(buf);
+        m_collisionWorld.BuildStatic(descs);
     }
 
     int WorldState::WorldToCellX(float x) const

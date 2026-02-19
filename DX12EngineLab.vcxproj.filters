@@ -99,6 +99,15 @@
     <ClInclude Include="Engine\Collision\CapsuleMovement.h">
       <Filter>Engine\Collision</Filter>
     </ClInclude>
+    <ClInclude Include="Engine\Collision\CollisionWorld.h">
+      <Filter>Engine\Collision</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\CctTypes.h">
+      <Filter>Engine\Collision</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\KinematicCharacterController.h">
+      <Filter>Engine\Collision</Filter>
+    </ClInclude>
     <ClInclude Include="Engine\Collision\SceneQuery\SqMath.h">
       <Filter>Engine\Collision\SceneQuery</Filter>
     </ClInclude>
@@ -135,6 +144,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Engine\Collision\CapsuleMovement.cpp">
+      <Filter>Engine\Collision</Filter>
+    </ClCompile>
+    <ClCompile Include="Engine\Collision\CollisionWorld.cpp">
+      <Filter>Engine\Collision</Filter>
+    </ClCompile>
+    <ClCompile Include="Engine\Collision\KinematicCharacterController.cpp">
       <Filter>Engine\Collision</Filter>
     </ClCompile>
     <ClCompile Include="Renderer\DX12\Dx12Context.cpp">

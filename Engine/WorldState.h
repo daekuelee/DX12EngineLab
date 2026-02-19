@@ -2,11 +2,13 @@
 
 #include <DirectXMath.h>
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include "InputState.h"
 #include "WorldTypes.h"
 #include "Collision/CapsuleMovement.h"
-#include "Collision/SceneQuery/SqBVH.h"
+#include "Collision/CollisionWorld.h"
+#include "Collision/KinematicCharacterController.h"
 
 // Forward declare HUDSnapshot from Renderer namespace
 namespace Renderer { struct HUDSnapshot; }
@@ -142,10 +144,12 @@ namespace Engine
         AABB GetCubeAABB(uint16_t cubeIdx) const;
         std::vector<uint16_t> QuerySpatialHash(const AABB& pawn) const;
 
-        // PR3.7: SceneQuery BVH (built once at init alongside spatial hash)
-        std::vector<Collision::sq::AABB> m_sqAabbs;  // owned storage; BVH borrows pointer
-        Collision::sq::StaticBVH m_bvh;
-        void BuildSceneQueryBVH();
+        // Phase A: CollisionWorld owns BVH + collider registry
+        Collision::CollisionWorld m_collisionWorld;
+        void BuildCollisionWorld();
+
+        // Phase B: KCC shadow controller (ticked alongside old path in _DEBUG)
+        std::unique_ptr<Collision::KinematicCharacterController> m_cct;
 
         // PR2.8: SceneView adapter needs friendship for private spatial hash access
         friend class WorldStateSceneAdapter;
