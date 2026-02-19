@@ -138,6 +138,15 @@
     <ClInclude Include="Engine\Collision\CollisionTypes.h" />
     <ClInclude Include="Engine\Collision\CollisionSceneView.h" />
     <ClInclude Include="Engine\Collision\CapsuleMovement.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqMath.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqTypes.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqDistance.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqIntersect.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqPrimitiveTests.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqNarrowphase.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqBVH.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqBroadphase.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqQuery.h" />
     <ClInclude Include="Engine\InputSampler.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="Input\HotkeyRouter.h" />

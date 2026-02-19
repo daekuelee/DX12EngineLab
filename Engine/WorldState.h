@@ -6,6 +6,7 @@
 #include "InputState.h"
 #include "WorldTypes.h"
 #include "Collision/CapsuleMovement.h"
+#include "Collision/SceneQuery/SqBVH.h"
 
 // Forward declare HUDSnapshot from Renderer namespace
 namespace Renderer { struct HUDSnapshot; }
@@ -140,6 +141,11 @@ namespace Engine
         int WorldToCellZ(float z) const;
         AABB GetCubeAABB(uint16_t cubeIdx) const;
         std::vector<uint16_t> QuerySpatialHash(const AABB& pawn) const;
+
+        // PR3.7: SceneQuery BVH (built once at init alongside spatial hash)
+        std::vector<Collision::sq::AABB> m_sqAabbs;  // owned storage; BVH borrows pointer
+        Collision::sq::StaticBVH m_bvh;
+        void BuildSceneQueryBVH();
 
         // PR2.8: SceneView adapter needs friendship for private spatial hash access
         friend class WorldStateSceneAdapter;

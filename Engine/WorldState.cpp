@@ -1,5 +1,6 @@
 #include "WorldState.h"
 #include "Collision/CapsuleMovement.h"
+#include "Collision/SceneQuery/SqQuery.h"  // PR3.7: Full SceneQuery stack
 #include "../Renderer/DX12/Dx12Context.h"  // For HUDSnapshot
 #include <cmath>
 #include <cstdio>
@@ -58,6 +59,9 @@ public:
 
         // Part 2: Build spatial grid for cube collision
         BuildSpatialGrid();
+
+        // PR3.7: Build SceneQuery BVH (parallel accel structure, same cube AABBs)
+        BuildSceneQueryBVH();
 
         // Day3.12: Mutual exclusion - StepUpGridTest overrides T1/T2/T3 fixtures
         if (m_config.enableStepUpGridTest)
@@ -463,6 +467,35 @@ public:
 
         m_spatialGridBuilt = true;
         OutputDebugStringA("[Collision] Built spatial hash: 10000 cubes in 100x100 grid\n");
+    }
+
+    // PR3.7: Build SceneQuery BVH from the same 10000 cube AABBs.
+    // Cubes are fed as PrimType::Aabb. Narrowphase triangulates on-the-fly.
+    void WorldState::BuildSceneQueryBVH()
+    {
+        namespace sq = Collision::sq;
+
+        // Build AABB array from the same cube geometry as spatial hash
+        const uint32_t cubeCount = GRID_SIZE * GRID_SIZE;
+        m_sqAabbs.resize(cubeCount);
+        for (uint32_t i = 0; i < cubeCount; ++i) {
+            AABB engineAABB = GetCubeAABB(static_cast<uint16_t>(i));
+            m_sqAabbs[i] = {
+                engineAABB.minX, engineAABB.minY, engineAABB.minZ,
+                engineAABB.maxX, engineAABB.maxY, engineAABB.maxZ
+            };
+        }
+
+        // Build BVH: AABBs only, no OBBs or triangles
+        m_bvh = sq::BuildStaticBVH(
+            m_sqAabbs.data(), cubeCount,
+            nullptr, 0,   // no OBBs
+            nullptr, 0);  // no triangles
+
+        char buf[128];
+        sprintf_s(buf, "[SQ_BVH] built %u nodes from %u prims\n",
+                  (uint32_t)m_bvh.nodes.size(), (uint32_t)m_bvh.prims.size());
+        OutputDebugStringA(buf);
     }
 
     int WorldState::WorldToCellX(float x) const
