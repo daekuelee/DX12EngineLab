@@ -20,12 +20,6 @@ namespace Engine
         void Tick();
         void Shutdown();
 
-        // Mouse input handler (called from WndProc)
-        void OnMouseMove(int x, int y);
-
-        // Day3.11: Controller mode toggle (forwarded from WndProc)
-        void ToggleControllerMode();
-
         // Day3.12+: Step-up grid test toggle (forwarded from WndProc)
         void ToggleStepUpGridTest();
 
@@ -37,14 +31,6 @@ namespace Engine
         // Day3: World state and fixed-step simulation
         WorldState m_worldState;
         float m_accumulator = 0.0f;
-        bool m_prevJump = false;  // Previous frame's space key state for edge detection
-
-        // Mouse look state
-        int m_lastMouseX = 0;
-        int m_lastMouseY = 0;
-        bool m_mouseInitialized = false;
-        float m_pendingMouseDeltaX = 0.0f;
-        float m_pendingMouseDeltaY = 0.0f;
 
         // [DT-SSOT] Frame clock owns delta-time measurement
         FrameClock m_frameClock;

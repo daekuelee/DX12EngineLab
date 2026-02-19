@@ -70,6 +70,13 @@ namespace GameplayActionSystem
     static float s_pendingMouseDX = 0.0f;
     static float s_pendingMouseDY = 0.0f;
 
+#if defined(_DEBUG)
+    // PR2.5: Per-frame proof accumulators (reset in StageFrameIntent)
+    static float s_proofSumKbYaw = 0.0f;
+    static float s_proofSumMouseYaw = 0.0f;
+    static uint32_t s_proofJumpFiredCount = 0;
+#endif
+
     //-------------------------------------------------------------------------
     // Public API
     //-------------------------------------------------------------------------
@@ -137,6 +144,12 @@ namespace GameplayActionSystem
         s_jumpFiredThisFrame = false;
         s_blockedThisFrame = imguiBlocksGameplay;
         s_bufferFlushedByBlock = false;
+
+#if defined(_DEBUG)
+        s_proofSumKbYaw = 0.0f;
+        s_proofSumMouseYaw = 0.0f;
+        s_proofJumpFiredCount = 0;
+#endif
 
         if (imguiBlocksGameplay)
         {
@@ -259,35 +272,33 @@ namespace GameplayActionSystem
             input.moveZ = s_cached.moveZ;
             input.sprint = s_cached.sprintDown;
 
-            // [LOOK-UNIFIED] Compute yawDelta/pitchDelta on first step only
-            // Sign matches old ApplyMouseLook: mouse right -> yaw decreases (turn right)
-            if (isFirstStep && isThirdPerson)
+            // [LOOK-UNIFIED] Decomposed look delta:
+            //   Keyboard yaw: CONTINUOUS RATE — integrated every step
+            //   Mouse yaw/pitch: IMPULSE — consumed on step 0 only
+            if (isThirdPerson)
             {
-                const float sens = s_controlConfig.mouseSensitivityRadPerPixel;
                 const float rate = s_controlConfig.keyboardYawRateRadPerSec;
+                float kbYaw = s_cached.yawAxis * rate * fixedDt;
+                input.yawDelta = kbYaw;
 
-                // Mouse: pixel->radian, sign matches ApplyMouseLook (negative = turn right)
-                // Keyboard yaw: Q=+1, E=-1 (from GameplayInputSystem)
-                input.yawDelta = -(s_pendingMouseDX * sens) + (s_cached.yawAxis * rate * fixedDt);
-                input.pitchDelta = -(s_pendingMouseDY * sens);
+                float mouseYaw = 0.0f;
+                if (isFirstStep)
+                {
+                    const float sens = s_controlConfig.mouseSensitivityRadPerPixel;
+                    mouseYaw = -(s_pendingMouseDX * sens);
+                    input.yawDelta += mouseYaw;
+                    input.pitchDelta = -(s_pendingMouseDY * sens);
 
-                // Consume pending mouse (only consumed once per frame)
-                s_pendingMouseDX = 0.0f;
-                s_pendingMouseDY = 0.0f;
+                    // Consume pending mouse (once per frame)
+                    s_pendingMouseDX = 0.0f;
+                    s_pendingMouseDY = 0.0f;
+                }
 
 #if defined(_DEBUG)
-                // [PROOF-LOOK-ONCE] Throttled proof log when look deltas active
-                static uint32_t s_lookProofCounter = 0;
-                if ((input.yawDelta != 0.0f || input.pitchDelta != 0.0f) && (++s_lookProofCounter % 60 == 0))
-                {
-                    char buf[128];
-                    sprintf_s(buf, "[PROOF-LOOK-ONCE] yaw=%.4f pitch=%.4f isFirstStep=true\n",
-                        input.yawDelta, input.pitchDelta);
-                    OutputDebugStringA(buf);
-                }
+                s_proofSumKbYaw += kbYaw;
+                if (isFirstStep) s_proofSumMouseYaw = mouseYaw;
 #endif
             }
-            // else: yawDelta/pitchDelta remain 0 (subsequent steps get no look input)
         }
 
         // Coyote time logic: start timer when leaving ground
@@ -309,6 +320,9 @@ namespace GameplayActionSystem
         {
             input.jump = true;
             s_jumpFiredThisFrame = true;
+#if defined(_DEBUG)
+            s_proofJumpFiredCount++;
+#endif
             s_jumpBuffered = false;
             s_jumpBufferTimer = 0.0f;
 
@@ -446,6 +460,19 @@ namespace GameplayActionSystem
         s_debugState.sprintDown = s_cached.sprintDown;
         s_debugState.pendingMouseDX = s_pendingMouseDX;
         s_debugState.pendingMouseDY = s_pendingMouseDY;
+
+#if defined(_DEBUG)
+        // PR2.5: Hitch-only proof summary — instantly judgeable
+        // Pass criterion: kbYawPerStep ≈ constant 0.03333 (= yawAxis * 2.0 * 1/60)
+        if (stepCount > 1 && (s_proofSumKbYaw != 0.0f || s_proofSumMouseYaw != 0.0f || s_proofJumpFiredCount > 0))
+        {
+            float kbYawPerStep = s_proofSumKbYaw / static_cast<float>(stepCount);
+            char buf[200];
+            sprintf_s(buf, "[PROOF-LOOK-SPLIT] steps=%u kbYawSum=%.5f kbYawPerStep=%.5f mouseYaw=%.5f jumpFired=%u\n",
+                stepCount, s_proofSumKbYaw, kbYawPerStep, s_proofSumMouseYaw, s_proofJumpFiredCount);
+            OutputDebugStringA(buf);
+        }
+#endif
     }
 
     const ActionDebugState& GetDebugState()
