@@ -45,6 +45,10 @@
 #include <cmath>
 #include <algorithm>
 
+#ifndef CCT_TRACE_LATERAL
+#define CCT_TRACE_LATERAL 0
+#endif
+
 namespace Engine { namespace Collision {
 
 namespace {
@@ -247,30 +251,46 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
     m_originalDirection = walkMove * (1.0f / walkLen);
     m_targetPosition = m_currentPosition + walkMove;
 
+    float fraction = 1.0f;
     int iters = 0;
-    for (; iters < m_config.maxForwardIters; ++iters) {
+
+    for (; iters < m_config.maxForwardIters && fraction > 0.01f; ++iters) {
         sq::Vec3 remaining = m_targetPosition - m_currentPosition;
         float remainLen = sq::Len(remaining);
         if (remainLen < kMinDist) break;
 
         sq::Hit hit = SweepClosest(m_currentPosition, remaining);
 
-        if (!hit.hit) {
+        // Fraction budget (ex4.cpp line 431)
+        fraction -= hit.hit ? hit.t : 1.0f;
+
+#if CCT_TRACE_LATERAL
+        printf("[StepMove] i=%d hit=%d t=%.6f frac=%.4f "
+               "cur=(%.4f,%.4f,%.4f) tgt=(%.4f,%.4f,%.4f)\n",
+               iters, hit.hit ? 1 : 0, hit.t, fraction,
+               m_currentPosition.x, m_currentPosition.y, m_currentPosition.z,
+               m_targetPosition.x, m_targetPosition.y, m_targetPosition.z);
+#endif
+
+        if (hit.hit) {
+            // Do NOT advance m_currentPosition. Redirect target only.
+            SlideAlongNormal(hit.normal);
+
+            // Anti-oscillation (ex4.cpp lines 442-457)
+            sq::Vec3 newDir = m_targetPosition - m_currentPosition;
+            float newDirLenSq = sq::LenSq(newDir);
+            if (newDirLenSq < kMinDist * kMinDist) {
+                m_debug.stuck = true;
+                break;
+            }
+            float invLen = 1.0f / std::sqrt(newDirLenSq);
+            if (sq::Dot(newDir * invLen, m_originalDirection) <= 0.0f) {
+                m_debug.stuck = true;
+                break;
+            }
+        } else {
+            // MISS: apply full displacement (ex4.cpp line 461)
             m_currentPosition = m_targetPosition;
-            break;
-        }
-
-        // Advance to safe contact point (skin backoff)
-        float safeT = (std::max)(0.0f, hit.t - m_config.sweep.skin / remainLen);
-        m_currentPosition = m_currentPosition + remaining * safeT;
-
-        // Slide: project remaining motion onto the tangent plane
-        SlideAlongNormal(hit.normal);
-
-        // Anti-oscillation: if sliding reversed our original direction, stop
-        sq::Vec3 newRemaining = m_targetPosition - m_currentPosition;
-        if (sq::Dot(newRemaining, m_originalDirection) <= 0.0f) {
-            m_debug.stuck = true;
             break;
         }
     }
