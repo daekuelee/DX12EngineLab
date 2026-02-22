@@ -81,6 +81,7 @@ struct CctDebug {
     uint32_t forwardIters    = 0;      // StepForwardAndStrafe iterations used
     bool     stuck           = false;  // anti-oscillation triggered or max iters
     bool     stepDownHit     = false;  // StepDown found ground
+    bool     stepDownSkipped = false;  // ascending gate activated
     bool     fullDrop        = false;  // StepDown: large drop (no ground within step)
     uint32_t recoverIters    = 0;      // RecoverFromPenetration iterations used
 

@@ -117,8 +117,14 @@ void KinematicCharacterController::PreStep()
 //
 // EQUATIONS:
 //   Jump:    $v_y \leftarrow jumpSpeed$   (instant, only if onGround && jump)
-//   Gravity: $v_y \leftarrow v_y - g \cdot dt$,  clamped to $[-fallSpeed, +\infty)$
+//   Gravity: $v_y \leftarrow v_y - g \cdot dt$  (ALWAYS, even grounded)
+//   Clamp:   $v_y \in [-fallSpeed, +jumpSpeed]$
 //   Offset:  $\Delta y = v_y \cdot dt$
+//
+// WHY ALWAYS-APPLY GRAVITY:
+//   Gravity applies unconditionally. StepDown zeros vy on landing.
+//   Grounded: vy=0 -> gravity -> vy=-g*dt < 0 -> stairLift=stepHeight.
+//   Without this, conditional stepHeight would get stairLift=0 on flat ground.
 //
 // INVARIANT: verticalVelocity is the scalar projection onto the up axis.
 //            Positive = ascending, negative = descending.
@@ -129,16 +135,16 @@ void KinematicCharacterController::IntegrateVertical(const CctInput& input, floa
     if (input.jump && m_state.onGround) {
         m_state.verticalVelocity = m_config.jumpSpeed;
         m_state.onGround = false;
-    } else if (!m_state.onGround) {
-        // Gravity accumulation
-        m_state.verticalVelocity -= m_config.gravity * dt;
-        // Clamp to terminal fall speed
-        if (m_state.verticalVelocity < -m_config.fallSpeed)
-            m_state.verticalVelocity = -m_config.fallSpeed;
-    } else {
-        // Grounded: zero vertical velocity to maintain contact
-        m_state.verticalVelocity = 0.0f;
     }
+
+    // Gravity ALWAYS applies (even grounded).
+    // Grounded vy=0 -> gravity pulls to -g*dt -> StepDown zeros it.
+    // This ensures stairLift = stepHeight for grounded characters.
+    m_state.verticalVelocity -= m_config.gravity * dt;
+    if (m_state.verticalVelocity > m_config.jumpSpeed)
+        m_state.verticalVelocity = m_config.jumpSpeed;
+    if (m_state.verticalVelocity < -m_config.fallSpeed)
+        m_state.verticalVelocity = -m_config.fallSpeed;
 
     m_state.verticalOffset = m_state.verticalVelocity * dt;
 }
@@ -150,7 +156,9 @@ void KinematicCharacterController::IntegrateVertical(const CctInput& input, floa
 // CONSUMES: m_currentPosition, verticalOffset, stepHeight
 //
 // ALGORITHM:
-//   lift = stepHeight + max(verticalOffset, 0)
+//   stairLift = (vy < 0) ? stepHeight : 0    // only when falling
+//   jumpLift  = max(verticalOffset, 0)        // jump component
+//   lift = stairLift + jumpLift
 //   Sweep upward by lift distance.
 //   On ceiling hit (normal dot up < 0): clip lift, zero upward velocity.
 //   On miss: full lift applied.
@@ -165,9 +173,11 @@ void KinematicCharacterController::IntegrateVertical(const CctInput& input, floa
 
 void KinematicCharacterController::StepUp()
 {
-    float lift = m_config.stepHeight;
-    if (m_state.verticalOffset > 0.0f)
-        lift += m_state.verticalOffset;
+    // stepHeight only when falling (vy < 0). During jumps (vy >= 0),
+    // only the jump offset lifts the capsule — no stair lift on ascent.
+    float stairLift = (m_state.verticalVelocity < 0.0f) ? m_config.stepHeight : 0.0f;
+    float jumpLift  = (m_state.verticalOffset > 0.0f)   ? m_state.verticalOffset : 0.0f;
+    float lift = stairLift + jumpLift;
 
     sq::Vec3 upDelta = m_config.up * lift;
     float dist = sq::Len(upDelta);
@@ -189,6 +199,14 @@ void KinematicCharacterController::StepUp()
         if (sq::Dot(hit.normal, m_config.up) < 0.0f) {
             if (m_state.verticalVelocity > 0.0f)
                 m_state.verticalVelocity = 0.0f;
+        }
+
+        // If jumping and StepUp hit something, kill the jump.
+        // Force currentStepOffset = stepHeight so StepDown sweeps far enough.
+        if (m_state.verticalOffset > 0.0f) {
+            m_state.verticalOffset   = 0.0f;
+            m_state.verticalVelocity = 0.0f;
+            m_currentStepOffset      = m_config.stepHeight;
         }
     } else {
         // No obstruction — full lift
@@ -288,6 +306,13 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
 
 void KinematicCharacterController::StepDown(float dt)
 {
+    // Skip StepDown when ascending (vy > 0). No ground search needed.
+    if (m_state.verticalVelocity > 0.0f) {
+        m_state.onGround = false;
+        m_debug.stepDownSkipped = true;
+        return;
+    }
+
     // Compute gravity-based downward distance (positive when falling)
     float downVelocityDt = 0.0f;
     if (m_state.verticalVelocity < 0.0f) {
@@ -312,6 +337,8 @@ void KinematicCharacterController::StepDown(float dt)
         m_state.onGround = true;
         m_state.groundNormal = hit.normal;
         m_state.verticalVelocity = 0.0f;
+        m_state.verticalOffset   = 0.0f;   // zero on landing
+        m_state.wasJumping       = false;   // clear on landing
         m_debug.stepDownHit = true;
         return;
     }
@@ -331,6 +358,8 @@ void KinematicCharacterController::StepDown(float dt)
             m_state.onGround = true;
             m_state.groundNormal = extHit.normal;
             m_state.verticalVelocity = 0.0f;
+            m_state.verticalOffset   = 0.0f;   // zero on landing
+            m_state.wasJumping       = false;   // clear on landing
             m_debug.stepDownHit = true;
             return;
         }
