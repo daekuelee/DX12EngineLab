@@ -6,7 +6,6 @@
 #include <vector>
 #include "InputState.h"
 #include "WorldTypes.h"
-#include "Collision/CapsuleMovement.h"
 #include "Collision/CollisionWorld.h"
 #include "Collision/KinematicCharacterController.h"
 
@@ -106,11 +105,6 @@ namespace Engine
         // Part 2: Collision stats (reset each tick)
         CollisionStats m_collisionStats;
 
-        // Floor diagnostic flag (reset each tick, set in ResolveFloorCollision)
-        bool m_didFloorClampThisTick = false;
-
-        // Day3.5: Jump grace flag (prevents support query from clearing onGround on jump frame)
-        bool m_justJumpedThisTick = false;
 
         // Part 2: Spatial hash grid (100x100 cells, each cell contains cube index)
         // Built once at init - cubes don't move
@@ -134,8 +128,7 @@ namespace Engine
         bool m_stepGridWasEverEnabled = false;
 
         // Private helpers
-        void ResolveFloorCollision();
-        void CheckKillZ();
+        void TriggerPass();  // Post-move trigger overlap (future: teleport, checkpoint, etc.)
 
         // Part 2: Spatial hash helpers (kept for SceneView adapter)
         void BuildSpatialGrid();
@@ -148,10 +141,7 @@ namespace Engine
         Collision::CollisionWorld m_collisionWorld;
         void BuildCollisionWorld();
 
-        // Phase B: KCC shadow controller (ticked alongside old path in _DEBUG)
+        // KCC (sole movement authority)
         std::unique_ptr<Collision::KinematicCharacterController> m_cct;
-
-        // PR2.8: SceneView adapter needs friendship for private spatial hash access
-        friend class WorldStateSceneAdapter;
     };
 }

@@ -1,7 +1,7 @@
 #include "WorldState.h"
-#include "Collision/CapsuleMovement.h"
 #include "Collision/CollisionWorld.h"
 #include "../Renderer/DX12/Dx12Context.h"  // For HUDSnapshot
+#include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <algorithm>  // For std::sort, std::unique
@@ -12,26 +12,6 @@ using namespace DirectX;
 namespace Engine
 {
 
-// PR2.8→2.10: SceneView adapter — bridges WorldState private spatial data to module
-class WorldStateSceneAdapter : public Collision::SceneView {
-    const WorldState& m_ws;
-public:
-    explicit WorldStateSceneAdapter(const WorldState& ws) : m_ws(ws) {}
-    std::vector<Collision::ColliderId> QueryCandidates(const AABB& box) const override {
-        auto raw = m_ws.QuerySpatialHash(box);
-        return std::vector<Collision::ColliderId>(raw.begin(), raw.end());
-    }
-    AABB GetColliderAABB(Collision::ColliderId id) const override {
-#if defined(_DEBUG)
-        assert(id != Collision::kInvalidCollider && id != Collision::kFloorCollider
-               && "Sentinel ColliderId must not reach GetColliderAABB");
-#endif
-        return m_ws.GetCubeAABB(static_cast<uint16_t>(id));
-    }
-    Collision::ColliderProps GetColliderProps(Collision::ColliderId) const override {
-        return { true, true, true }; // PR3.x hook, unused now
-    }
-};
     void WorldState::Initialize()
     {
         // Reset pawn to spawn position
@@ -63,7 +43,7 @@ public:
         // Phase A: Build CollisionWorld (BVH from cube AABBs)
         BuildCollisionWorld();
 
-        // Phase B: Construct KCC (shadow controller, ticked in _DEBUG)
+        // Construct KCC (sole movement authority)
         {
             Collision::CctCapsule geom;
             geom.radius     = m_config.capsuleRadius;
@@ -151,27 +131,6 @@ public:
         // Reset collision stats for this tick
         m_collisionStats = CollisionStats{};
 
-        // --- Pre-solver depenetration (PR2.8: module call) ---
-        {
-            WorldStateSceneAdapter sceneView(*this);
-            Collision::CapsuleGeom geom = {
-                m_config.capsuleRadius, m_config.capsuleHalfHeight,
-                m_config.pawnHalfExtentX, m_config.pawnHalfExtentZ, m_config.pawnHeight
-            };
-            auto depen = Collision::DepenetrateInPlace(
-                sceneView, geom, m_pawn.posX, m_pawn.posY, m_pawn.posZ, m_pawn.onGround);
-            m_pawn.posX = depen.posX;
-            m_pawn.posY = depen.posY;
-            m_pawn.posZ = depen.posZ;
-            m_pawn.onGround = depen.onGround;
-            m_collisionStats.depenApplied = depen.depenApplied;
-            m_collisionStats.depenTotalMag = depen.depenTotalMag;
-            m_collisionStats.depenClampTriggered = depen.depenClampTriggered;
-            m_collisionStats.depenMaxSingleMag = depen.depenMaxSingleMag;
-            m_collisionStats.depenOverlapCount = depen.depenOverlapCount;
-            m_collisionStats.depenIterations = depen.depenIterations;
-        }
-
         // 1. Apply yaw rotation [LOOK-UNIFIED] pre-computed delta from Action layer
         m_view.yaw += input.yawDelta;
 
@@ -182,7 +141,7 @@ public:
 
         // 3. Compute movement basis from sim yaw [SIM-PURE]
         // CONTRACT: TickFixed must NEVER read m_renderCam or any presentation state.
-        // Movement direction is derived purely from m_view.yaw (sim-owned, written at L342).
+        // Movement direction is derived purely from m_view.yaw (sim-owned).
         float camFwdX = sinf(m_view.yaw);
         float camFwdZ = cosf(m_view.yaw);
 
@@ -220,241 +179,102 @@ public:
         float speedMultiplier = 1.0f + (m_config.sprintMultiplier - 1.0f) * m_sprintAlpha;
         float currentSpeed = m_config.walkSpeed * speedMultiplier;
 
-        // Horizontal velocity from input (camera-relative)
-        m_pawn.velX = (camFwdX * input.moveZ + camRightX * input.moveX) * currentSpeed;
-        m_pawn.velZ = (camFwdZ * input.moveZ + camRightZ * input.moveX) * currentSpeed;
+        // 6. Build CctInput (lateral walk displacement for this tick)
+        float walkVelX = (camFwdX * input.moveZ + camRightX * input.moveX) * currentSpeed;
+        float walkVelZ = (camFwdZ * input.moveZ + camRightZ * input.moveX) * currentSpeed;
 
-        // 6. Apply gravity if not on ground
-        if (!m_pawn.onGround)
-        {
-            m_pawn.velY -= m_config.gravity * fixedDt;
-        }
-        else
-        {
-            // On ground, reset vertical velocity (unless jumping)
-            if (m_pawn.velY < 0.0f)
-            {
-                m_pawn.velY = 0.0f;
-            }
-        }
-
-        // 7. Jump: only if on ground, input.jump is true, and not already consumed this frame
-        if (m_pawn.onGround && input.jump && !m_jumpConsumedThisFrame)
-        {
-            m_pawn.velY = m_config.jumpVelocity;
-            m_pawn.onGround = false;
-            m_jumpQueued = true;  // Evidence flag
-            m_jumpConsumedThisFrame = true;
-            m_justJumpedThisTick = true;  // Day3.5: Prevent support query from clearing onGround
-        }
-
-        // Phase B: save lateral walkMove for KCC shadow (before solver overwrites pawn)
-#if defined(_DEBUG)
         Collision::CctInput cctInput;
-        cctInput.walkMove = {m_pawn.velX * fixedDt, 0.0f, m_pawn.velZ * fixedDt};
+        cctInput.walkMove = {walkVelX * fixedDt, 0.0f, walkVelZ * fixedDt};
         cctInput.jump = input.jump;
-#endif
 
-        // --- Main collision solver (PR2.8: module call) ---
-        {
-            WorldStateSceneAdapter sceneView(*this);
-            Collision::CapsuleMoveRequest req = {};
-            req.posX = m_pawn.posX;  req.posY = m_pawn.posY;  req.posZ = m_pawn.posZ;
-            req.velX = m_pawn.velX;  req.velY = m_pawn.velY;  req.velZ = m_pawn.velZ;
-            req.onGround = m_pawn.onGround;
-            req.justJumped = m_justJumpedThisTick;
-            req.fixedDt = fixedDt;
-            req.geom = { m_config.capsuleRadius, m_config.capsuleHalfHeight,
-                         m_config.pawnHalfExtentX, m_config.pawnHalfExtentZ, m_config.pawnHeight };
-            req.enableYSweep = m_config.enableYSweep;
-            req.enableStepUp = m_config.enableStepUp;
-            req.maxStepHeight = m_config.maxStepHeight;
-            req.sweepSkinY = m_config.sweepSkinY;
-            req.floor = { m_config.floorY, m_config.floorMinX, m_config.floorMaxX,
-                          m_config.floorMinZ, m_config.floorMaxZ };
-            req.cubeHalfXZ = m_config.cubeHalfXZ;
-            req.cubeMinY = m_config.cubeMinY;
-            req.cubeMaxY = m_config.cubeMaxY;
+        // 7. Tick KCC (sole movement authority)
+        assert(m_cct && "KCC must be constructed before TickFixed");
+        m_cct->Tick(cctInput, fixedDt);
 
-            auto result = Collision::MoveCapsuleKinematic(sceneView, req, m_collisionStats);
+        // 8. Mirror CctState → m_pawn
+        const auto& cs = m_cct->getState();
+        m_pawn.posX = cs.posFeet.x;  m_pawn.posY = cs.posFeet.y;  m_pawn.posZ = cs.posFeet.z;
+        m_pawn.velX = cs.vel.x;      m_pawn.velY = cs.vel.y;      m_pawn.velZ = cs.vel.z;
+        m_pawn.onGround = cs.onGround;
+
+        m_jumpQueued = false;  // TODO: derive from CctState once HUD is updated
+
+        // 9. TriggerPass (KillZ + future trigger volumes)
+        TriggerPass();
 
 #if defined(_DEBUG)
-            if (m_config.enableYSweep)
-            {
-                // PR2.9: Compare MoveCapsuleKinematic vs WithAxisY (legacy path)
-                CollisionStats legacyStats = {};
-                auto legacyResult = Collision::SolveCapsuleMovement_WithAxisY(
-                    sceneView, req, legacyStats);
-
-                constexpr float POS_EPS = 1e-4f;
-                constexpr float VEL_EPS = 0.01f;
-
-                float posDiff = fabsf(result.posX - legacyResult.posX)
-                              + fabsf(result.posY - legacyResult.posY)
-                              + fabsf(result.posZ - legacyResult.posZ);
-                float velDiff = fabsf(result.velX - legacyResult.velX)
-                              + fabsf(result.velY - legacyResult.velY)
-                              + fabsf(result.velZ - legacyResult.velZ);
-                bool groundDiff = (result.onGround != legacyResult.onGround);
-
-                if (posDiff > POS_EPS || velDiff > VEL_EPS || groundDiff)
-                {
-                    char buf[320];
-                    sprintf_s(buf,
-                        "[LEGACY_COMPARE_DIFF] pos=(%.4f,%.4f,%.4f)vs(%.4f,%.4f,%.4f) "
-                        "vel=(%.3f,%.3f,%.3f)vs(%.3f,%.3f,%.3f) gnd=%d/%d\n",
-                        result.posX, result.posY, result.posZ,
-                        legacyResult.posX, legacyResult.posY, legacyResult.posZ,
-                        result.velX, result.velY, result.velZ,
-                        legacyResult.velX, legacyResult.velY, legacyResult.velZ,
-                        result.onGround?1:0, legacyResult.onGround?1:0);
-                    OutputDebugStringA(buf);
-                }
-
-                // Throttled summary every 600 ticks (10s @ 60Hz)
-                static uint32_t s_compareCount = 0;
-                static float s_maxPosDiff = 0.0f, s_maxVelDiff = 0.0f;
-                static uint32_t s_diffCount = 0;
-                s_compareCount++;
-                if (posDiff > s_maxPosDiff) s_maxPosDiff = posDiff;
-                if (velDiff > s_maxVelDiff) s_maxVelDiff = velDiff;
-                if (posDiff > POS_EPS || velDiff > VEL_EPS || groundDiff) s_diffCount++;
-                if (s_compareCount % 600 == 0)
-                {
-                    char buf[200];
-                    sprintf_s(buf, "[LEGACY_COMPARE] maxPos=%.6f maxVel=%.4f diffs=%u total=%u\n",
-                        s_maxPosDiff, s_maxVelDiff, s_diffCount, s_compareCount);
-                    OutputDebugStringA(buf);
-                    s_maxPosDiff = 0.0f; s_maxVelDiff = 0.0f; s_diffCount = 0;
-                }
-            }
-#endif
-
-            m_pawn.posX = result.posX;
-            m_pawn.posY = result.posY;
-            m_pawn.posZ = result.posZ;
-            m_pawn.velX = result.velX;
-            m_pawn.velY = result.velY;
-            m_pawn.velZ = result.velZ;
-            m_pawn.onGround = result.onGround;
-            m_didFloorClampThisTick = m_collisionStats.snappedThisTick;
-        }
-
-        // Phase B: KCC shadow path — tick controller, compare with old path
-#if defined(_DEBUG)
-        if (m_cct)
+        // [KCC_AUTH] Throttled evidence log every 600 ticks (10s @ 60Hz)
         {
-            m_cct->Tick(cctInput, fixedDt);
-
-            const auto& cctState = m_cct->getState();
-            const auto& cctDebug = m_cct->getDebug();
-
-            float posDiff = fabsf(m_pawn.posX - cctState.posFeet.x)
-                          + fabsf(m_pawn.posY - cctState.posFeet.y)
-                          + fabsf(m_pawn.posZ - cctState.posFeet.z);
-            float velDiff = fabsf(m_pawn.velX - cctState.vel.x)
-                          + fabsf(m_pawn.velY - cctState.vel.y)
-                          + fabsf(m_pawn.velZ - cctState.vel.z);
-
-            // Throttled summary every 600 ticks (10s @ 60Hz)
-            static uint32_t s_cctTicks = 0;
-            static float s_cctMaxPos = 0.0f;
-            static float s_cctMaxVel = 0.0f;
-            static uint32_t s_cctGndDiffs = 0;
-            s_cctTicks++;
-            if (posDiff > s_cctMaxPos) s_cctMaxPos = posDiff;
-            if (velDiff > s_cctMaxVel) s_cctMaxVel = velDiff;
-            if (m_pawn.onGround != cctState.onGround) s_cctGndDiffs++;
-
-            if (s_cctTicks % 600 == 0)
+            static uint32_t s_authTicks = 0;
+            if (++s_authTicks % 600 == 0)
             {
-                char buf[320];
-                sprintf_s(buf,
-                    "[CCT_COMPARE] ticks=%u maxPosDiff=%.4f maxVelDiff=%.4f gndDiffs=%u "
-                    "cctPos=(%.2f,%.2f,%.2f) cctGnd=%d dxCorr=%.6f vDotUp=%.4f\n",
-                    s_cctTicks, s_cctMaxPos, s_cctMaxVel, s_cctGndDiffs,
-                    cctState.posFeet.x, cctState.posFeet.y, cctState.posFeet.z,
-                    cctState.onGround ? 1 : 0,
-                    cctDebug.dxCorrMag, cctDebug.vNextDotUp);
-                OutputDebugStringA(buf);
-                s_cctMaxPos = 0.0f;
-                s_cctMaxVel = 0.0f;
-                s_cctGndDiffs = 0;
-            }
-        }
-#endif
-
-        m_justJumpedThisTick = false;  // Reset for next tick
-
-        // Legacy floor collision (now logging-only)
-        ResolveFloorCollision();
-
-        // 10. KillZ check (respawn if below threshold)
-        CheckKillZ();
-
-        // Day3.12 StepUpGridTest: Log on state change only
-        if (m_config.enableStepUpGridTest)
-        {
-            static bool s_prevTry = false;
-            static bool s_prevOk = false;
-            static uint8_t s_prevMask = 0;
-
-            bool changed = (m_collisionStats.stepTry != s_prevTry) ||
-                           (m_collisionStats.stepSuccess != s_prevOk) ||
-                           (m_collisionStats.stepFailMask != s_prevMask);
-
-            if (changed)
-            {
+                const auto& dbg = m_cct->getDebug();
                 char buf[256];
-                sprintf_s(buf, "[STEP_GRID] pos=(%.2f,%.2f,%.2f) gnd=%d hit=%d try=%d ok=%d mask=0x%02X h=%.3f\n",
+                sprintf_s(buf,
+                    "[KCC_AUTH] tick=%u pos=(%.2f,%.2f,%.2f) vel=(%.2f,%.2f,%.2f) gnd=%d recoverPush=%.4f\n",
+                    s_authTicks,
                     m_pawn.posX, m_pawn.posY, m_pawn.posZ,
+                    m_pawn.velX, m_pawn.velY, m_pawn.velZ,
                     m_pawn.onGround ? 1 : 0,
-                    m_collisionStats.sweepHit ? 1 : 0,
-                    m_collisionStats.stepTry ? 1 : 0,
-                    m_collisionStats.stepSuccess ? 1 : 0,
-                    m_collisionStats.stepFailMask,
-                    m_collisionStats.stepHeightUsed);
+                    dbg.recoverPushMag);
                 OutputDebugStringA(buf);
-
-                s_prevTry = m_collisionStats.stepTry;
-                s_prevOk = m_collisionStats.stepSuccess;
-                s_prevMask = m_collisionStats.stepFailMask;
             }
         }
+#endif
     }
 
-    void WorldState::ResolveFloorCollision()
+    void WorldState::TriggerPass()
     {
-        // Day3.5: This function is now logging-only. Support/snap logic moved to QuerySupport.
-        float pawnBottomY = m_pawn.posY;
-
-        bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
-                              m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
-
-        // [FLOOR-C] Log when OUT of bounds
-        if (!inFloorBounds) {
-            char buf[256];
-            sprintf_s(buf, "[FLOOR-C] OUT_OF_BOUNDS! posX=%.2f posZ=%.2f boundsX=[%.1f,%.1f] boundsZ=[%.1f,%.1f]\n",
-                m_pawn.posX, m_pawn.posZ,
-                m_config.floorMinX, m_config.floorMaxX,
-                m_config.floorMinZ, m_config.floorMaxZ);
-            OutputDebugStringA(buf);
-        }
-    }
-
-    void WorldState::CheckKillZ()
-    {
-        if (m_pawn.posY < m_config.killZ)
-        {
+        // --- KillZ: scalar world rule ---
+        // When extra trigger volumes are added, replace this with an infinite-plane
+        // trigger collider in BuildCollisionWorld and process via the overlap loop below.
+        if (m_pawn.posY < m_config.killZ) {
             m_respawnCount++;
             m_lastRespawnReason = "KillZ";
-
-            char buf[256];
-            sprintf_s(buf, "[KILLZ] #%u at pos=(%.2f,%.2f,%.2f)\n",
+#if defined(_DEBUG)
+            char buf[128];
+            sprintf_s(buf, "[KILLZ] #%u pos=(%.2f,%.2f,%.2f)\n",
                 m_respawnCount, m_pawn.posX, m_pawn.posY, m_pawn.posZ);
             OutputDebugStringA(buf);
-
+#endif
             RespawnResetControllerState();
+            // Re-mirror after respawn
+            const auto& rs = m_cct->getState();
+            m_pawn.posX = rs.posFeet.x; m_pawn.posY = rs.posFeet.y; m_pawn.posZ = rs.posFeet.z;
+            m_pawn.velX = rs.vel.x;     m_pawn.velY = rs.vel.y;     m_pawn.velZ = rs.vel.z;
+            m_pawn.onGround = rs.onGround;
+            return;  // respawned — skip trigger overlap this tick
+        }
+
+        // --- Trigger volume overlap (future: teleport, checkpoint, etc.) ---
+        // Capsule segment from KCC state (MakeSweepInput convention):
+        //   segA = posFeet + up * radius       (bottom sphere center)
+        //   segB = posFeet + up * (radius + 2*halfHeight)  (top sphere center)
+        const auto& cs = m_cct->getState();
+        float r  = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+        Collision::sq::Vec3 segA = {cs.posFeet.x, cs.posFeet.y + r,         cs.posFeet.z};
+        Collision::sq::Vec3 segB = {cs.posFeet.x, cs.posFeet.y + r + 2*hh,  cs.posFeet.z};
+
+        uint32_t hitIds[8];
+        uint32_t hitCount = m_collisionWorld.OverlapCapsule(
+            segA, segB, r, Collision::Q_Trigger, hitIds, 8);
+
+        // hitIds already ascending (m_triggerIds is ascending, scan preserves order)
+        for (uint32_t i = 0; i < hitCount; ++i)
+        {
+            const auto& desc = m_collisionWorld.getColliderDesc(hitIds[i]);
+
+#if defined(_DEBUG)
+            {
+                char buf[128];
+                sprintf_s(buf, "[TRIGGER_HIT] idx=%u tag=%u\n", hitIds[i], desc.userTag);
+                OutputDebugStringA(buf);
+            }
+#endif
+
+            // Future: interpret desc.userTag for teleport, checkpoint, etc.
+            (void)desc;
         }
     }
 
@@ -507,7 +327,7 @@ public:
         m_pawn.onGround = false;
         m_collisionStats = CollisionStats{};
 
-        // Phase B: Sync KCC shadow state on respawn
+        // Sync KCC primary state on respawn
         if (m_cct)
         {
             Collision::CctState respawn;
@@ -918,7 +738,7 @@ public:
         // Floor diagnostics
         snap.inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
                               m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
-        snap.didFloorClamp = m_didFloorClampThisTick;
+        snap.didFloorClamp = false;
         snap.floorMinX = m_config.floorMinX;
         snap.floorMaxX = m_config.floorMaxX;
         snap.floorMinZ = m_config.floorMinZ;

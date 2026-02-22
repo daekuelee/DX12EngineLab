@@ -1,4 +1,6 @@
 #include "CollisionWorld.h"
+#include "SceneQuery/SqBroadphase.h"  // CapsuleAabbStatic
+#include "SceneQuery/SqPrimitiveTests.h"  // TestAabbAabb
 #include <cstdio>
 #include <Windows.h>  // OutputDebugStringA
 
@@ -6,26 +8,33 @@ namespace Engine { namespace Collision {
 
 void CollisionWorld::BuildStatic(const ColliderDesc* colliders, uint32_t count)
 {
-    // Copy collider registry
     m_descs.assign(colliders, colliders + count);
 
-    // Build parallel AABB array for BVH construction
-    m_sqAabbs.resize(count);
-    for (uint32_t i = 0; i < count; ++i)
-        m_sqAabbs[i] = colliders[i].bounds;
+    // Partition: solid AABBs for BVH, trigger indices for linear scan
+    m_solidRemap.clear();
+    m_sqAabbs.clear();
+    m_triggerIds.clear();
 
-    // Build BVH: AABBs only (no OBBs or triangles yet)
+    for (uint32_t i = 0; i < count; ++i) {
+        if (colliders[i].kind == ColliderKind::Trigger) {
+            m_triggerIds.push_back(i);  // ascending (loop order)
+        } else {
+            m_solidRemap.push_back(i);  // BVH prim j → m_descs index i
+            m_sqAabbs.push_back(colliders[i].bounds);
+        }
+    }
+
     m_bvh = sq::BuildStaticBVH(
-        m_sqAabbs.data(), count,
-        nullptr, 0,    // no OBBs
-        nullptr, 0);   // no triangles
+        m_sqAabbs.data(), static_cast<uint32_t>(m_sqAabbs.size()),
+        nullptr, 0, nullptr, 0);
 
-    // [COLLWORLD_INIT] evidence log
-    char buf[160];
-    sprintf_s(buf, "[COLLWORLD_INIT] colliders=%u nodes=%u prims=%u\n",
-              count,
-              static_cast<uint32_t>(m_bvh.nodes.size()),
-              static_cast<uint32_t>(m_bvh.prims.size()));
+    char buf[200];
+    sprintf_s(buf, "[COLLWORLD_INIT] total=%u solid=%u trigger=%u nodes=%u prims=%u\n",
+        count,
+        static_cast<uint32_t>(m_solidRemap.size()),
+        static_cast<uint32_t>(m_triggerIds.size()),
+        static_cast<uint32_t>(m_bvh.nodes.size()),
+        static_cast<uint32_t>(m_bvh.prims.size()));
     OutputDebugStringA(buf);
 }
 
@@ -37,24 +46,53 @@ void CollisionWorld::BuildStatic(const std::vector<ColliderDesc>& colliders)
 sq::Hit CollisionWorld::SweepCapsuleClosest(
     const sq::SweepCapsuleInput& in,
     const sq::SweepConfig& cfg,
-    QueryMask queryMask) const
+    QueryMask /*queryMask*/) const
 {
-    // For now, BVH contains only Solid AABBs so mask filtering is implicit.
-    // When Trigger colliders are added to the BVH, post-filter hits by mask:
-    //   if (!(m_descs[hit.index].mask & queryMask)) skip;
-    // Currently all colliders match Q_Solid, so delegate directly.
-    (void)queryMask;
-    return sq::SweepCapsuleClosestHit_Fast(m_bvh, in, cfg, m_scratch);
+    // BVH contains only Solid colliders. Triggers excluded at BuildStatic.
+    sq::Hit hit = sq::SweepCapsuleClosestHit_Fast(m_bvh, in, cfg, m_scratch);
+    if (hit.hit)
+        hit.index = m_solidRemap[hit.index];  // BVH-local → m_descs index
+    return hit;
 }
 
 uint32_t CollisionWorld::OverlapCapsule(
-    const sq::Vec3& /*segA*/, const sq::Vec3& /*segB*/,
-    float /*radius*/, QueryMask /*queryMask*/,
-    uint32_t* /*outIds*/, uint32_t /*maxIds*/) const
+    const sq::Vec3& segA, const sq::Vec3& segB,
+    float radius, QueryMask queryMask,
+    uint32_t* outIds, uint32_t maxIds) const
 {
-    // Stub: overlap query not yet implemented.
-    // Will use broadphase AABB overlap + narrowphase capsule-vs-AABB when available.
-    return 0;
+    if (maxIds == 0) return 0;
+
+    sq::AABB capBounds = sq::CapsuleAabbStatic(segA, segB, radius);
+    uint32_t count = 0;
+
+    // Trigger overlap: linear scan of m_triggerIds (ascending by construction)
+    if (queryMask & Q_Trigger) {
+        for (uint32_t idx : m_triggerIds) {
+            if (count >= maxIds) break;
+            if (!(m_descs[idx].mask & queryMask)) continue;
+            if (!sq::TestAabbAabb(capBounds, m_descs[idx].bounds)) continue;
+            outIds[count++] = idx;  // m_descs index, ascending (deterministic)
+        }
+    }
+
+    // NOTE: Solid overlap via BVH not implemented here.
+    // Use OverlapCapsuleContacts for solid overlap with narrowphase.
+
+    return count;
+}
+
+uint32_t CollisionWorld::OverlapCapsuleContacts(
+    const sq::Vec3& segA, const sq::Vec3& segB,
+    float radius, QueryMask /*queryMask*/,
+    sq::OverlapContact* outContacts, uint32_t maxContacts) const
+{
+    // BVH contains only Solid colliders. Triggers excluded at BuildStatic.
+    uint32_t count = sq::OverlapCapsuleContacts_Fast(
+        m_bvh, segA, segB, radius, outContacts, maxContacts, m_scratch);
+    // Remap: BVH prim index → m_descs index
+    for (uint32_t i = 0; i < count; ++i)
+        outContacts[i].index = m_solidRemap[outContacts[i].index];
+    return count;
 }
 
 }} // namespace Engine::Collision

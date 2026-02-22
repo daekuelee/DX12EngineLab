@@ -85,14 +85,24 @@ public:
                             float radius, QueryMask queryMask,
                             uint32_t* outIds, uint32_t maxIds) const;
 
+    // Overlap capsule at a position. Returns overlap contacts with penetration info.
+    // outContacts receives up to maxContacts contacts, sorted by (-depth, type, index, featureId).
+    uint32_t OverlapCapsuleContacts(const sq::Vec3& segA, const sq::Vec3& segB,
+                                    float radius, QueryMask queryMask,
+                                    sq::OverlapContact* outContacts,
+                                    uint32_t maxContacts) const;
+
     // Read-only accessors (diagnostics)
     const sq::StaticBVH& getBVH() const { return m_bvh; }
     uint32_t getColliderCount() const { return static_cast<uint32_t>(m_descs.size()); }
     const ColliderDesc& getColliderDesc(uint32_t idx) const { return m_descs[idx]; }
+    uint32_t getTriggerCount() const { return static_cast<uint32_t>(m_triggerIds.size()); }
 
 private:
-    std::vector<ColliderDesc> m_descs;     // collider registry (ordered)
-    std::vector<sq::AABB>     m_sqAabbs;   // BVH backing storage (parallel to m_descs)
+    std::vector<ColliderDesc> m_descs;      // collider registry (ordered)
+    std::vector<sq::AABB>     m_sqAabbs;   // BVH backing storage (solids only)
+    std::vector<uint32_t>     m_solidRemap; // BVH prim index → m_descs index
+    std::vector<uint32_t>     m_triggerIds; // m_descs indices where kind==Trigger, ascending
     sq::StaticBVH             m_bvh;
     mutable sq::QueryScratch  m_scratch;   // single-threaded query scratch
 };
