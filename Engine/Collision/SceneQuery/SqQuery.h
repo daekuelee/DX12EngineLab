@@ -31,6 +31,7 @@
 #include "SqNarrowphase.h"
 #include "SqBVH.h"
 #include "SqBroadphase.h"
+#include "SqPrimitiveTests.h"
 
 namespace Engine { namespace Collision { namespace sq {
 
@@ -190,6 +191,134 @@ inline Hit SweepCapsuleClosestHit_Fast(
     }
 
     return best;
+}
+
+// =========================================================================
+// Overlap query: capsule overlap contacts via BVH DFS
+// =========================================================================
+//
+// Consumes: immutable StaticBVH, capsule segment + radius, QueryScratch
+// Produces: up to maxContacts OverlapContact entries, sorted deterministically
+//
+// Algorithm:
+//   1. Compute static capsule AABB (broadphase bounds)
+//   2. DFS traversal: nodes whose AABB overlaps capsule AABB
+//   3. Leaf: test each primitive via narrowphase overlap kernel
+//   4. Collect up to kMaxContacts, keep deepest via Top-K eviction
+//   5. Sort contacts by (-depth, type, index, featureId) for determinism
+//
+// Determinism rules:
+//   - BVH traversal: stack DFS, right pushed first, left popped first
+//   - Contact sorting: total order via std::sort
+//   - Top-K eviction: strict > on depth; same-depth kept in DFS order
+
+inline constexpr uint32_t kMaxOverlapContacts = 32;
+
+inline bool OverlapContactBetter(const OverlapContact& a, const OverlapContact& b)
+{
+    // Deepest first (descending depth)
+    if (a.depth != b.depth) return a.depth > b.depth;
+    // Tie-break cascade: type -> index -> featureId (ascending)
+    if ((uint8_t)a.type != (uint8_t)b.type) return (uint8_t)a.type < (uint8_t)b.type;
+    if (a.index != b.index) return a.index < b.index;
+    return a.featureId < b.featureId;
+}
+
+// Per-primitive overlap dispatch
+inline bool OverlapCapsulePrim(
+    const StaticBVH& bvh,
+    const Vec3& segA, const Vec3& segB, float radius,
+    const PrimRef& pref,
+    OverlapContact& out)
+{
+    switch (pref.type) {
+        case PrimType::Aabb:
+            return OverlapCapsuleAabb(segA, segB, radius,
+                                     bvh.aabbs[pref.index], out);
+        case PrimType::Obb:
+            return OverlapCapsuleObb(segA, segB, radius,
+                                    bvh.obbs[pref.index], out);
+        case PrimType::Tri:
+            return OverlapCapsuleTri(segA, segB, radius,
+                                    bvh.tris[pref.index], out);
+        default:
+            return false;
+    }
+}
+
+inline uint32_t OverlapCapsuleContacts_Fast(
+    const StaticBVH& bvh,
+    const Vec3& segA, const Vec3& segB, float radius,
+    OverlapContact* outContacts, uint32_t maxContacts,
+    QueryScratch& scratch)
+{
+    if (maxContacts == 0) return 0;
+    if (maxContacts > kMaxOverlapContacts) maxContacts = kMaxOverlapContacts;
+
+    // Broadphase: static capsule AABB
+    AABB capBounds = CapsuleAabbStatic(segA, segB, radius);
+
+    scratch.sp = 0;
+    uint32_t contactCount = 0;
+
+    // Check root node overlap
+    if (!TestAabbAabb(capBounds, bvh.nodes[bvh.root].bounds))
+        return 0;
+
+    // Push root (tEnter/tExit unused for overlap, but NodeTask struct requires them)
+    scratch.stack[scratch.sp++] = { bvh.root, 0.0f, 1.0f };
+
+    while (scratch.sp) {
+        NodeTask task = scratch.stack[--scratch.sp];
+        const BVHNode& node = bvh.nodes[task.node];
+
+        // Leaf node: test primitives
+        if (node.primCount) {
+            for (uint32_t k = 0; k < node.primCount; ++k) {
+                const PrimRef& pref = bvh.prims[bvh.primIdx[node.primStart + k]];
+
+                // Broadphase: capsule AABB vs primitive AABB
+                if (!TestAabbAabb(capBounds, pref.bounds))
+                    continue;
+
+                // Narrowphase
+                OverlapContact contact;
+                if (!OverlapCapsulePrim(bvh, segA, segB, radius, pref, contact))
+                    continue;
+
+                contact.type = pref.type;
+                contact.index = pref.index;
+
+                // Top-K insertion: if buffer full, evict shallowest
+                if (contactCount < maxContacts) {
+                    outContacts[contactCount++] = contact;
+                } else {
+                    // Find shallowest contact
+                    uint32_t shallowest = 0;
+                    for (uint32_t i = 1; i < contactCount; ++i) {
+                        if (outContacts[i].depth < outContacts[shallowest].depth)
+                            shallowest = i;
+                    }
+                    // Evict if new contact is deeper (strict >)
+                    if (contact.depth > outContacts[shallowest].depth) {
+                        outContacts[shallowest] = contact;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Internal node: push children (right first for deterministic left-first popping)
+        if (TestAabbAabb(capBounds, bvh.nodes[node.right].bounds))
+            scratch.stack[scratch.sp++] = { node.right, 0.0f, 1.0f };
+        if (TestAabbAabb(capBounds, bvh.nodes[node.left].bounds))
+            scratch.stack[scratch.sp++] = { node.left, 0.0f, 1.0f };
+    }
+
+    // Sort contacts deterministically: (-depth, type, index, featureId)
+    std::sort(outContacts, outContacts + contactCount, OverlapContactBetter);
+
+    return contactCount;
 }
 
 }}} // namespace Engine::Collision::sq

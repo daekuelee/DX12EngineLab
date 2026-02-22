@@ -49,6 +49,15 @@ inline AABB ExpandAabb(const AABB& b, float e) {
     return { b.minX - e, b.minY - e, b.minZ - e, b.maxX + e, b.maxY + e, b.maxZ + e };
 }
 
+// ---- AABB vs AABB overlap -----------------------------------------------
+
+inline bool TestAabbAabb(const AABB& a, const AABB& b) {
+    if (a.maxX < b.minX || a.minX > b.maxX) return false;
+    if (a.maxY < b.minY || a.minY > b.maxY) return false;
+    if (a.maxZ < b.minZ || a.minZ > b.maxZ) return false;
+    return true;
+}
+
 // ---- Plane --------------------------------------------------------------
 
 struct Plane {

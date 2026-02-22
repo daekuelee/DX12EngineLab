@@ -150,6 +150,8 @@ inline float DistSegmentSegmentSq(const Vec3& p1, const Vec3& q1,
 
 // ---- Segment to triangle distance squared (for capsule initial overlap) -
 // Checks segment-plane intersection first, then falls back to edge/endpoint tests.
+// Cyrus-Beck clipping produces a face candidate for segments parallel to (or hovering
+// over) the triangle face, ensuring featureId==0 when the closest point is on the face.
 inline float DistSegmentTriangleSq(const Vec3& s0, const Vec3& s1,
                                    const Triangle& tri,
                                    Vec3* outSegQ = nullptr,
@@ -180,6 +182,59 @@ inline float DistSegmentTriangleSq(const Vec3& s0, const Vec3& s1,
         }
     }
 
+    // epsD2 tie-break: when two candidates are within this tolerance,
+    // prefer the one with the lower featureId (face < edge < vertex).
+    constexpr float epsD2 = 1e-8f;
+
+    // -- General face candidate via Cyrus-Beck clipping --
+    // Projects segment onto the triangle plane and clips against the 3
+    // half-space edges. If any portion of the segment projects inside the
+    // triangle, the closest point on that portion to the plane wins.
+    float d2Face = (std::numeric_limits<float>::max)();
+    Vec3  faceSeg{}, faceTri{};
+    if (n2 > kEpsSq) {
+        Vec3  nU  = n * (1.0f / std::sqrt(n2));
+        Vec3  d   = s1 - s0;
+        float dn  = Dot(nU, d);
+        float h0  = Dot(nU, s0 - tri.p0);
+
+        // Triangle edges and their inward half-space normals
+        const Vec3 edges[3] = { tri.p1 - tri.p0, tri.p2 - tri.p1, tri.p0 - tri.p2 };
+        const Vec3 oppo[3]  = { tri.p2, tri.p0, tri.p1 };          // opposite vertex
+        const Vec3 orig[3]  = { tri.p0, tri.p1, tri.p2 };          // edge origin
+
+        float tEnter = 0.0f, tExit = 1.0f;
+        bool  valid  = true;
+        for (int i = 0; i < 3; ++i) {
+            Vec3  mi  = Cross(nU, edges[i]);                         // outward or inward
+            float opp = Dot(mi, oppo[i] - orig[i]);                  // sign of opposite vtx
+            if (opp < 0.0f) mi = mi * (-1.0f);                       // orient inward
+            float dmi = Dot(mi, d);
+            float hmi = Dot(mi, s0 - orig[i]);
+            if (Abs(dmi) > kEpsSq) {
+                float tc = -hmi / dmi;
+                if (dmi < 0.0f) { if (tc < tExit) tExit = tc; }      // exiting half-space
+                else            { if (tc > tEnter) tEnter = tc; }     // entering half-space
+            } else {
+                if (hmi < -kEpsPointInTri) { valid = false; break; }  // entirely outside
+            }
+        }
+        if (valid && tEnter <= tExit + kEpsPointInTri) {
+            if (tEnter > tExit) tEnter = tExit;                      // clamp numerical noise
+            float tStar;
+            if (Abs(dn) >= 1e-10f) {
+                tStar = -h0 / dn;
+                tStar = (tStar < tEnter) ? tEnter : (tStar > tExit ? tExit : tStar);
+            } else {
+                tStar = tEnter;
+            }
+            float hStar = h0 + tStar * dn;
+            d2Face = hStar * hStar;
+            faceSeg = s0 + d * tStar;
+            faceTri = faceSeg + nU * (-hStar);                        // project onto plane
+        }
+    }
+
     // Endpoints -> triangle
     uint32_t bestFeat = 0;
     Vec3 q0, q1;
@@ -189,18 +244,26 @@ inline float DistSegmentTriangleSq(const Vec3& s0, const Vec3& s1,
     bestFeat = feat0;
 
     float d = DistPointTriangleSq(s1, tri, &q1, &feat1);
-    if (d < best) { best = d; bestSeg = s1; bestTri = q1; bestFeat = feat1; }
+    if (d < best - epsD2 || (d < best + epsD2 && feat1 < bestFeat))
+    { best = d; bestSeg = s1; bestTri = q1; bestFeat = feat1; }
 
     // Segment -> triangle edges
     Vec3 cSeg, cEdge;
     d = DistSegmentSegmentSq(s0, s1, tri.p0, tri.p1, &cSeg, &cEdge);
-    if (d < best) { best = d; bestSeg = cSeg; bestTri = cEdge; bestFeat = 1; }
+    if (d < best - epsD2 || (d < best + epsD2 && 1u < bestFeat))
+    { best = d; bestSeg = cSeg; bestTri = cEdge; bestFeat = 1; }
 
     d = DistSegmentSegmentSq(s0, s1, tri.p1, tri.p2, &cSeg, &cEdge);
-    if (d < best) { best = d; bestSeg = cSeg; bestTri = cEdge; bestFeat = 2; }
+    if (d < best - epsD2 || (d < best + epsD2 && 2u < bestFeat))
+    { best = d; bestSeg = cSeg; bestTri = cEdge; bestFeat = 2; }
 
     d = DistSegmentSegmentSq(s0, s1, tri.p2, tri.p0, &cSeg, &cEdge);
-    if (d < best) { best = d; bestSeg = cSeg; bestTri = cEdge; bestFeat = 3; }
+    if (d < best - epsD2 || (d < best + epsD2 && 3u < bestFeat))
+    { best = d; bestSeg = cSeg; bestTri = cEdge; bestFeat = 3; }
+
+    // Face candidate competes (featureId 0 — lowest, always wins ties)
+    if (d2Face < best - epsD2 || (d2Face < best + epsD2 && 0u < bestFeat))
+    { best = d2Face; bestSeg = faceSeg; bestTri = faceTri; bestFeat = 0; }
 
     if (outSegQ) *outSegQ = bestSeg;
     if (outTriQ) *outTriQ = bestTri;
