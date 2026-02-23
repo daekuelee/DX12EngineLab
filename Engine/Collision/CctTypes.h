@@ -56,8 +56,7 @@ struct CctConfig {
     float maxPenDepth   = 0.005f;     // derived from contactOffset
     int   maxForwardIters = 10;       // StepForwardAndStrafe iteration limit
     int   maxRecoverIters = 4;        // RecoverFromPenetration loop limit
-    float recoverAlpha    = 0.4f;     // GS projection fraction per contact
-    float recoverMaxPush  = 0.5f;     // max total push-out per Recover() call
+    float recoverAlpha    = 0.2f;     // Bullet: 0.2 (GS projection fraction per contact)
     sq::SweepConfig sweep;            // skin, tieEpsT
 };
 
@@ -95,8 +94,6 @@ struct CctDebug {
     bool     stepDownSkipped = false;  // ascending gate activated
     bool     fullDrop        = false;  // StepDown: large drop (no ground within step)
     uint32_t recoverIters    = 0;      // RecoverFromPenetration iterations used
-    uint32_t recoverContacts = 0;     // overlap contacts found in last recover iter
-    float    recoverMaxDepth = 0.0f;  // deepest penetration found
     float    recoverPushMag  = 0.0f;  // total push-out magnitude applied
 
     // Per-phase position snapshots (Recover → StepUp → StepMove → StepDown)
@@ -116,6 +113,9 @@ struct CctDebug {
     float    stepDownHitTOI      = 1.0f;
     sq::Vec3 stepDownHitNormal{};
     bool     stepDownWalkable    = false;
+    bool     seamRecovery       = false;  // StepDown: overlap fallback set grounded
+    uint32_t skinWouldEatTOI    = 0;      // StepMove: cases where skin/dist >= hit.t
+    float    postRecoverMag     = 0.0f;   // post-sweep cleanup displacement magnitude
 
     // §3A velocity semantics evidence
     float    dxIntentMag     = 0.0f;   // |x_final - x_sweep| (sweep displacement)

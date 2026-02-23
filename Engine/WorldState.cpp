@@ -55,7 +55,6 @@ namespace Engine
             cctCfg.stepHeight    = m_config.maxStepHeight;
             cctCfg.fallSpeed     = 55.0f;
             cctCfg.contactOffset = 0.02f;  // SSOT: all epsilons derived in KCC ctor
-            cctCfg.recoverAlpha  = 0.4f;   // faster convergence with tighter slop
 
             m_cct = std::make_unique<Collision::KinematicCharacterController>(
                 &m_collisionWorld, geom, cctCfg);
@@ -204,11 +203,11 @@ namespace Engine
             char buf[512];
             sprintf_s(buf,
                 "[KCC_TICK] pos=(%.2f,%.2f,%.2f) gnd=%d vy=%.2f "
-                "REC(n=%u d=%.4f p=%.4f) SU=%.2f SM(i=%u z=%u stuck=%d) "
+                "REC(i=%u p=%.4f) SU=%.2f SM(i=%u z=%u stuck=%d) "
                 "SD(hit=%d walk=%d drop=%.3f) dx=(%.4f,%.4f)\n",
                 cs2.posFeet.x, cs2.posFeet.y, cs2.posFeet.z,
                 cs2.onGround ? 1 : 0, cs2.verticalVelocity,
-                dbg.recoverContacts, dbg.recoverMaxDepth, dbg.recoverPushMag,
+                dbg.recoverIters, dbg.recoverPushMag,
                 dbg.stepUpOffset,
                 dbg.forwardIters, dbg.zeroHitPushes, dbg.stuck ? 1 : 0,
                 dbg.stepDownHit ? 1 : 0, dbg.stepDownWalkable ? 1 : 0,

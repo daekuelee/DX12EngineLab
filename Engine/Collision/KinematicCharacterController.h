@@ -69,7 +69,7 @@ private:
     void StepUp();
     void StepMove(const sq::Vec3& walkMove);
     void StepDown(float dt);
-    void Recover();
+    bool Recover();
     void Writeback(float dt);
 
     // ---- Helpers ----
@@ -94,7 +94,8 @@ private:
     sq::Vec3 m_currentPosition{};     // working position during phases
     sq::Vec3 m_targetPosition{};      // sweep target for current phase
     sq::Vec3 m_xOld{};               // tick-start snapshot (§3A)
-    sq::Vec3 m_xSweep{};             // pre-recovery snapshot (§3A)
+    sq::Vec3 m_xSweep{};             // post-recovery baseline (§3A)
+    sq::Vec3 m_xFinalPre{};          // post-sweep, pre-cleanup position (§3A)
     sq::Vec3 m_originalDirection{};   // normalized walkMove (anti-oscillation check)
     float    m_currentStepOffset = 0.0f;
 
