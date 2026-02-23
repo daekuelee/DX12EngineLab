@@ -9,21 +9,22 @@
 //   Horizontal acceleration, friction, sprint multiplier, and camera-
 //   relative input resolution all live in the caller.
 //
-// PIPELINE (per tick, sequential, deterministic):
+// PIPELINE (per tick, sequential, deterministic — Bullet architecture):
 //   PreStep            -> snapshot $x_{old}$, save prev-tick flags
 //   IntegrateVertical  -> gravity + jump -> $v_y$, $\Delta y = v_y \cdot dt$
+//   Recover            -> overlap push-out from previous tick (Bullet: recoverFromPenetration)
+//   [capture x_sweep]  -> §3A baseline (post-recovery, pre-sweep)
 //   StepUp             -> lift by stepHeight + max($\Delta y$, 0)
 //   StepMove           -> iterative sweep+slide (lateral only)
 //   StepDown           -> drop by stepUp lift + max($-\Delta y$, 0), ground detect
-//   Recover            -> overlap push-out (pose-only, stubbed)
-//   Writeback          -> $v_{next} = (x_{sweep} - x_{old}) / dt$ (section 3A)
+//   Writeback          -> $v_{next} = (x_{final} - x_{sweep}) / dt$ (section 3A)
 //
 // VELOCITY SEMANTICS (section 3A, non-negotiable):
 //   $x_{old}$      = feet position at tick start
-//   $x_{sweep}$    = feet position after StepUp + StepMove + StepDown
-//   $x_{final}$    = feet position after Recover
-//   $dx_{intent}$  = $x_{sweep} - x_{old}$
-//   $dx_{corr}$    = $x_{final} - x_{sweep}$   (pose-only correction)
+//   $x_{sweep}$    = feet position after Recover (post-recovery baseline)
+//   $x_{final}$    = feet position after StepDown (end of sweep phases)
+//   $dx_{intent}$  = $x_{final} - x_{sweep}$
+//   $dx_{corr}$    = $x_{sweep} - x_{old}$   (recovery push, excluded from velocity)
 //   $v_{next}$     = $dx_{intent} / dt$
 //   Recovery corrections ($dx_{corr}$) NEVER feed into velocity.
 //
@@ -42,6 +43,7 @@
 // =========================================================================
 
 #include "KinematicCharacterController.h"
+#include <cassert>
 #include <cmath>
 #include <algorithm>
 
@@ -69,6 +71,15 @@ KinematicCharacterController::KinematicCharacterController(
     , m_config(cfg)
     , m_maxSlopeCos(std::cos(cfg.maxSlopeDeg * kPi / 180.0f))
 {
+    // Derive all epsilons from the single contactOffset SSOT
+    m_config.sweep.skin  = m_config.contactOffset;
+    m_config.addedMargin = m_config.contactOffset;
+    m_config.maxPenDepth = m_config.contactOffset * 0.25f;
+
+#if defined(_DEBUG)
+    // Epsilon coherence assertion: anything sweep detects, Recover can resolve
+    assert(m_config.maxPenDepth < m_config.contactOffset);
+#endif
 }
 
 // =========================================================================
@@ -85,14 +96,26 @@ void KinematicCharacterController::Tick(const CctInput& input, float dt)
 
     PreStep();
     IntegrateVertical(input, dt);
-    StepUp();
-    StepMove(input.walkMove);
-    StepDown(dt);
 
-    // Section 3A: capture pre-recovery position
+    // Recover BEFORE sweeps (Bullet architecture).
+    // Resolves overlaps from previous tick so sweeps start from clean state.
+    Recover();
+    m_debug.posAfterRecover = m_currentPosition;
+
+    // Section 3A baseline: velocity computed from post-recovery position.
+    // Recovery push is excluded from velocity — same invariant, new capture point.
     m_xSweep = m_currentPosition;
 
-    Recover();
+    StepUp();
+    m_debug.posAfterStepUp = m_currentPosition;
+
+    StepMove(input.walkMove);
+    m_debug.posAfterStepMove = m_currentPosition;
+
+    StepDown(dt);
+    m_debug.posAfterStepDown = m_currentPosition;
+
+    // No second Recover — sweeps start from clean state.
     Writeback(dt);
 }
 
@@ -273,6 +296,27 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
 #endif
 
         if (hit.hit) {
+            // E3: StepMove hit recording
+            m_debug.stepMoveHitCount++;
+            if (m_debug.stepMoveHitCount == 1) {
+                m_debug.stepMoveFirstTOI    = hit.t;
+                m_debug.stepMoveFirstNormal = hit.normal;
+                m_debug.stepMoveFirstIndex  = hit.index;
+            }
+
+            // t≈0 safety net: if Recover didn't fully converge, a sweep
+            // can still hit at t within the contact shell. Threshold derived
+            // from contactOffset so it tracks the SSOT epsilon.
+            float minTOI = m_config.contactOffset / (std::max)(remainLen, kMinDist);
+            if (minTOI > 1.0f) minTOI = 1.0f;
+            if (hit.t <= minTOI) {
+                m_currentPosition = m_currentPosition + hit.normal * m_config.addedMargin;
+                m_targetPosition  = m_targetPosition  + hit.normal * m_config.addedMargin;
+                fraction -= 0.1f;
+                m_debug.zeroHitPushes++;
+                continue;
+            }
+
             // Do NOT advance m_currentPosition. Redirect target only.
             SlideAlongNormal(hit.normal);
 
@@ -348,6 +392,14 @@ void KinematicCharacterController::StepDown(float dt)
 
     sq::Hit hit = SweepClosest(m_currentPosition, downDelta);
 
+    // E4: StepDown hit recording
+    m_debug.stepDownDropDist = dropDist;
+    if (hit.hit) {
+        m_debug.stepDownHitTOI    = hit.t;
+        m_debug.stepDownHitNormal = hit.normal;
+        m_debug.stepDownWalkable  = IsWalkable(hit.normal);
+    }
+
     // Case 1: walkable ground found — snap and set grounded
     if (hit.hit && IsWalkable(hit.normal)) {
         float safeT = (dist > kMinDist)
@@ -412,20 +464,67 @@ void KinematicCharacterController::StepDown(float dt)
 //     for each overlap: compute MTD, push m_currentPosition outward
 //
 // INVARIANT (section 3A): recovery corrections are pose-only.
-//   $dx_{corr} = x_{final} - x_{sweep}$ NEVER feeds into velocity.
-//   m_xSweep is captured BEFORE this phase.
+//   $dx_{corr} = x_{sweep} - x_{old}$ (recovery push, excluded from velocity).
+//   m_xSweep is captured AFTER Recover, so sweep velocity = (x_final - x_sweep) / dt.
 // HAZARD: must not modify verticalVelocity or onGround.
 // EVIDENCE: CctDebug.recoverIters
 
 void KinematicCharacterController::Recover()
 {
-    // Stubbed: OverlapCapsule not yet implemented.
-    // When wired up, iterate:
-    //   segA = m_currentPosition + up * radius
-    //   segB = m_currentPosition + up * (radius + 2*halfHeight)
-    //   count = m_world->OverlapCapsule(segA, segB, radius, Q_Solid, ids, max)
-    //   for each id: compute MTD direction + depth, push m_currentPosition
-    m_debug.recoverIters = 0;
+    m_debug.recoverIters    = 0;
+    m_debug.recoverContacts = 0;
+    m_debug.recoverMaxDepth = 0.0f;
+    m_debug.recoverPushMag  = 0.0f;
+
+    const float slop = m_config.maxPenDepth;
+    float totalPush = 0.0f;
+
+    for (int iter = 0; iter < m_config.maxRecoverIters; ++iter) {
+        // Build capsule segment from current feet position
+        sq::Vec3 segA = m_currentPosition + m_config.up * m_geom.radius;
+        sq::Vec3 segB = m_currentPosition + m_config.up * (m_geom.radius + 2.0f * m_geom.halfHeight);
+
+        sq::OverlapContact contacts[32];
+        uint32_t count = m_world->OverlapCapsuleContacts(
+            segA, segB, m_geom.radius, Q_Solid, contacts, 32);
+
+        if (count == 0) break;
+
+        // Track debug info from first iteration
+        if (iter == 0) {
+            m_debug.recoverContacts = count;
+            if (count > 0)
+                m_debug.recoverMaxDepth = contacts[0].depth;  // sorted deepest first
+        }
+
+        // Gauss-Seidel projection: process contacts in sorted order
+        bool anyPushed = false;
+        for (uint32_t i = 0; i < count; ++i) {
+            float depth = contacts[i].depth;
+
+            // Tolerate penetration up to slop (maxPenDepth)
+            if (depth <= slop) continue;
+
+            float push = (depth - slop) * m_config.recoverAlpha;
+
+            // Clamp total push
+            if (totalPush + push > m_config.recoverMaxPush) {
+                push = m_config.recoverMaxPush - totalPush;
+                if (push <= 0.0f) break;
+            }
+
+            m_currentPosition = m_currentPosition + contacts[i].normal * push;
+            totalPush += push;
+            anyPushed = true;
+        }
+
+        m_debug.recoverIters = static_cast<uint32_t>(iter + 1);
+
+        if (!anyPushed) break;
+        if (totalPush >= m_config.recoverMaxPush) break;
+    }
+
+    m_debug.recoverPushMag = totalPush;
 }
 
 // =========================================================================
@@ -435,28 +534,30 @@ void KinematicCharacterController::Recover()
 // CONSUMES: m_xOld, m_xSweep, m_currentPosition, dt
 //
 // EQUATION (section 3A, non-negotiable):
-//   $v_{next} = \frac{x_{sweep} - x_{old}}{dt}$
+//   $v_{next} = \frac{x_{final} - x_{sweep}}{dt}$
 //
-// $x_{sweep}$ is the position after the sweep phases (StepUp + StepMove +
-// StepDown) but BEFORE recovery. This ensures overlap push-out never injects
-// persistent separating velocity.
+// $x_{sweep}$ is the position AFTER Recover but BEFORE sweep phases.
+// $x_{final}$ (m_currentPosition) is the position after StepDown.
+// This ensures overlap push-out (recovery) never injects persistent velocity.
 //
-// INVARIANT: $|dx_{corr}|$ should be bounded by skin + maxPenDepth.
+// INVARIANT: $|dx_{corr}|$ (recovery push) should be bounded by contactOffset.
 //            $v_{next} \cdot up \approx 0$ when grounded and idle.
 // EVIDENCE: CctDebug.dxIntentMag, dxCorrMag, vNextMag, vNextDotUp
 
 void KinematicCharacterController::Writeback(float dt)
 {
-    // Final position after recovery
+    // Final position after sweep phases (StepUp + StepMove + StepDown)
     m_state.posFeet = m_currentPosition;
 
-    // Section 3A velocity: intent displacement only
-    sq::Vec3 dxIntent = m_xSweep - m_xOld;
+    // Section 3A velocity: sweep displacement only (recovery excluded).
+    // x_sweep = post-recovery baseline, m_currentPosition = post-sweep final.
+    sq::Vec3 dxIntent = m_currentPosition - m_xSweep;
     m_state.vel = (dt > 0.0f) ? dxIntent * (1.0f / dt) : sq::Vec3{0, 0, 0};
 
     // Section 3A evidence
+    // dxIntent = sweep displacement, dxCorr = recovery push (excluded from velocity)
     m_debug.dxIntentMag = sq::Len(dxIntent);
-    m_debug.dxCorrMag   = sq::Len(m_currentPosition - m_xSweep);
+    m_debug.dxCorrMag   = sq::Len(m_xSweep - m_xOld);  // recovery push magnitude
     m_debug.vNextMag    = sq::Len(m_state.vel);
     m_debug.vNextDotUp  = sq::Dot(m_state.vel, m_config.up);
 }

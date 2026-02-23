@@ -6,23 +6,23 @@
 // Architecture reference: Bullet btKinematicCharacterController (zlib license).
 // Implementation: original, uses our CollisionWorld + SceneQuery backend.
 //
-// PHASE ORDERING:
-//   PreStep → IntegrateVertical → StepUp → StepMove → StepDown → Recover → Writeback
+// PHASE ORDERING (Bullet architecture — Recover before sweeps):
+//   PreStep → IntegrateVertical → Recover → StepUp → StepMove → StepDown → Writeback
 //
 // WHY EACH PHASE EXISTS:
 //   PreStep            — snapshot x_old for velocity writeback; save previous-tick flags
 //   IntegrateVertical  — gravity accumulation + jump injection; produces verticalOffset
+//   Recover            — overlap push-out from previous tick (Bullet: recoverFromPenetration)
 //   StepUp             — lift capsule by stepHeight so StepMove clears small obstacles
 //   StepMove           — lateral sweep+slide; the main movement phase
 //   StepDown           — drop capsule to re-acquire ground after the step-up lift
-//   Recover            — overlap push-out for any residual penetration (pose-only)
 //   Writeback          — compute v_next from intent displacement (§3A)
 //
 // VELOCITY SEMANTICS (§3A, non-negotiable):
 //   x_old   = feet position at tick start
-//   x_sweep = feet position after StepUp + StepMove + StepDown (before Recover)
-//   x_final = feet position after Recover
-//   v_next  = (x_sweep - x_old) / dt   — recovery NEVER contributes to velocity
+//   x_sweep = feet position after Recover (post-recovery baseline)
+//   x_final = feet position after StepDown (== x_sweep + sweep displacement)
+//   v_next  = (x_final - x_sweep) / dt   — recovery NEVER contributes to velocity
 //
 // MAPPING TO REFERENCE:
 //   | Our Phase        | Reference Concept               | Responsibility |

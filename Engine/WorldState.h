@@ -140,6 +140,7 @@ namespace Engine
         // Phase A: CollisionWorld owns BVH + collider registry
         Collision::CollisionWorld m_collisionWorld;
         void BuildCollisionWorld();
+        void RebuildCollisionWorldWithExtras();  // cubes + floor + extras
 
         // KCC (sole movement authority)
         std::unique_ptr<Collision::KinematicCharacterController> m_cct;

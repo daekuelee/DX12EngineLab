@@ -39,7 +39,8 @@ namespace Engine { namespace Collision {
 // ---- Collider classification ------------------------------------------------
 
 enum class ColliderShape : uint8_t {
-    AABB = 0
+    AABB = 0,
+    Tri  = 2     // Triangle (floor, ramps)
     // Future: Plane, OBB, Capsule
 };
 
@@ -57,6 +58,7 @@ static constexpr QueryMask Q_All     = Q_Solid | Q_Trigger;
 
 struct ColliderDesc {
     sq::AABB       bounds;          // BVH broad bounds (always present)
+    sq::Triangle   triVerts{};      // triangle vertices (used when shape == Tri)
     ColliderShape  shape  = ColliderShape::AABB;
     ColliderKind   kind   = ColliderKind::Solid;
     QueryMask      mask   = Q_Solid;   // which query masks can see this collider
@@ -99,11 +101,13 @@ public:
     uint32_t getTriggerCount() const { return static_cast<uint32_t>(m_triggerIds.size()); }
 
 private:
-    std::vector<ColliderDesc> m_descs;      // collider registry (ordered)
-    std::vector<sq::AABB>     m_sqAabbs;   // BVH backing storage (solids only)
-    std::vector<uint32_t>     m_solidRemap; // BVH prim index → m_descs index
-    std::vector<uint32_t>     m_triggerIds; // m_descs indices where kind==Trigger, ascending
-    sq::StaticBVH             m_bvh;
+    std::vector<ColliderDesc>  m_descs;         // collider registry (ordered)
+    std::vector<sq::AABB>      m_sqAabbs;      // BVH AABB backing storage (solids)
+    std::vector<sq::Triangle>  m_sqTris;       // BVH triangle backing storage (solids)
+    std::vector<uint32_t>      m_solidRemap;   // BVH AABB prim index → m_descs index
+    std::vector<uint32_t>      m_solidTriRemap;// BVH tri prim index → m_descs index
+    std::vector<uint32_t>      m_triggerIds;   // m_descs indices where kind==Trigger, ascending
+    sq::StaticBVH              m_bvh;
     mutable sq::QueryScratch  m_scratch;   // single-threaded query scratch
 };
 

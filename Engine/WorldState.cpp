@@ -50,10 +50,12 @@ namespace Engine
             geom.halfHeight = m_config.capsuleHalfHeight;
 
             Collision::CctConfig cctCfg;
-            cctCfg.gravity    = m_config.gravity;
-            cctCfg.jumpSpeed  = m_config.jumpVelocity;
-            cctCfg.stepHeight = m_config.maxStepHeight;
-            cctCfg.fallSpeed  = 55.0f;
+            cctCfg.gravity       = m_config.gravity;
+            cctCfg.jumpSpeed     = m_config.jumpVelocity;
+            cctCfg.stepHeight    = m_config.maxStepHeight;
+            cctCfg.fallSpeed     = 55.0f;
+            cctCfg.contactOffset = 0.02f;  // SSOT: all epsilons derived in KCC ctor
+            cctCfg.recoverAlpha  = 0.4f;   // faster convergence with tighter slop
 
             m_cct = std::make_unique<Collision::KinematicCharacterController>(
                 &m_collisionWorld, geom, cctCfg);
@@ -187,6 +189,7 @@ namespace Engine
         cctInput.walkMove = {walkVelX * fixedDt, 0.0f, walkVelZ * fixedDt};
         cctInput.jump = input.jump;
 
+
         // 7. Tick KCC (sole movement authority)
         assert(m_cct && "KCC must be constructed before TickFixed");
         m_cct->Tick(cctInput, fixedDt);
@@ -211,15 +214,38 @@ namespace Engine
                 const auto& dbg = m_cct->getDebug();
                 char buf[256];
                 sprintf_s(buf,
-                    "[KCC_AUTH] tick=%u pos=(%.2f,%.2f,%.2f) vel=(%.2f,%.2f,%.2f) gnd=%d recoverPush=%.4f\n",
+                    "[KCC_AUTH] tick=%u pos=(%.2f,%.2f,%.2f) vel=(%.2f,%.2f,%.2f) gnd=%d recoverPush=%.4f zHP=%u\n",
                     s_authTicks,
                     m_pawn.posX, m_pawn.posY, m_pawn.posZ,
                     m_pawn.velX, m_pawn.velY, m_pawn.velZ,
                     m_pawn.onGround ? 1 : 0,
-                    dbg.recoverPushMag);
+                    dbg.recoverPushMag,
+                    dbg.zeroHitPushes);
                 OutputDebugStringA(buf);
             }
         }
+
+#if defined(CCT_DEBUG_TICK) && CCT_DEBUG_TICK
+        // E5: Per-tick summary log — one line per tick
+        {
+            const auto& dbg = m_cct->getDebug();
+            const auto& cs2 = m_cct->getState();
+            char buf[512];
+            sprintf_s(buf,
+                "[KCC_TICK] pos=(%.2f,%.2f,%.2f) gnd=%d vy=%.2f "
+                "REC(n=%u d=%.4f p=%.4f) SU=%.2f SM(i=%u z=%u stuck=%d) "
+                "SD(hit=%d walk=%d drop=%.3f) dx=(%.4f,%.4f)\n",
+                cs2.posFeet.x, cs2.posFeet.y, cs2.posFeet.z,
+                cs2.onGround ? 1 : 0, cs2.verticalVelocity,
+                dbg.recoverContacts, dbg.recoverMaxDepth, dbg.recoverPushMag,
+                dbg.stepUpOffset,
+                dbg.forwardIters, dbg.zeroHitPushes, dbg.stuck ? 1 : 0,
+                dbg.stepDownHit ? 1 : 0, dbg.stepDownWalkable ? 1 : 0,
+                dbg.stepDownDropDist,
+                dbg.dxIntentMag, dbg.dxCorrMag);
+            OutputDebugStringA(buf);
+        }
+#endif  // CCT_DEBUG_TICK
 #endif
     }
 
@@ -287,7 +313,7 @@ namespace Engine
 
         if (newValue)
         {
-            // Toggle ON: Build stair grid test
+            // Toggle ON: Build stair grid test (also rebuilds BVH with extras)
             m_config.enableStepUpGridTest = true;
             BuildStepUpGridTest();
             m_stepGridWasEverEnabled = true;
@@ -306,6 +332,8 @@ namespace Engine
             {
                 OutputDebugStringA("[STEP_GRID] Toggle => 0 (no fixtures)\n");
             }
+            // Rebuild BVH without extras (cubes + floor only)
+            BuildCollisionWorld();
         }
 
         // MODE_SNAPSHOT: Log exact state after toggle
@@ -369,27 +397,128 @@ namespace Engine
         OutputDebugStringA("[Collision] Built spatial hash: 10000 cubes in 100x100 grid\n");
     }
 
-    // Phase A: Build CollisionWorld from the same 10000 cube AABBs.
-    // Cubes are fed as ColliderDesc (Solid AABB). BVH built inside CollisionWorld.
+    // Phase A: Build CollisionWorld from cube AABBs + floor triangles.
+    // Cubes are Solid AABB. Floor is 2 Solid Tri covering the floor plane.
     void WorldState::BuildCollisionWorld()
     {
         namespace coll = Collision;
 
         const uint32_t cubeCount = GRID_SIZE * GRID_SIZE;
-        std::vector<coll::ColliderDesc> descs(cubeCount);
+        std::vector<coll::ColliderDesc> descs;
+        descs.reserve(cubeCount + 2);  // cubes + 2 floor tris
+
+        // Cubes
         for (uint32_t i = 0; i < cubeCount; ++i) {
+            coll::ColliderDesc d;
             AABB engineAABB = GetCubeAABB(static_cast<uint16_t>(i));
-            descs[i].bounds = {
+            d.bounds = {
                 engineAABB.minX, engineAABB.minY, engineAABB.minZ,
                 engineAABB.maxX, engineAABB.maxY, engineAABB.maxZ
             };
-            descs[i].shape   = coll::ColliderShape::AABB;
-            descs[i].kind    = coll::ColliderKind::Solid;
-            descs[i].mask    = coll::Q_Solid;
-            descs[i].userTag = i;
+            d.shape   = coll::ColliderShape::AABB;
+            d.kind    = coll::ColliderKind::Solid;
+            d.mask    = coll::Q_Solid;
+            d.userTag = i;
+            descs.push_back(d);
+        }
+
+        // Floor: two triangles at Y=floorY covering floor bounds.
+        // Winding: CCW from above → normal = (0,1,0).
+        {
+            const float fx0 = m_config.floorMinX, fx1 = m_config.floorMaxX;
+            const float fz0 = m_config.floorMinZ, fz1 = m_config.floorMaxZ;
+            const float fy  = m_config.floorY;
+
+            coll::ColliderDesc floorA;
+            floorA.shape    = coll::ColliderShape::Tri;
+            floorA.kind     = coll::ColliderKind::Solid;
+            floorA.mask     = coll::Q_Solid;
+            floorA.userTag  = 0xFFFFFFFE;
+            floorA.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz0}, {fx1,fy,fz1}};
+            floorA.bounds   = Collision::sq::TriAABB(floorA.triVerts);
+            descs.push_back(floorA);
+
+            coll::ColliderDesc floorB;
+            floorB.shape    = coll::ColliderShape::Tri;
+            floorB.kind     = coll::ColliderKind::Solid;
+            floorB.mask     = coll::Q_Solid;
+            floorB.userTag  = 0xFFFFFFFE;
+            floorB.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz1}, {fx0,fy,fz1}};
+            floorB.bounds   = Collision::sq::TriAABB(floorB.triVerts);
+            descs.push_back(floorB);
         }
 
         m_collisionWorld.BuildStatic(descs);
+    }
+
+    // Rebuild CollisionWorld with cubes + floor tris + all current extras as Solid AABBs.
+    // Called after BuildStepUpGridTest() to ensure stairs are in the BVH.
+    void WorldState::RebuildCollisionWorldWithExtras()
+    {
+        namespace coll = Collision;
+
+        const uint32_t cubeCount = GRID_SIZE * GRID_SIZE;
+        std::vector<coll::ColliderDesc> descs;
+        descs.reserve(cubeCount + 2 + m_extras.size());
+
+        // Cubes
+        for (uint32_t i = 0; i < cubeCount; ++i) {
+            coll::ColliderDesc d;
+            AABB engineAABB = GetCubeAABB(static_cast<uint16_t>(i));
+            d.bounds = {
+                engineAABB.minX, engineAABB.minY, engineAABB.minZ,
+                engineAABB.maxX, engineAABB.maxY, engineAABB.maxZ
+            };
+            d.shape   = coll::ColliderShape::AABB;
+            d.kind    = coll::ColliderKind::Solid;
+            d.mask    = coll::Q_Solid;
+            d.userTag = i;
+            descs.push_back(d);
+        }
+
+        // Floor triangles
+        {
+            const float fx0 = m_config.floorMinX, fx1 = m_config.floorMaxX;
+            const float fz0 = m_config.floorMinZ, fz1 = m_config.floorMaxZ;
+            const float fy  = m_config.floorY;
+
+            coll::ColliderDesc floorA;
+            floorA.shape    = coll::ColliderShape::Tri;
+            floorA.kind     = coll::ColliderKind::Solid;
+            floorA.mask     = coll::Q_Solid;
+            floorA.userTag  = 0xFFFFFFFE;
+            floorA.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz0}, {fx1,fy,fz1}};
+            floorA.bounds   = Collision::sq::TriAABB(floorA.triVerts);
+            descs.push_back(floorA);
+
+            coll::ColliderDesc floorB;
+            floorB.shape    = coll::ColliderShape::Tri;
+            floorB.kind     = coll::ColliderKind::Solid;
+            floorB.mask     = coll::Q_Solid;
+            floorB.userTag  = 0xFFFFFFFE;
+            floorB.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz1}, {fx0,fy,fz1}};
+            floorB.bounds   = Collision::sq::TriAABB(floorB.triVerts);
+            descs.push_back(floorB);
+        }
+
+        // Extras (stairs, etc.) as Solid AABBs
+        for (size_t i = 0; i < m_extras.size(); ++i) {
+            coll::ColliderDesc d;
+            const AABB& ea = m_extras[i].aabb;
+            d.bounds = { ea.minX, ea.minY, ea.minZ, ea.maxX, ea.maxY, ea.maxZ };
+            d.shape   = coll::ColliderShape::AABB;
+            d.kind    = coll::ColliderKind::Solid;
+            d.mask    = coll::Q_Solid;
+            d.userTag = static_cast<uint32_t>(EXTRA_BASE + i);
+            descs.push_back(d);
+        }
+
+        m_collisionWorld.BuildStatic(descs);
+
+        char buf[128];
+        sprintf_s(buf, "[COLLWORLD_REBUILD] total=%u extras=%zu\n",
+            static_cast<uint32_t>(descs.size()), m_extras.size());
+        OutputDebugStringA(buf);
     }
 
     int WorldState::WorldToCellX(float x) const
@@ -506,6 +635,9 @@ namespace Engine
 
         sprintf_s(buf, "[STEP_GRID] Total extras=%zu\n", m_extras.size());
         OutputDebugStringA(buf);
+
+        // Rebuild BVH to include extras (stairs)
+        RebuildCollisionWorldWithExtras();
     }
 
     AABB WorldState::GetCubeAABB(uint16_t cubeIdx) const
