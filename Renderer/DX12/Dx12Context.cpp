@@ -717,8 +717,8 @@ namespace Renderer
             // Capsule wireframe debug visualization (after character, before ImGui)
             if (ToggleSystem::IsCapsuleWireframeEnabled())
             {
-                constexpr float kCapsuleRadius = 1.4f;
-                constexpr float kCapsuleHalfHeight = 1.1f;
+                constexpr float kCapsuleRadius = 1.5f;
+                constexpr float kCapsuleHalfHeight = 1.5f;
 
                 Allocation wireAlloc = m_uploadArena.Allocate(
                     CapsuleWireframe::MaxByteSize, 4, "CapsuleWire");

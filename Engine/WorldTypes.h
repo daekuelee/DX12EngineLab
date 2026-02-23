@@ -289,11 +289,11 @@ namespace Engine
         float spawnZ = 1.0f;
 
         // Part 2: Pawn AABB dimensions (Day3.7: axis-aware)
-        // X extent: arms outer edge = offsetX(1.0) + scaleX(0.4) = 1.4
+        // X extent: match capsuleRadius for broadphase consistency
         // Z extent: keep tight depth
-        float pawnHalfExtentX = 1.4f;  // Arms reach
+        float pawnHalfExtentX = 1.5f;  // Match capsuleRadius
         float pawnHalfExtentZ = 0.4f;  // Tight depth
-        float pawnHeight = 5.0f;       // Total height (feet at posY, head at posY+height)
+        float pawnHeight = 6.0f;       // Total height = 2*R + 2*H = 2*1.5 + 2*1.5 = 6.0
 
         // Part 2: Cube collision dimensions
         // - Mesh local half-extent = 1.0 (vertices at ±1)
@@ -306,10 +306,10 @@ namespace Engine
         float cubeMaxY = 3.0f;
 
         // Day3.11: Capsule SSOT (feet-bottom anchor)
-        // Total height = 2*r + 2*hh = 2*1.4 + 2*1.1 = 5.0 (matches pawnHeight)
-        // Radius matches pawnHalfExtentX (1.4) for visual consistency
-        float capsuleRadius = 1.4f;
-        float capsuleHalfHeight = 1.1f;
+        // Total height = 2*r + 2*hh = 2*1.5 + 2*1.5 = 6.0 (matches pawnHeight)
+        // Radius matches pawnHalfExtentX (1.5) for broadphase consistency
+        float capsuleRadius = 1.5f;
+        float capsuleHalfHeight = 1.5f;
 
         // Day3.12 Phase 4A: Y sweep config
         bool enableYSweep = true;   // Toggle for Y sweep (fallback to ResolveAxis Y)
