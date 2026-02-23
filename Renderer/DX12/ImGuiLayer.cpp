@@ -286,9 +286,6 @@ namespace Renderer
         m_worldState.stepFailMask = snap.stepFailMask;
         m_worldState.stepHeightUsed = snap.stepHeightUsed;
         m_worldState.stepCubeIdx = snap.stepCubeIdx;
-        // Day3.12+: Step grid test toggle state
-        m_worldState.stepGridTestEnabled = snap.stepGridTestEnabled;
-        m_worldState.stepGridWasEverEnabled = snap.stepGridWasEverEnabled;
         // Day4 PR2.2: Action system diagnostics
         m_worldState.actionJumpBuffered = snap.actionJumpBuffered;
         m_worldState.actionJumpBufferTimer = snap.actionJumpBufferTimer;
@@ -347,16 +344,6 @@ namespace Renderer
             ImGui::Text("CamMode: %s [V]", ToggleSystem::GetCameraModeName());
             const char* ctrlMode = (m_worldState.controllerMode == 0) ? "AABB" : "Capsule";
             ImGui::Text("Ctrl: %s [F6]", ctrlMode);
-            // GridTest indicator
-            if (m_worldState.stepGridWasEverEnabled)
-            {
-                if (m_worldState.stepGridTestEnabled)
-                    ImGui::Text("GridTest: ON [F7]");
-                else
-                    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "GridTest: OFF* [F7]");
-            }
-            else
-                ImGui::Text("GridTest: OFF [F7]");
             ImGui::Text("Verbose: %s [F8]", ToggleSystem::IsHudVerboseEnabled() ? "ON" : "OFF");
             if (m_worldState.controllerMode == 1)
             {
@@ -664,7 +651,6 @@ namespace Renderer
                 ImGui::BulletText("G: Toggle Grid");
                 ImGui::BulletText("U: Upload Diagnostics");
                 ImGui::BulletText("F6: Controller Mode");
-                ImGui::BulletText("F7: Toggle GridTest");
                 ImGui::BulletText("F8: Toggle HUD Verbose");
                 if (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson)
                 {

@@ -319,8 +319,5 @@ namespace Engine
         bool enableStepUp = true;   // Toggle for step-up auto-climb
         float maxStepHeight = 0.3f; // Max obstacle height to climb
 
-        // Day3.12 Phase 4B: Test fixture config
-        bool enableStepUpTestFixtures = true;  // Test fixture toggle
-        bool enableStepUpGridTest = false;     // Stair grid test (disables T1/T2/T3 when true)
     };
 }

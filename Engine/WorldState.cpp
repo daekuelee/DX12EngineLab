@@ -66,37 +66,8 @@ namespace Engine
             m_cct->setState(initState);
         }
 
-        // Day3.12: Mutual exclusion - StepUpGridTest overrides T1/T2/T3 fixtures
-        if (m_config.enableStepUpGridTest)
-        {
-            BuildStepUpGridTest();
-            m_stepGridWasEverEnabled = true;
-        }
-        else if (m_config.enableStepUpTestFixtures)
-        {
-            // Compute grid indices from world coords: idx = gz*100 + gx, where gx=(x+99)/2
-            auto worldToIdx = [](float wx, float wz) -> uint16_t {
-                int gx = static_cast<int>((wx + 99.0f) / 2.0f);
-                int gz = static_cast<int>((wz + 99.0f) / 2.0f);
-                return static_cast<uint16_t>(gz * 100 + gx);
-            };
-
-            m_fixtureT1Idx = worldToIdx(5.0f, 9.0f);      // 5452
-            m_fixtureT2Idx = worldToIdx(9.0f, 9.0f);      // 5454
-            m_fixtureT3StepIdx = worldToIdx(15.0f, 9.0f); // 5457
-
-            // Build extras (ceiling only)
-            BuildExtraFixtures();
-
-            // Log fixture info (collision Y = cubeMaxY + stepHeight)
-            char buf[256];
-            sprintf_s(buf, "[FIXTURE] T1_STEP gridIdx=%u world=(5,0,9) AABB Y=[0,3.3]\n", m_fixtureT1Idx);
-            OutputDebugStringA(buf);
-            sprintf_s(buf, "[FIXTURE] T2_WALL gridIdx=%u world=(9,0,9) AABB Y=[0,3.6]\n", m_fixtureT2Idx);
-            OutputDebugStringA(buf);
-            sprintf_s(buf, "[FIXTURE] T3_STEP gridIdx=%u world=(15,0,9) AABB Y=[0,3.5]\n", m_fixtureT3StepIdx);
-            OutputDebugStringA(buf);
-        }
+        // Build stairs (always present in the world)
+        BuildStepUpGridTest();
 
         // Day3.4: Collision geometry derivation proof log
         OutputDebugStringA("[CollisionInit] CubeLocalHalf=1.0\n");
@@ -304,48 +275,6 @@ namespace Engine
         }
     }
 
-    void WorldState::ToggleStepUpGridTest()
-    {
-        bool newValue = !m_config.enableStepUpGridTest;
-
-        // Clear existing extras from spatial grid before switching modes
-        ClearExtrasFromSpatialGrid();
-
-        if (newValue)
-        {
-            // Toggle ON: Build stair grid test (also rebuilds BVH with extras)
-            m_config.enableStepUpGridTest = true;
-            BuildStepUpGridTest();
-            m_stepGridWasEverEnabled = true;
-            OutputDebugStringA("[STEP_GRID] Toggle => 1 (stairs built)\n");
-        }
-        else
-        {
-            // Toggle OFF: Rebuild fixtures mode (T1/T2/T3 + ceiling)
-            m_config.enableStepUpGridTest = false;
-            if (m_config.enableStepUpTestFixtures)
-            {
-                BuildExtraFixtures();
-                OutputDebugStringA("[STEP_GRID] Toggle => 0 (fixtures rebuilt)\n");
-            }
-            else
-            {
-                OutputDebugStringA("[STEP_GRID] Toggle => 0 (no fixtures)\n");
-            }
-            // Rebuild BVH without extras (cubes + floor only)
-            BuildCollisionWorld();
-        }
-
-        // MODE_SNAPSHOT: Log exact state after toggle
-        char snap[256];
-        sprintf_s(snap, "[MODE_SNAPSHOT] fixtures=%d gridTest=%d stepUp=%d extrasCount=%zu\n",
-            m_config.enableStepUpTestFixtures ? 1 : 0,
-            m_config.enableStepUpGridTest ? 1 : 0,
-            m_config.enableStepUp ? 1 : 0,
-            m_extras.size());
-        OutputDebugStringA(snap);
-    }
-
     void WorldState::RespawnResetControllerState()
     {
         m_pawn.posX = m_config.spawnX;
@@ -550,30 +479,6 @@ namespace Engine
                 m_spatialGrid[gz][gx].push_back(id);
     }
 
-    void WorldState::ClearExtrasFromSpatialGrid()
-    {
-        // Remove all IDs >= EXTRA_BASE from spatial grid
-        for (int gz = 0; gz < GRID_SIZE; ++gz)
-        {
-            for (int gx = 0; gx < GRID_SIZE; ++gx)
-            {
-                auto& cell = m_spatialGrid[gz][gx];
-                cell.erase(
-                    std::remove_if(cell.begin(), cell.end(),
-                        [](uint16_t id) { return id >= EXTRA_BASE; }),
-                    cell.end());
-            }
-        }
-        m_extras.clear();
-        OutputDebugStringA("[SPATIAL] Cleared all extras from grid\n");
-    }
-
-    void WorldState::BuildExtraFixtures()
-    {
-        m_extras.clear();
-        // No extra fixtures in fixture mode (T1/T2/T3 are grid cubes, not extras)
-    }
-
     void WorldState::BuildStepUpGridTest()
     {
         const float TREAD = 0.60f;
@@ -662,32 +567,6 @@ namespace Engine
         aabb.maxX = cx + m_config.cubeHalfXZ;
         aabb.minZ = cz - m_config.cubeHalfXZ;
         aabb.maxZ = cz + m_config.cubeHalfXZ;
-
-        // Day3.12 Phase 4B+: Fixture height overrides (indices computed at init)
-        // Collision Y must match render: CUBE_TOP (3.0) + stepHeight
-        if (m_config.enableStepUpTestFixtures)
-        {
-            const float CUBE_TOP = m_config.cubeMaxY;  // 3.0
-
-            if (cubeIdx == m_fixtureT1Idx)
-            {
-                aabb.minY = 0.0f;
-                aabb.maxY = CUBE_TOP + 0.3f;  // 3.3 - matches render
-                return aabb;
-            }
-            if (cubeIdx == m_fixtureT2Idx)
-            {
-                aabb.minY = 0.0f;
-                aabb.maxY = CUBE_TOP + 0.6f;  // 3.6 - matches render
-                return aabb;
-            }
-            if (cubeIdx == m_fixtureT3StepIdx)
-            {
-                aabb.minY = 0.0f;
-                aabb.maxY = CUBE_TOP + 0.5f;  // 3.5 - matches render
-                return aabb;
-            }
-        }
 
         aabb.minY = m_config.cubeMinY;
         aabb.maxY = m_config.cubeMaxY;
@@ -963,10 +842,6 @@ namespace Engine
         snap.stepFailMask = m_collisionStats.stepFailMask;
         snap.stepHeightUsed = m_collisionStats.stepHeightUsed;
         snap.stepCubeIdx = m_collisionStats.stepCubeIdx;
-
-        // Day3.12+: Step grid test toggle state
-        snap.stepGridTestEnabled = m_config.enableStepUpGridTest;
-        snap.stepGridWasEverEnabled = m_stepGridWasEverEnabled;
 
         return snap;
     }

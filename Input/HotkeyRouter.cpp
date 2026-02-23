@@ -31,7 +31,6 @@ namespace HotkeyRouter
     static void HandleToggleOpaquePSO();
     static void HandleSentinelInstance0();
     static void HandleStompLifetime();
-    static void HandleToggleStepUpGridTest();
     static void HandleToggleHudVerbose();
     static void HandleToggleDebugSingleInstance();
 
@@ -55,7 +54,6 @@ namespace HotkeyRouter
         { 'V',    HandleToggleCameraMode,           "ToggleCameraMode" },
         { VK_F1,  HandleSentinelInstance0,          "SentinelInst0"    },
         { VK_F2,  HandleStompLifetime,              "StompLifetime"    },
-        { VK_F7,  HandleToggleStepUpGridTest,       "StepUpGridTest"   },
         { VK_F8,  HandleToggleHudVerbose,           "HudVerbose"       },
         { VK_F9,  HandleToggleDebugSingleInstance,  "DebugSingleInst"  },
     };
@@ -138,7 +136,7 @@ namespace HotkeyRouter
 
 #if defined(_DEBUG)
         // Verbose logging for T and F7 keys (proof points)
-        if (vk == 'T' || vk == VK_F7)
+        if (vk == 'T')
         {
             char buf[128];
             if (vk >= ' ' && vk <= 'Z')
@@ -238,12 +236,6 @@ namespace HotkeyRouter
         bool current = Renderer::ToggleSystem::IsStompLifetimeEnabled();
         Renderer::ToggleSystem::SetStompLifetime(!current);
         OutputDebugStringA(current ? "stomp_Lifetime: OFF\n" : "stomp_Lifetime: ON\n");
-    }
-
-    static void HandleToggleStepUpGridTest()
-    {
-        if (s_app)
-            s_app->ToggleStepUpGridTest();
     }
 
     static void HandleToggleHudVerbose()
