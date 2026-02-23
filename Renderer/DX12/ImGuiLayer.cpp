@@ -652,6 +652,7 @@ namespace Renderer
                 ImGui::BulletText("U: Upload Diagnostics");
                 ImGui::BulletText("F6: Controller Mode");
                 ImGui::BulletText("F8: Toggle HUD Verbose");
+                ImGui::BulletText("F10: Toggle Capsule Wireframe");
                 if (ToggleSystem::GetCameraMode() == CameraMode::ThirdPerson)
                 {
                     ImGui::BulletText("WASD: Move (cam-relative)");

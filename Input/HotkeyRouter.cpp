@@ -33,6 +33,7 @@ namespace HotkeyRouter
     static void HandleStompLifetime();
     static void HandleToggleHudVerbose();
     static void HandleToggleDebugSingleInstance();
+    static void HandleToggleCapsuleWireframe();
 
     //-------------------------------------------------------------------------
     // Binding table: vk + handler + name
@@ -56,6 +57,7 @@ namespace HotkeyRouter
         { VK_F2,  HandleStompLifetime,              "StompLifetime"    },
         { VK_F8,  HandleToggleHudVerbose,           "HudVerbose"       },
         { VK_F9,  HandleToggleDebugSingleInstance,  "DebugSingleInst"  },
+        { VK_F10, HandleToggleCapsuleWireframe,     "CapsuleWire"      },
     };
     static constexpr size_t kBindingCount = sizeof(s_bindings) / sizeof(s_bindings[0]);
 
@@ -253,6 +255,13 @@ namespace HotkeyRouter
             Renderer::ToggleSystem::IsDebugSingleInstanceEnabled() ? "ON" : "OFF",
             Renderer::ToggleSystem::GetDebugInstanceIndex());
         OutputDebugStringA(buf);
+    }
+
+    static void HandleToggleCapsuleWireframe()
+    {
+        Renderer::ToggleSystem::ToggleCapsuleWireframe();
+        OutputDebugStringA(Renderer::ToggleSystem::IsCapsuleWireframeEnabled()
+            ? "CapsuleWireframe: ON\n" : "CapsuleWireframe: OFF\n");
     }
 
 }  // namespace HotkeyRouter

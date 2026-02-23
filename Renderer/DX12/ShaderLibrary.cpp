@@ -60,6 +60,7 @@ namespace Renderer
         m_cubesOpaquePso = nullptr;
         m_floorPso = nullptr;
         m_markerPso = nullptr;
+        m_debugLinePso = nullptr;
 
         // Shutdown PSO cache (releases all PSOs)
         m_psoCache.Shutdown();
@@ -75,6 +76,8 @@ namespace Renderer
         m_floorPsBlob.Reset();
         m_markerVsBlob.Reset();
         m_markerPsBlob.Reset();
+        m_debugLineVsBlob.Reset();
+        m_debugLinePsBlob.Reset();
     }
 
     bool ShaderLibrary::LoadCompiledShader(const wchar_t* path, ComPtr<ID3DBlob>& outBlob)
@@ -132,6 +135,12 @@ namespace Renderer
             return false;
 
         if (!LoadCompiledShader((exeDir + L"shaders/marker_ps.cso").c_str(), m_markerPsBlob))
+            return false;
+
+        if (!LoadCompiledShader((exeDir + L"shaders/debug_line_vs.cso").c_str(), m_debugLineVsBlob))
+            return false;
+
+        if (!LoadCompiledShader((exeDir + L"shaders/debug_line_ps.cso").c_str(), m_debugLinePsBlob))
             return false;
 
         OutputDebugStringA("ShaderLibrary: All shaders loaded from CSO files\n");
@@ -366,6 +375,38 @@ namespace Renderer
             // Pre-warm marker PSO via cache
             m_markerPso = m_psoCache.GetOrCreate(markerPsoDesc, "marker");
             if (!m_markerPso)
+                return false;
+        }
+
+        // Create debug line PSO (LINE topology, depth read-only, no cull)
+        {
+            D3D12_GRAPHICS_PIPELINE_STATE_DESC linePsoDesc = {};
+            linePsoDesc.pRootSignature = m_rootSignature.Get();
+            linePsoDesc.VS = { m_debugLineVsBlob->GetBufferPointer(), m_debugLineVsBlob->GetBufferSize() };
+            linePsoDesc.PS = { m_debugLinePsBlob->GetBufferPointer(), m_debugLinePsBlob->GetBufferSize() };
+            linePsoDesc.InputLayout = { inputLayout, _countof(inputLayout) };
+            linePsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+            linePsoDesc.RasterizerState = rasterizer;
+            linePsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+            linePsoDesc.RasterizerState.AntialiasedLineEnable = TRUE;
+            linePsoDesc.BlendState = blend;
+
+            // Depth read-only: visible behind cubes but doesn't write depth
+            D3D12_DEPTH_STENCIL_DESC lineDepth = {};
+            lineDepth.DepthEnable = TRUE;
+            lineDepth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+            lineDepth.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+            lineDepth.StencilEnable = FALSE;
+            linePsoDesc.DepthStencilState = lineDepth;
+
+            linePsoDesc.SampleMask = UINT_MAX;
+            linePsoDesc.NumRenderTargets = 1;
+            linePsoDesc.RTVFormats[0] = rtvFormat;
+            linePsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+            linePsoDesc.SampleDesc.Count = 1;
+
+            m_debugLinePso = m_psoCache.GetOrCreate(linePsoDesc, "debug_line");
+            if (!m_debugLinePso)
                 return false;
         }
 

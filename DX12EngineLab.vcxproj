@@ -174,6 +174,7 @@
     <ClInclude Include="Renderer\DX12\ImGuiLayer.h" />
     <ClInclude Include="Renderer\DX12\CharacterRenderer.h" />
     <ClInclude Include="Renderer\DX12\CharacterPass.h" />
+    <ClInclude Include="Renderer\DX12\CapsuleWireframe.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="Scene\SceneTypes.h" />
@@ -207,6 +208,7 @@
     <ClCompile Include="Renderer\DX12\UploadArena.cpp" />
     <ClCompile Include="Renderer\DX12\ImGuiLayer.cpp" />
     <ClCompile Include="Renderer\DX12\CharacterRenderer.cpp" />
+    <ClCompile Include="Renderer\DX12\CapsuleWireframe.cpp" />
     <ClCompile Include="third_party\imgui\imgui.cpp" />
     <ClCompile Include="third_party\imgui\imgui_draw.cpp" />
     <ClCompile Include="third_party\imgui\imgui_tables.cpp" />
@@ -266,6 +268,20 @@
       <ShaderModel>5.1</ShaderModel>
       <EntryPointName>PSMarker</EntryPointName>
       <ObjectFileOutput>$(OutDir)shaders\marker_ps.cso</ObjectFileOutput>
+    </FxCompile>
+    <!-- Debug line shaders (capsule wireframe) -->
+    <FxCompile Include="shaders\debug_line_vs.hlsl">
+      <ShaderType>Vertex</ShaderType>
+      <ShaderModel>5.1</ShaderModel>
+      <EntryPointName>VSDebugLine</EntryPointName>
+      <ObjectFileOutput>$(OutDir)shaders\debug_line_vs.cso</ObjectFileOutput>
+      <AdditionalIncludeDirectories>shaders</AdditionalIncludeDirectories>
+    </FxCompile>
+    <FxCompile Include="shaders\debug_line_ps.hlsl">
+      <ShaderType>Pixel</ShaderType>
+      <ShaderModel>5.1</ShaderModel>
+      <EntryPointName>PSDebugLine</EntryPointName>
+      <ObjectFileOutput>$(OutDir)shaders\debug_line_ps.cso</ObjectFileOutput>
     </FxCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

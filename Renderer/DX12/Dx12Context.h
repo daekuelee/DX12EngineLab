@@ -276,6 +276,11 @@ namespace Renderer
         DirectX::XMFLOAT4X4 m_injectedViewProj = {};
         bool m_useInjectedCamera = false;
 
+#if defined(_DEBUG)
+        // Cached pawn position for capsule wireframe debug visualization
+        float m_pawnPosX = 0.0f, m_pawnPosY = 0.0f, m_pawnPosZ = 0.0f;
+#endif
+
         bool m_initialized = false;
 
         // Initialize() helpers - device and swap chain

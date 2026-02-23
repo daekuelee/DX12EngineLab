@@ -11,6 +11,7 @@
 #include "ResourceStateTracker.h"
 #include "PassOrchestrator.h"
 #include "CharacterPass.h"
+#include "CapsuleWireframe.h"
 #include "../../Engine/WorldState.h"  // Day3.12 Phase 4B+: Fixture transform overrides
 #include <cstdio>
 #include <DirectXMath.h>
@@ -476,6 +477,11 @@ namespace Renderer
     void Dx12Context::SetPawnTransform(float posX, float posY, float posZ, float yaw)
     {
         m_characterRenderer.SetPawnTransform(posX, posY, posZ, yaw);
+#if defined(_DEBUG)
+        m_pawnPosX = posX;
+        m_pawnPosY = posY;
+        m_pawnPosZ = posZ;
+#endif
     }
 
     Allocation Dx12Context::UpdateFrameConstants(FrameContext& ctx)
@@ -706,6 +712,31 @@ namespace Renderer
 
             CharacterPass::Record(m_commandList.Get(), charInputs);
             drawCalls += 1;  // Character is 1 draw call (6 instances)
+
+#if defined(_DEBUG)
+            // Capsule wireframe debug visualization (after character, before ImGui)
+            if (ToggleSystem::IsCapsuleWireframeEnabled())
+            {
+                constexpr float kCapsuleRadius = 1.4f;
+                constexpr float kCapsuleHalfHeight = 1.1f;
+
+                Allocation wireAlloc = m_uploadArena.Allocate(
+                    CapsuleWireframe::MaxByteSize, 4, "CapsuleWire");
+
+                uint32_t wireVerts = CapsuleWireframe::GenerateVertices(
+                    wireAlloc.cpuPtr,
+                    m_pawnPosX, m_pawnPosY, m_pawnPosZ,
+                    kCapsuleRadius, kCapsuleHalfHeight);
+
+                D3D12_GPU_VIRTUAL_ADDRESS wireVbGpuVA =
+                    ctx.uploadAllocator.GetBuffer()->GetGPUVirtualAddress() + wireAlloc.offset;
+
+                CapsuleWireframe::RecordDraw(
+                    m_commandList.Get(), &m_shaderLibrary,
+                    frameCBAlloc.gpuVA, wireVbGpuVA, wireVerts);
+                drawCalls += 1;
+            }
+#endif
 
             // Record ImGui pass (we skipped it in orchestrator)
             m_imguiLayer.RecordCommands(m_commandList.Get());
