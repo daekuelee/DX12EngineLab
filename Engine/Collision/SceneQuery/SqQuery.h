@@ -61,7 +61,7 @@ inline bool BetterHit(float tNew, PrimType typeNew, uint32_t idxNew, uint32_t fe
                       float epsT)
 {
     if (tNew < tBest) return true;
-    if (Abs(tNew - tBest) < epsT) {
+    if (Abs(tNew - tBest) <= epsT) {
         const int clsNew = FeatureClassFromPacked(featNew);
         const int clsBest = FeatureClassFromPacked(featBest);
         if (clsNew != clsBest) return clsNew < clsBest;
@@ -172,10 +172,13 @@ inline Hit SweepCapsuleClosestHit_Fast(
 
                 // Sweep filter: reject candidates by normal predicate
                 // (Bullet-equivalent: addSingleResult returning 1.0 to skip)
-                if (filter.active &&
-                    (rejectInitialOverlap || filter.filterInitialOverlap || t > 0.0f) &&
-                    Dot(n, filter.refDir) < filter.minDot)
-                    continue;
+                if (filter.active) {
+                    const bool isInitial = (t <= 0.0f);
+                    const bool applyFilter = !isInitial ||
+                        rejectInitialOverlap || filter.filterInitialOverlap;
+                    if (applyFilter && Dot(n, filter.refDir) < filter.minDot)
+                        continue;
+                }
 
                 if (t < lo || t > hi) continue;
 

@@ -45,7 +45,6 @@ namespace Engine { namespace Collision { namespace sq {
 // ---- Epsilon constants for narrowphase ----------------------------------
 inline constexpr float kNpEpsAlign = 1e-6f;   // alignment tie-break tolerance
 inline constexpr float kNpColinearEps = 1e-4f; // capsule axis || motion threshold
-inline constexpr float kNpEpsParallel = 1e-8f; // narrowphase plane-motion parallel threshold
 
 // Feature priority class for tie-breaking:
 //   0=face, 1=edge, 2=vertex, 3=prism-side (lowest).
@@ -68,10 +67,10 @@ inline bool PassNarrowfilter(const SweepFilter* filter,
                             const Vec3& n)
 {
     if (!filter || !filter->active) return true;
-    // Keep initial-overlap (t==0) candidates from being filtered when the
-    // caller wants them (rejectInitialOverlap==false), unless the stage
-    // explicitly requires filtering on initial overlap.
-    if (!rejectInitialOverlap && !filter->filterInitialOverlap && t <= 0.0f)
+    // By default initial-overlap candidates bypass filtering when the caller
+    // allows t==0 hits. Grounding fallback paths can opt in via
+    // filterInitialOverlap=true.
+    if (!rejectInitialOverlap && t <= 0.0f && !filter->filterInitialOverlap)
         return true;
     return Dot(n, filter->refDir) >= filter->minDot;
 }
@@ -182,7 +181,7 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
         float dist0 = Dot(n, c0 - tri.p0);
         float distV = Dot(n, delta);
 
-        if (Abs(distV) > kNpEpsParallel) {
+        if (Abs(distV) > kEpsParallel) {
             auto tryPlane = [&](float targetDist, uint32_t fId) {
                 float t = (targetDist - dist0) / distV;
                 if (t < 0.0f || t > 1.0f) return;
@@ -406,12 +405,15 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
         if (SweepSphereTri_TOI01(frontCenter, r, in.delta, srcTri, cfg.twoSidedTris,
                                  t, n, f, filter, rejectInitialOverlap, cfg.tieEpsT))
             consider(t, n, f);
-        if (!std::isfinite(bestT)) return false;
-        outT = bestT;
-        outN = bestN;
-        outFeat = bestF;
-        if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
-        return true;
+        // Robustness: if front-sphere shortcut misses, fall through to full prism sweep
+        // instead of discarding this primitive.
+        if (std::isfinite(bestT)) {
+            outT = bestT;
+            outN = bestN;
+            outFeat = bestF;
+            if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
+            return true;
+        }
     }
 
     // Extrude triangle and sweep sphere center vs prism faces
@@ -732,11 +734,13 @@ inline bool OverlapCapsuleTri(const Vec3& segA, const Vec3& segB, float radius,
     if (dist2 > epsD2) {
         out.normal = (qSeg - qTri) * (1.0f / dist);
     } else {
-        // Near-zero: closest-pair direction is numerically unstable at shared edges.
-        // Use triangle-local fallback, then choose a deterministic sign.
+        // Near-zero: closest-pair direction is unstable around coplanar contacts.
+        // Use triangle normal oriented toward capsule center for stable support.
         Vec3 n = TriNormalUnit(tri);
-        Vec3 fallback = (segA + segB) * 0.5f - (tri.p0 + tri.p1 + tri.p2) * (1.0f / 3.0f);
-        out.normal = NormalizeSafe(qSeg - qTri, NormalizeSafe(fallback, n));
+        Vec3 capCenter = (segA + segB) * 0.5f;
+        Vec3 triCenter = (tri.p0 + tri.p1 + tri.p2) * (1.0f / 3.0f);
+        if (Dot(n, capCenter - triCenter) < 0.0f) n = n * -1.0f;
+        out.normal = NormalizeSafe(n, {0, 1, 0});
     }
 
     out.featureId = feat;

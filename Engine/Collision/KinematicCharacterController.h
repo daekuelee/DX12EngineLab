@@ -66,7 +66,7 @@ private:
 
     void PreStep();
     void IntegrateVertical(const CctInput& input, float dt);
-    void StepUp();
+    void StepUp(const sq::Vec3& walkMove);
     void StepMove(const sq::Vec3& walkMove);
     void StepDown(float dt);
     bool Recover();
@@ -101,7 +101,6 @@ private:
     sq::Vec3 m_xFinalPre{};          // post-sweep, pre-cleanup position (§3A)
     sq::Vec3 m_originalDirection{};   // normalized walkMove (anti-oscillation check)
     float    m_currentStepOffset = 0.0f;
-    float    m_groundStickyTimer = 0.0f;
 
     // ---- Persistent members ----
 
