@@ -455,9 +455,6 @@ void KinematicCharacterController::StepDown(float dt)
     m_debug.stepDownHitNormal = hit.hit ? hit.normal : sq::Vec3{0, 1, 0};
     m_debug.stepDownWalkable  = hit.hit ? IsWalkable(hit.normal) : false;
 
-    // Case 1: walkable ground found — snap and set grounded.
-    // With the groundFilter active, all surviving hits ARE walkable.
-    // The IsWalkable check is kept for defense-in-depth.
     if (tryApplyGround(hit, downDelta, dist)) {
         return;
     }
@@ -469,9 +466,10 @@ void KinematicCharacterController::StepDown(float dt)
         return;
     }
 
-    // Case 2: no hit + small drop — re-sweep at stepHeight for stair descent.
-    // Same groundFilter applied — only walkable surfaces visible.
-    if (!hit.hit && downVelocityDt <= m_config.stepHeight) {
+    // Case 2: small drop fallback — re-sweep at stepHeight for stair descent.
+    // Keep this path even if primary/secondary sweeps produced non-walkable hits,
+    // because filtering can starve the desired floor candidate at tiny t.
+    if (downVelocityDt <= m_config.stepHeight) {
         float extendedDrop = m_currentStepOffset + m_config.stepHeight;
         sq::Vec3 extDown = m_config.up * (-extendedDrop);
         float extDist = sq::Len(extDown);

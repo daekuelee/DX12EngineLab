@@ -62,8 +62,8 @@ inline bool BetterHit(float tNew, PrimType typeNew, uint32_t idxNew, uint32_t fe
 {
     if (tNew < tBest) return true;
     if (Abs(tNew - tBest) < epsT) {
-        int clsNew = FeatureClassFromPacked(featNew);
-        int clsBest = FeatureClassFromPacked(featBest);
+        const int clsNew = FeatureClassFromPacked(featNew);
+        const int clsBest = FeatureClassFromPacked(featBest);
         if (clsNew != clsBest) return clsNew < clsBest;
         if ((uint8_t)typeNew != (uint8_t)typeBest) return (uint8_t)typeNew < (uint8_t)typeBest;
         if (idxNew != idxBest) return idxNew < idxBest;
