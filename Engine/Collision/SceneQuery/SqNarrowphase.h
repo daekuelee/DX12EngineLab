@@ -155,11 +155,13 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
 
     // Initial overlap: true sphere-triangle distance
     Vec3 q0;
-    if (!rejectInitialOverlap && DistPointTriangleSq(c0, tri, &q0) <= r*r) {
+    uint32_t initFeat = 0xFFFFFFFFu;
+    if (!rejectInitialOverlap &&
+        DistPointTriangleSq(c0, tri, &q0, &initFeat) <= r*r) {
         Vec3 fallback = NormalizeSafe(delta * -1.0f, {0,1,0});
         Vec3 n0 = NormalizeSafe(c0 - q0, fallback);
         if (Dot(n0, delta) > 0.0f) n0 = n0 * -1.0f;
-        consider(0.0f, n0, 0xFFFFFFFFu);
+        consider(0.0f, n0, initFeat);
     }
 
     // One-sided: cull whole triangle if backfacing motion
@@ -312,6 +314,7 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
     Vec3 dirU = NormalizeSafe(in.delta, {0,1,0});
 
     Vec3 qSeg, qTri;
+    uint32_t initFeat = 0xFFFFFFFFu;
     float bestT = std::numeric_limits<float>::infinity();
     float bestAlign = -std::numeric_limits<float>::infinity();
     int bestClass = 4;
@@ -361,11 +364,12 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
     };
 
     if (!rejectInitialOverlap &&
-        DistSegmentTriangleSq(in.segA0, in.segB0, srcTri, &qSeg, &qTri) <= r*r) {
+        DistSegmentTriangleSq(in.segA0, in.segB0, srcTri,
+                             &qSeg, &qTri, &initFeat) <= r*r) {
         Vec3 fallback = NormalizeSafe(in.delta * -1.0f, {0,1,0});
         Vec3 n0 = NormalizeSafe(qSeg - qTri, fallback);
         if (Dot(n0, in.delta) > 0.0f) n0 = n0 * -1.0f;
-        consider(0.0f, n0, 0xFFFFFFFFu);
+        consider(0.0f, n0, initFeat);
     }
 
     // Degenerate capsule -> sphere
@@ -535,17 +539,24 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
     if (!rejectInitialOverlap) {
         float bestD2 = std::numeric_limits<float>::infinity();
         Vec3 bestSeg{}, bestTri{};
+        uint32_t bestFeat = 0xFFFFFFFFu;
         for (uint32_t i = 0; i < 12; ++i) {
             Vec3 qSeg, qTri;
+            uint32_t feat = 0xFFFFFFFFu;
             float d2 = DistSegmentTriangleSq(in.segA0, in.segB0,
-                                              boxSurfaceTris[i], &qSeg, &qTri);
-            if (d2 < bestD2) { bestD2 = d2; bestSeg = qSeg; bestTri = qTri; }
+                                              boxSurfaceTris[i], &qSeg, &qTri, &feat);
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                bestSeg = qSeg;
+                bestTri = qTri;
+                bestFeat = feat;
+            }
         }
         if (bestD2 <= r*r) {
             Vec3 fallback = NormalizeSafe(in.delta * -1.0f, {0,1,0});
             Vec3 overlapN = NormalizeSafe(bestSeg - bestTri, fallback);
             if (Dot(overlapN, in.delta) > 0.0f) overlapN = overlapN * -1.0f;
-            consider(0.0f, overlapN, 0xFFFFFFFFu);
+            consider(0.0f, overlapN, bestFeat);
         }
     }
 

@@ -52,14 +52,19 @@ struct QueryScratch {
 };
 
 // ---- Deterministic hit comparison (SSOT tie-break cascade) ---------------
-// Order: smallest t -> lowest PrimType -> lowest prim index -> lowest featureId.
-// Within tieEpsT, all four levels participate.
+// Order: smallest t -> feature class -> lowest PrimType -> lowest prim index -> lowest featureId.
+// Feature class derives from packed feature id:
+// face (0) < edge (1) < vertex (2) < prism-side (3).
+// Within tieEpsT, all levels participate.
 inline bool BetterHit(float tNew, PrimType typeNew, uint32_t idxNew, uint32_t featNew,
                       float tBest, PrimType typeBest, uint32_t idxBest, uint32_t featBest,
                       float epsT)
 {
     if (tNew < tBest) return true;
     if (Abs(tNew - tBest) < epsT) {
+        int clsNew = FeatureClassFromPacked(featNew);
+        int clsBest = FeatureClassFromPacked(featBest);
+        if (clsNew != clsBest) return clsNew < clsBest;
         if ((uint8_t)typeNew != (uint8_t)typeBest) return (uint8_t)typeNew < (uint8_t)typeBest;
         if (idxNew != idxBest) return idxNew < idxBest;
         return featNew < featBest;

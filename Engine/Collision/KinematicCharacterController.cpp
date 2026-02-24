@@ -326,8 +326,11 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
             float tSkin = m_config.sweep.skin / (std::max)(remainLen, kMinDist);
             if (tSkin > 1.0f) tSkin = 1.0f;
 
-            if (hit.t <= (tSkin + m_config.sweep.tieEpsT)) {
-                // near-zero / skin-dominated hit: push current only, keep target untouched
+            const float nearZeroEps = m_config.sweep.tieEpsT;
+            if (hit.t <= (tSkin + nearZeroEps)) {
+                // near-zero / skin-dominated hit: push current only, keep target untouched.
+                // Re-run sweep with updated current and the same target; break only after
+                // bounded retry budget to avoid infinite loops.
                 m_debug.zeroHitPushes++;
                 m_currentPosition = m_currentPosition + hit.normal * m_config.addedMargin;
                 if (m_debug.zeroHitPushes >= maxZeroHitPushes) {
@@ -476,10 +479,10 @@ void KinematicCharacterController::StepDown(float dt)
     }
 
     // Case 3: no walkable ground found in down sweeps.
-    // If we were previously grounded, allow overlap-derived walkable support to
-    // keep grounded instead of immediate full-air drop (prevents on-ground flicker
-    // on thin initial-overlap/face-prism edge cases).
-    if (m_state.wasOnGround) {
+    // Fallback to overlap-derived support before declaring airborne. This prevents
+    // floor-contact flicker when contact is present but sweep misses due narrow-phase
+    // near-zero jitter (especially on triangle seams).
+    {
         float supportDepth = 0.0f;
         sq::Vec3 supportNormal{};
         if (HasWalkableSupport(supportDepth, supportNormal)) {
@@ -550,8 +553,10 @@ bool KinematicCharacterController::Recover()
         pushSum = contacts[0].normal * (contacts[0].depth - slop);
     }
 
-    // Apply recovery fraction, then clamp total correction by contactOffset.
-    sq::Vec3 push = pushSum * m_config.recoverAlpha;
+    // Direction: normalized accumulated push (or fallback deepest normal).
+    sq::Vec3 pushDir = sq::NormalizeSafe(pushSum, {0.0f, 1.0f, 0.0f});
+    // Apply fraction in direction only, then clamp by contactOffset.
+    sq::Vec3 push = pushDir * m_config.recoverAlpha;
     float pushLen = sq::Len(push);
     if (pushLen > m_config.contactOffset && pushLen > kMinDist) {
         push = push * (m_config.contactOffset / pushLen);
