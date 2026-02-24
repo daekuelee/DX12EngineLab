@@ -35,6 +35,17 @@ struct CctCapsule {
     float halfHeight = 0.9f;
 };
 
+enum class CctStepRejectReason : uint8_t {
+    None = 0,
+    Disabled = 1,
+    TooSmallMove = 2,
+    NotGrounded = 3,
+    UpBlocked = 4,
+    SideBlocked = 5,
+    NoWalkableDown = 6,
+    HeightExceeded = 7
+};
+
 // ---- Solver configuration ---------------------------------------------------
 
 struct CctConfig {
@@ -58,6 +69,8 @@ struct CctConfig {
     int   maxRecoverIters = 8;        // Deepest-only: 1 contact per iter, budget for 3-cube corners
     float recoverAlpha    = 0.2f;     // Bullet: 0.2 (GS projection fraction per contact)
     sq::SweepConfig sweep;            // skin, tieEpsT
+    bool  useSweepDrivenStep = true;  // StepMove hit -> TryStep path
+    bool  enablePreStepUp = false;    // legacy pre-step-up path (jump-only default)
 };
 
 // ---- Per-tick input (caller provides) ---------------------------------------
@@ -117,6 +130,15 @@ struct CctDebug {
     sq::Vec3 stepMoveFirstNormal{};
     uint32_t stepMoveFirstIndex  = 0;
     float    stepMoveDeltaY      = 0.0f;   // y displacement produced during StepMove
+    sq::Vec3 stepMoveDesiredLateral{};     // requested lateral displacement (signed)
+    sq::Vec3 stepMoveAppliedLateral{};     // actual StepMove displacement (signed)
+    float    stepMoveOpposeDot   = 0.0f;   // dot(applied, desiredDir), <0 means reverse drift
+    uint32_t stepMoveBackdriveClamps = 0;  // near-zero reverse component removals
+    bool     stepAttempted       = false;  // TryStep attempted this tick
+    bool     stepAccepted        = false;  // TryStep accepted this tick
+    CctStepRejectReason stepRejectReason = CctStepRejectReason::None;
+    float    stepTryUp           = 0.0f;   // attempted up-lift in TryStep
+    float    stepTryDown         = 0.0f;   // attempted down-settle in TryStep
 
     // StepDown detail
     float    stepDownDropDist    = 0.0f;

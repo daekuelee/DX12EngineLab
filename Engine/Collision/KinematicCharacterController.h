@@ -90,7 +90,8 @@ private:
 
     // Slide displacement along a collision normal (perpendicular component).
     void SlideAlongNormal(const sq::Vec3& hitNormal);
-    bool TryStep(const sq::Vec3& lateralRemaining);
+    bool TryStep(const sq::Vec3& lateralRemaining,
+                 CctStepRejectReason* outReason = nullptr);
 
     bool IsWalkable(const sq::Vec3& nUnit) const;
     bool HasWalkableSupport(float& outDepth, sq::Vec3& outNormal,

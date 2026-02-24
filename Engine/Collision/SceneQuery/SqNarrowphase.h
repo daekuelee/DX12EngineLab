@@ -163,7 +163,15 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
 
     // One-sided: cull whole triangle if backfacing motion
     if (!twoSided) {
-        if (LenSq(delta) > kEpsSq && Dot(n, delta) > 0.0f) return false;
+        if (LenSq(delta) > kEpsSq && Dot(n, delta) > 0.0f) {
+            // Do not discard an already selected initial-overlap candidate.
+            if (bestT == std::numeric_limits<float>::infinity()) return false;
+            outT = bestT;
+            outN = bestN;
+            outF = bestF;
+            if (Dot(outN, delta) > 0.0f) outN = outN * -1.0f;
+            return true;
+        }
     }
 
     // 1) Face candidate (plane intersection)
