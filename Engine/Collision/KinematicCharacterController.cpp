@@ -432,6 +432,23 @@ void KinematicCharacterController::StepDown(float dt)
 
     m_debug.stepDownDropDist = dropDist;
 
+    auto tryApplyGround = [&](const sq::Hit& groundHit, const sq::Vec3& groundDelta, float groundDist) -> bool {
+        if (!groundHit.hit || !IsWalkable(groundHit.normal)) return false;
+
+        float safeT = (groundDist > kMinDist)
+            ? (std::max)(0.0f, groundHit.t - m_config.sweep.skin / groundDist)
+            : 0.0f;
+        m_currentPosition = m_currentPosition + groundDelta * safeT;
+        m_state.onGround = true;
+        m_state.groundNormal = groundHit.normal;
+        m_state.verticalVelocity = 0.0f;
+        m_state.verticalOffset   = 0.0f;
+        m_state.wasJumping       = false;
+        m_debug.stepDownHit = true;
+        return true;
+    };
+
+    // Primary sweep rejects t==0 overlaps, matching movement-step semantics.
     sq::Hit hit = SweepClosest(m_currentPosition, downDelta, groundFilter, true);
 
     m_debug.stepDownHitTOI    = hit.hit ? hit.t : 1.0f;
@@ -441,17 +458,14 @@ void KinematicCharacterController::StepDown(float dt)
     // Case 1: walkable ground found — snap and set grounded.
     // With the groundFilter active, all surviving hits ARE walkable.
     // The IsWalkable check is kept for defense-in-depth.
-    if (hit.hit && IsWalkable(hit.normal)) {
-        float safeT = (dist > kMinDist)
-            ? (std::max)(0.0f, hit.t - m_config.sweep.skin / dist)
-            : 0.0f;
-        m_currentPosition = m_currentPosition + downDelta * safeT;
-        m_state.onGround = true;
-        m_state.groundNormal = hit.normal;
-        m_state.verticalVelocity = 0.0f;
-        m_state.verticalOffset   = 0.0f;   // zero on landing
-        m_state.wasJumping       = false;   // clear on landing
-        m_debug.stepDownHit = true;
+    if (tryApplyGround(hit, downDelta, dist)) {
+        return;
+    }
+
+    // Case 1b: if primary misses due to initial-overlap starvation, retry with
+    // rejectInitialOverlap=false to recover floor contact in thin-geometry cases.
+    sq::Hit hitNoReject = SweepClosest(m_currentPosition, downDelta, groundFilter, false);
+    if (tryApplyGround(hitNoReject, downDelta, dist)) {
         return;
     }
 
@@ -463,17 +477,15 @@ void KinematicCharacterController::StepDown(float dt)
         float extDist = sq::Len(extDown);
 
         sq::Hit extHit = SweepClosest(m_currentPosition, extDown, groundFilter, true);
-        if (extHit.hit && IsWalkable(extHit.normal)) {
-            float safeT = (extDist > kMinDist)
-                ? (std::max)(0.0f, extHit.t - m_config.sweep.skin / extDist)
-                : 0.0f;
-            m_currentPosition = m_currentPosition + extDown * safeT;
-            m_state.onGround = true;
-            m_state.groundNormal = extHit.normal;
-            m_state.verticalVelocity = 0.0f;
-            m_state.verticalOffset   = 0.0f;   // zero on landing
-            m_state.wasJumping       = false;   // clear on landing
-            m_debug.stepDownHit = true;
+        if (tryApplyGround(extHit, extDown, extDist)) {
+            return;
+        }
+
+        // Case 2b: same stepHeight retry with t==0 overlaps allowed.
+        // This handles the floor-contact lock where an exact overlap exists
+        // at the stair edge but the filtered rejectInitialOverlap=true path misses.
+        sq::Hit extHitNoReject = SweepClosest(m_currentPosition, extDown, groundFilter, false);
+        if (tryApplyGround(extHitNoReject, extDown, extDist)) {
             return;
         }
     }
@@ -587,9 +599,11 @@ bool KinematicCharacterController::HasWalkableSupport(float& outDepth, sq::Vec3&
     sq::Vec3 segA = m_currentPosition + m_config.up * m_geom.radius;
     sq::Vec3 segB = m_currentPosition + m_config.up * (m_geom.radius + 2.0f * m_geom.halfHeight);
 
+    const float supportRadius = m_geom.radius + m_config.sweep.skin;
+
     sq::OverlapContact contacts[32];
     uint32_t count = m_world->OverlapCapsuleContacts(
-        segA, segB, m_geom.radius, Q_Solid, contacts, 32);
+        segA, segB, supportRadius, Q_Solid, contacts, 32);
 
     outDepth = 0.0f;
     outNormal = {0.0f, 1.0f, 0.0f};
