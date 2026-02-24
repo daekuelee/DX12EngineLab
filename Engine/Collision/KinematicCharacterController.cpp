@@ -505,20 +505,22 @@ bool KinematicCharacterController::Recover()
 
     if (count == 0) return false;
 
+    // Deepest-only: contacts[0] is deepest (sorted by -depth, type, index, featureId)
+    const float depth = contacts[0].depth;
     const float slop  = m_config.maxPenDepth;
-    const float alpha = m_config.recoverAlpha;   // 0.2 (Bullet)
-    bool penetration = false;
+    if (depth <= slop) return false;
 
-    for (uint32_t i = 0; i < count; ++i) {
-        float depth = contacts[i].depth;
-        if (depth <= slop) continue;
+    float push = (depth - slop) * m_config.recoverAlpha;
 
-        float push = (depth - slop) * alpha;
-        m_currentPosition = m_currentPosition + contacts[i].normal * push;
-        penetration = true;
-    }
+    // Clamp push to contactOffset per iteration (SSOT-derived, prevents teleport corrections)
+    push = (std::min)(push, m_config.contactOffset);
 
-    return penetration;
+    m_currentPosition = m_currentPosition + contacts[0].normal * push;
+
+    // Debug: track deepest overlap depth for convergence diagnosis
+    m_debug.recoverDeepestDepth = depth;
+
+    return true;
 }
 
 // =========================================================================

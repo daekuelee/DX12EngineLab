@@ -55,7 +55,7 @@ struct CctConfig {
     float addedMargin   = 0.02f;      // derived from contactOffset
     float maxPenDepth   = 0.005f;     // derived from contactOffset
     int   maxForwardIters = 10;       // StepForwardAndStrafe iteration limit
-    int   maxRecoverIters = 4;        // RecoverFromPenetration loop limit
+    int   maxRecoverIters = 8;        // Deepest-only: 1 contact per iter, budget for 3-cube corners
     float recoverAlpha    = 0.2f;     // Bullet: 0.2 (GS projection fraction per contact)
     sq::SweepConfig sweep;            // skin, tieEpsT
 };
@@ -95,6 +95,7 @@ struct CctDebug {
     bool     fullDrop        = false;  // StepDown: large drop (no ground within step)
     uint32_t recoverIters    = 0;      // RecoverFromPenetration iterations used
     float    recoverPushMag  = 0.0f;  // total push-out magnitude applied
+    float    recoverDeepestDepth = 0.0f;  // depth of deepest contact in last Recover iter
 
     // Per-phase position snapshots (Recover → StepUp → StepMove → StepDown)
     sq::Vec3 posAfterRecover{};

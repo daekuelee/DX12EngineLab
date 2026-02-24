@@ -26,6 +26,7 @@
 // =========================================================================
 
 #include "SqTypes.h"
+#include <limits>
 
 namespace Engine { namespace Collision { namespace sq {
 
@@ -271,5 +272,129 @@ inline float DistSegmentTriangleSq(const Vec3& s0, const Vec3& s1,
     return best;
 }
 
+
+// ---- Segment to AABB distance squared (exact piecewise-quadratic) -------
+// Returns squared distance between closest point pair on segment [segA,segB]
+// and AABB box. Optionally writes closest points.
+//
+// CONTRACT: exact global minimum, O(1) bounded, no heap, deterministic.
+// ALGORITHM: f(t) = |S(t) - Clamp(S(t), box)|^2 is piecewise-quadratic.
+//   Breakpoints at slab crossings divide [0,1] into ≤7 intervals. Each
+//   interval has analytical quadratic minimum. Global min across all.
+// EPSILON POLICY:
+//   kEpsParallel (1e-12) — skip near-zero direction components
+//   kTMerge (1e-6, matches SweepConfig::tieEpsT) — breakpoint de-duplication
+//   kEpsSq (1e-20) — "is quadratic coefficient zero?"
+//   epsD2 (1e-8, matches DistSegmentTriangleSq) — distance tie-break
+inline float DistSegmentAABBSq(const Vec3& segA, const Vec3& segB,
+                                const AABB& box,
+                                Vec3* outSegQ = nullptr,
+                                Vec3* outBoxQ = nullptr)
+{
+    const Vec3 D = segB - segA;
+    const float a3[3] = {segA.x, segA.y, segA.z};
+    const float d3[3] = {D.x, D.y, D.z};
+    const float lo3[3] = {box.minX, box.minY, box.minZ};
+    const float hi3[3] = {box.maxX, box.maxY, box.maxZ};
+
+    // Breakpoint merge tolerance in t-space, matching SweepConfig::tieEpsT (1e-6f).
+    // Prevents zero-width intervals that would make midpoint regime selection ambiguous.
+    constexpr float kTMerge = 1e-6f;
+
+    // Distance tie-break tolerance (squared world-space), same as DistSegmentTriangleSq.
+    constexpr float epsD2 = 1e-8f;
+
+    // ---- Collect breakpoints: t where S_i(t) crosses slab boundary ------
+    float bp[8];
+    int n = 0;
+    bp[n++] = 0.0f;
+    bp[n++] = 1.0f;
+
+    for (int i = 0; i < 3; ++i) {
+        if (Abs(d3[i]) <= kEpsParallel) continue;
+        const float inv = 1.0f / d3[i];
+        const float tLo = (lo3[i] - a3[i]) * inv;
+        const float tHi = (hi3[i] - a3[i]) * inv;
+        if (tLo > 0.0f && tLo < 1.0f) bp[n++] = tLo;
+        if (tHi > 0.0f && tHi < 1.0f) bp[n++] = tHi;
+    }
+
+    // ---- Sort (insertion sort, ≤8 elements, bounded O(1)) ---------------
+    for (int i = 1; i < n; ++i) {
+        float key = bp[i];
+        int j = i - 1;
+        while (j >= 0 && bp[j] > key) { bp[j+1] = bp[j]; --j; }
+        bp[j+1] = key;
+    }
+
+    // ---- Remove near-duplicates (in-place, stable, preserves order) -----
+    {
+        int dst = 1;
+        for (int src = 1; src < n; ++src)
+            if (bp[src] - bp[dst-1] > kTMerge) bp[dst++] = bp[src];
+        n = dst;
+    }
+
+    // ---- Evaluate each interval's quadratic minimum ---------------------
+    float bestD2 = (std::numeric_limits<float>::max)();
+    float bestT  = 0.0f;
+
+    for (int seg = 0; seg + 1 < n; ++seg) {
+        const float tL = bp[seg], tR = bp[seg+1];
+        const float tMid = (tL + tR) * 0.5f;
+
+        // Build f(t) = qa*t^2 + qb*t + qc for this interval.
+        // Per axis: if below slab, e_i(t) = (a_i + t*d_i) - lo_i
+        //           if above slab, e_i(t) = (a_i + t*d_i) - hi_i
+        //           if inside slab, contribution = 0
+        // f(t) = sum_active(d_i^2 * t^2 + 2*d_i*(a_i - target_i)*t + (a_i - target_i)^2)
+        float qa = 0.0f, qb = 0.0f, qc = 0.0f;
+        for (int i = 0; i < 3; ++i) {
+            const float valMid = a3[i] + tMid * d3[i];
+            float target;
+            if      (valMid < lo3[i]) target = lo3[i];
+            else if (valMid > hi3[i]) target = hi3[i];
+            else continue;  // inside slab: zero contribution
+            const float off = a3[i] - target;
+            qa += d3[i] * d3[i];
+            qb += 2.0f * d3[i] * off;
+            qc += off * off;
+        }
+
+        // Minimize qa*t^2 + qb*t + qc on [tL, tR]
+        float tStar;
+        if (qa > kEpsSq) {
+            tStar = -qb / (2.0f * qa);
+            tStar = (tStar < tL) ? tL : (tStar > tR ? tR : tStar);
+        } else {
+            // Linear or constant: min at endpoint with smaller value
+            float fL = qb * tL + qc;  // qa≈0, omit qa*tL^2
+            float fR = qb * tR + qc;
+            tStar = (fL <= fR) ? tL : tR;
+        }
+
+        float d2 = qa * tStar * tStar + qb * tStar + qc;
+
+        // Deterministic tie-break: prefer smaller t (same pattern as DistSegmentTriangleSq)
+        if (d2 < bestD2 - epsD2 || (d2 < bestD2 + epsD2 && tStar < bestT)) {
+            bestD2 = d2;
+            bestT = tStar;
+        }
+    }
+
+    // ---- Output closest points ------------------------------------------
+    Vec3 qSeg = segA + D * bestT;
+    if (outSegQ) *outSegQ = qSeg;
+    if (outBoxQ) {
+        // Inline clamp (avoids dependency on SqPrimitiveTests.h, keeps SqDistance.h standalone)
+        auto cl = [](float x, float lo, float hi) -> float {
+            return x < lo ? lo : (x > hi ? hi : x);
+        };
+        *outBoxQ = { cl(qSeg.x, box.minX, box.maxX),
+                     cl(qSeg.y, box.minY, box.maxY),
+                     cl(qSeg.z, box.minZ, box.maxZ) };
+    }
+    return bestD2 > 0.0f ? bestD2 : 0.0f;
+}
 
 }}} // namespace Engine::Collision::sq

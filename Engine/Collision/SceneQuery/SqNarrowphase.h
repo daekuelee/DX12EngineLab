@@ -57,7 +57,7 @@ inline constexpr float kNpColinearEps = 1e-4f; // capsule axis || motion thresho
 //   0 = face (plane hit), 1-3 = edge cylinders, 4-6 = vertex spheres
 //
 // Tie-break: smallest t; within tieEpsT: largest alignment; then smallest feature ID.
-inline bool SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
+inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
                                  const Triangle& tri, bool twoSided,
                                  float& outT, Vec3& outN, uint32_t& outF)
 {
@@ -527,78 +527,50 @@ inline bool SweepCapsuleObb_PhysXLike_TOI01(
 // Normal points AWAY from the primitive (direction to push capsule out).
 // Depth is positive when overlapping.
 
-// ---- Capsule vs AABB overlap (Minkowski-style: segment-to-AABB distance) --
-// Expand AABB by capsule radius, test capsule segment vs expanded AABB.
+// ---- Capsule vs AABB overlap (exact segment-AABB distance) -----------------
+// Uses DistSegmentAABBSq for correct closest-pair (fixes seam jamming from
+// the old box-center projection which picked the wrong segment point).
 // MTD direction = normalized(closestOnSegment - closestOnAABB).
 // featureId = face index 0..5 for min-penetration axis.
 inline bool OverlapCapsuleAabb(const Vec3& segA, const Vec3& segB, float radius,
                                 const AABB& box, OverlapContact& out)
 {
-    // Find closest point on capsule segment to box
-    // Strategy: for each point on the segment, find closest on AABB,
-    // take the pair with minimum distance.
-    // Simplified: sample segment endpoints + closest point to AABB center.
-    Vec3 boxCenter = AABBCenter(box);
+    Vec3 qSeg, qBox;
+    float dist2 = DistSegmentAABBSq(segA, segB, box, &qSeg, &qBox);
 
-    // Project box center onto capsule segment to find the nearest segment point
-    Vec3 segDir = segB - segA;
-    float segLen2 = LenSq(segDir);
-    float t = 0.0f;
-    if (segLen2 > kEpsSq) {
-        t = Dot(boxCenter - segA, segDir) / segLen2;
-        t = (t < 0.0f) ? 0.0f : (t > 1.0f ? 1.0f : t);
-    }
-    Vec3 segPoint = segA + segDir * t;
+    if (dist2 > radius * radius) return false;
 
-    // Closest point on AABB to this segment point
-    Vec3 cp = ClosestPointPointAABB(segPoint, box);
-    Vec3 diff = segPoint - cp;
-    float dist2 = LenSq(diff);
+    // Direction reliability threshold (same as DistSegmentTriangleSq epsD2)
+    constexpr float epsD2 = 1e-8f;
 
-    if (dist2 > radius * radius) return false;  // no overlap
-
-    float dist = std::sqrt(dist2);
-    out.depth = radius - dist;
-
-    if (dist > kEpsSq) {
-        // Normal case: push along segment-point to closest-on-box direction
-        out.normal = diff * (1.0f / dist);
+    if (dist2 > epsD2) {
+        float dist = std::sqrt(dist2);
+        out.depth = radius - dist;
+        out.normal = (qSeg - qBox) * (1.0f / dist);
     } else {
-        // Segment point is inside the AABB: use min-penetration axis
-        // Compute penetration depth along each of 6 faces
+        // Segment inside AABB: min-penetration axis (deterministic tie-break by face index)
         float pen[6] = {
-            segPoint.x - box.minX,   // -X face (id=0)
-            box.maxX - segPoint.x,   // +X face (id=1)
-            segPoint.y - box.minY,   // -Y face (id=2)
-            box.maxY - segPoint.y,   // +Y face (id=3)
-            segPoint.z - box.minZ,   // -Z face (id=4)
-            box.maxZ - segPoint.z    // +Z face (id=5)
+            qSeg.x - box.minX, box.maxX - qSeg.x,
+            qSeg.y - box.minY, box.maxY - qSeg.y,
+            qSeg.z - box.minZ, box.maxZ - qSeg.z
         };
         const Vec3 normals[6] = {
-            {-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1}
+            {-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}
         };
-
-        float minPen = pen[0];
-        uint32_t minFace = 0;
-        for (uint32_t i = 1; i < 6; ++i) {
+        float minPen = pen[0]; uint32_t minFace = 0;
+        for (uint32_t i = 1; i < 6; ++i)
             if (pen[i] < minPen) { minPen = pen[i]; minFace = i; }
-        }
         out.normal = normals[minFace];
         out.depth = minPen + radius;
         out.featureId = minFace;
         return true;
     }
 
-    // Determine face ID for the contact point
-    // Use the axis most aligned with the normal
+    // featureId from dominant normal axis (stable tie-break: X > Y > Z)
     float ax = Abs(out.normal.x), ay = Abs(out.normal.y), az = Abs(out.normal.z);
-    if (ax >= ay && ax >= az)
-        out.featureId = (out.normal.x > 0.0f) ? 1 : 0;
-    else if (ay >= az)
-        out.featureId = (out.normal.y > 0.0f) ? 3 : 2;
-    else
-        out.featureId = (out.normal.z > 0.0f) ? 5 : 4;
-
+    if (ax >= ay && ax >= az)      out.featureId = (out.normal.x > 0.0f) ? 1 : 0;
+    else if (ay >= az)             out.featureId = (out.normal.y > 0.0f) ? 3 : 2;
+    else                           out.featureId = (out.normal.z > 0.0f) ? 5 : 4;
     return true;
 }
 
@@ -640,18 +612,20 @@ inline bool OverlapCapsuleTri(const Vec3& segA, const Vec3& segB, float radius,
 
     if (dist2 > radius * radius) return false;
 
+    // Direction reliability threshold (same as OverlapCapsuleAabb, DistSegmentTriangleSq)
+    constexpr float epsD2 = 1e-8f;
+
     float dist = std::sqrt(dist2);
     out.depth = radius - dist;
 
-    if (dist > kEpsSq) {
+    if (dist2 > epsD2) {
         out.normal = (qSeg - qTri) * (1.0f / dist);
     } else {
-        // Inside triangle: push along triangle normal
+        // Near-zero: use triangle face normal with positive bias (prevents seam sign fights)
         Vec3 n = TriNormalUnit(tri);
-        Vec3 mid = (segA + segB) * 0.5f;
-        float side = Dot(mid - tri.p0, n);
-        out.normal = (side >= 0.0f) ? n : (n * -1.0f);
-        out.depth = radius;
+        float side = Dot(qSeg - tri.p0, n);
+        // Positive bias: when |side| is tiny, always pick +n (deterministic at seams)
+        out.normal = (side < -kEpsPointInTri) ? (n * -1.0f) : n;
     }
 
     out.featureId = feat;
