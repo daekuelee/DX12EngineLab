@@ -62,11 +62,16 @@ inline int FeatureClassFromPacked(uint32_t packedFeature)
 // Filter acceptance policy used by narrowphase:
 //   - apply Dot(normal, refDir) >= minDot when filter is active.
 inline bool PassNarrowfilter(const SweepFilter* filter,
-                            bool /*rejectInitialOverlap*/,
-                            float /*t*/,
+                            bool rejectInitialOverlap,
+                            float t,
                             const Vec3& n)
 {
     if (!filter || !filter->active) return true;
+    // Keep initial-overlap (t==0) candidates from being filtered when
+    // the caller wants them (rejectInitialOverlap==false), matching query-level
+    // behavior and preventing the "filtered t==0 then early return" starvation.
+    if (!rejectInitialOverlap && t <= 0.0f)
+        return true;
     return Dot(n, filter->refDir) >= filter->minDot;
 }
 

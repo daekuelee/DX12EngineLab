@@ -475,9 +475,25 @@ void KinematicCharacterController::StepDown(float dt)
         }
     }
 
-    // Case 3: no walkable ground found — full drop, airborne.
-    // With groundFilter, hit.hit==false means NO walkable surface in sweep range.
-    // Apply full downward displacement (gravity).
+    // Case 3: no walkable ground found in down sweeps.
+    // If we were previously grounded, allow overlap-derived walkable support to
+    // keep grounded instead of immediate full-air drop (prevents on-ground flicker
+    // on thin initial-overlap/face-prism edge cases).
+    if (m_state.wasOnGround) {
+        float supportDepth = 0.0f;
+        sq::Vec3 supportNormal{};
+        if (HasWalkableSupport(supportDepth, supportNormal)) {
+            m_state.onGround = true;
+            m_state.groundNormal = supportNormal;
+            m_state.verticalVelocity = 0.0f;
+            m_state.verticalOffset   = 0.0f;   // zero on landing/support hold
+            m_state.wasJumping       = false;   // clear jump state on support
+            return;
+        }
+    }
+
+    // Case 4: no walkable ground found — full drop, airborne.
+    // With groundFilter, miss means NO walkable surface within downward sweep range.
     m_currentPosition = m_currentPosition + downDelta;
     m_state.onGround = false;
     m_debug.fullDrop = true;
@@ -547,6 +563,41 @@ bool KinematicCharacterController::Recover()
     m_debug.recoverDeepestDepth = contacts[0].depth;
 
     return true;
+}
+
+// =========================================================================
+// Ground support helper
+// =========================================================================
+// PRODUCES: outDepth, outNormal for nearest walkable supporting contact
+// CONSUMES: current feet position (post-move/pre-stepdown baseline)
+//
+// Notes:
+//   - Uses overlap contacts to detect existing penetration when StepDown misses
+//     any forward TOI. This preserves stable ground for walkable overlap cases.
+//   - Requires depth > maxPenDepth to avoid jitter from tiny numeric overlap.
+//   - Returns deepest walkable overlap normal (deterministic by Overlap sort order).
+
+bool KinematicCharacterController::HasWalkableSupport(float& outDepth, sq::Vec3& outNormal) const
+{
+    sq::Vec3 segA = m_currentPosition + m_config.up * m_geom.radius;
+    sq::Vec3 segB = m_currentPosition + m_config.up * (m_geom.radius + 2.0f * m_geom.halfHeight);
+
+    sq::OverlapContact contacts[32];
+    uint32_t count = m_world->OverlapCapsuleContacts(
+        segA, segB, m_geom.radius, Q_Solid, contacts, 32);
+
+    outDepth = 0.0f;
+    outNormal = {0.0f, 1.0f, 0.0f};
+
+    for (uint32_t i = 0; i < count; ++i) {
+        if (contacts[i].depth <= m_config.maxPenDepth) continue;
+        if (!IsWalkable(contacts[i].normal)) continue;
+
+        outDepth = contacts[i].depth;
+        outNormal = contacts[i].normal;
+        return true;
+    }
+    return false;
 }
 
 // =========================================================================
