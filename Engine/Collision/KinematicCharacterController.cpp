@@ -505,6 +505,22 @@ void KinematicCharacterController::StepDown(float dt)
         }
     }
 
+    // Anti-flicker / on-ground hold:
+    // if we were grounded last frame and have any walkable overlap
+    // (even shallow, up to any positive depth), keep grounded.
+    if (m_state.wasOnGround) {
+        float holdDepth = 0.0f;
+        sq::Vec3 holdNormal{};
+        if (HasWalkableSupport(holdDepth, holdNormal, 0.0f, 2.0f)) {
+            m_state.onGround = true;
+            m_state.groundNormal = holdNormal;
+            m_state.verticalVelocity = 0.0f;
+            m_state.verticalOffset   = 0.0f;
+            m_state.wasJumping       = false;
+            return;
+        }
+    }
+
     // Case 4: no walkable ground found — full drop, airborne.
     // With groundFilter, miss means NO walkable surface within downward sweep range.
     m_currentPosition = m_currentPosition + downDelta;
@@ -589,15 +605,20 @@ bool KinematicCharacterController::Recover()
 // Notes:
 //   - Uses overlap contacts to detect existing penetration when StepDown misses
 //     any forward TOI. This preserves stable ground for walkable overlap cases.
-//   - Requires depth > maxPenDepth to avoid jitter from tiny numeric overlap.
+//   - Requires depth > minDepth (defaults to maxPenDepth) to avoid jitter
+//     from tiny numeric overlap.
 //   - Returns deepest walkable overlap normal (deterministic by Overlap sort order).
 
-bool KinematicCharacterController::HasWalkableSupport(float& outDepth, sq::Vec3& outNormal) const
+bool KinematicCharacterController::HasWalkableSupport(float& outDepth, sq::Vec3& outNormal,
+                                                     float minDepth,
+                                                     float supportRadiusMul) const
 {
     sq::Vec3 segA = m_currentPosition + m_config.up * m_geom.radius;
     sq::Vec3 segB = m_currentPosition + m_config.up * (m_geom.radius + 2.0f * m_geom.halfHeight);
 
-    const float supportRadius = m_geom.radius + m_config.sweep.skin;
+    if (supportRadiusMul < 1.0f) supportRadiusMul = 1.0f;
+    const float supportRadius = m_geom.radius + m_config.sweep.skin * supportRadiusMul;
+    if (minDepth < 0.0f) minDepth = m_config.maxPenDepth;
 
     sq::OverlapContact contacts[32];
     uint32_t count = m_world->OverlapCapsuleContacts(
@@ -607,7 +628,7 @@ bool KinematicCharacterController::HasWalkableSupport(float& outDepth, sq::Vec3&
     outNormal = {0.0f, 1.0f, 0.0f};
 
     for (uint32_t i = 0; i < count; ++i) {
-        if (contacts[i].depth <= m_config.maxPenDepth) continue;
+        if (contacts[i].depth <= minDepth) continue;
         if (!IsWalkable(contacts[i].normal)) continue;
 
         outDepth = contacts[i].depth;

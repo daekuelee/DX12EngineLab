@@ -88,7 +88,9 @@ private:
     void SlideAlongNormal(const sq::Vec3& hitNormal);
 
     bool IsWalkable(const sq::Vec3& nUnit) const;
-    bool HasWalkableSupport(float& outDepth, sq::Vec3& outNormal) const;
+    bool HasWalkableSupport(float& outDepth, sq::Vec3& outNormal,
+                           float minDepth = -1.0f,
+                           float supportRadiusMul = 1.0f) const;
 
     // ---- Per-tick working state ----
 
