@@ -56,10 +56,7 @@ struct CctConfig {
     float maxPenDepth   = 0.005f;     // derived from contactOffset
     int   maxForwardIters = 10;       // StepForwardAndStrafe iteration limit
     int   maxRecoverIters = 8;        // Deepest-only: 1 contact per iter, budget for 3-cube corners
-    uint32_t maxZeroHitPushes = 8;    // StepMove near-zero retry budget
     float recoverAlpha    = 0.2f;     // Bullet: 0.2 (GS projection fraction per contact)
-    float walkableNearZeroEps = 1e-4f; // StepDown near-zero TOI threshold
-    float groundStickyTime = 0.03f;   // keep grounded briefly across tiny miss frames
     sq::SweepConfig sweep;            // skin, tieEpsT
 };
 
@@ -83,6 +80,14 @@ struct CctState {
     bool  wasOnGround = false;      // previous tick
     bool  wasJumping  = false;      // previous tick
     sq::Vec3 groundNormal{0, 1, 0};
+};
+
+enum class CctGroundReason : uint8_t {
+    None = 0,
+    ProbeFace = 1,
+    ProbeFallback = 2,
+    Overlap = 3,
+    Latch = 4
 };
 
 // ---- Per-tick diagnostics ---------------------------------------------------
@@ -111,12 +116,16 @@ struct CctDebug {
     float    stepMoveFirstTOI    = 1.0f;
     sq::Vec3 stepMoveFirstNormal{};
     uint32_t stepMoveFirstIndex  = 0;
+    float    stepMoveDeltaY      = 0.0f;   // y displacement produced during StepMove
 
     // StepDown detail
     float    stepDownDropDist    = 0.0f;
     float    stepDownHitTOI      = 1.0f;
     sq::Vec3 stepDownHitNormal{};
     bool     stepDownWalkable    = false;
+    float    groundProbeDist     = 0.0f;   // support probe distance
+    uint8_t  groundFeatureClass  = 255;    // selected support feature class
+    CctGroundReason groundReason = CctGroundReason::None;
     uint32_t skinWouldEatTOI    = 0;      // StepMove: cases where skin/dist >= hit.t
     float    postRecoverMag     = 0.0f;   // post-sweep cleanup displacement magnitude
 

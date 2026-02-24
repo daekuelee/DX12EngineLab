@@ -46,25 +46,13 @@ namespace Engine { namespace Collision { namespace sq {
 inline constexpr float kNpEpsAlign = 1e-6f;   // alignment tie-break tolerance
 inline constexpr float kNpColinearEps = 1e-4f; // capsule axis || motion threshold
 
-// Feature priority class for tie-breaking:
-//   0=face, 1=edge, 2=vertex, 3=prism-side (lowest).
-inline int FeatureClassFromPacked(uint32_t packedFeature)
-{
-    const uint32_t triFeat = packedFeature & 0xFFu;
-    const uint32_t prismFace = (packedFeature >> 8) & 0xFFu;
-    if (packedFeature == 0xFFFFFFFFu) return 3;
-    if (prismFace > 0) return 3;
-    if (triFeat == 0) return 0;
-    if (triFeat <= 3) return 1;
-    return 2;
-}
-
 // Filter acceptance policy used by narrowphase:
 //   - apply Dot(normal, refDir) >= minDot when filter is active.
 inline bool PassNarrowfilter(const SweepFilter* filter,
                             bool rejectInitialOverlap,
                             float t,
-                            const Vec3& n)
+                            const Vec3& n,
+                            uint32_t featureId)
 {
     if (!filter || !filter->active) return true;
     // By default initial-overlap candidates bypass filtering when the caller
@@ -72,6 +60,8 @@ inline bool PassNarrowfilter(const SweepFilter* filter,
     // filterInitialOverlap=true.
     if (!rejectInitialOverlap && t <= 0.0f && !filter->filterInitialOverlap)
         return true;
+    if (FeatureClassFromPacked(featureId) > (int)filter->maxFeatureClass)
+        return false;
     return Dot(n, filter->refDir) >= filter->minDot;
 }
 
@@ -123,7 +113,7 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
         if (tCand < 0.0f || tCand > 1.0f) return;
 
         Vec3 nn = NormalizeSafe(nCand, n);
-        if (!PassNarrowfilter(filter, rejectInitialOverlap, tCand, nn)) return;
+        if (!PassNarrowfilter(filter, rejectInitialOverlap, tCand, nn, fCand)) return;
 
         float align = -Dot(nn, dirU);
         int cls = FeatureClassFromPacked(fCand);
@@ -332,7 +322,7 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
         if (tCand < 0.0f || tCand > 1.0f) return;
 
         Vec3 nn = NormalizeSafe(nCand, {0,1,0});
-        if (!PassNarrowfilter(filter, rejectInitialOverlap, tCand, nn)) return;
+        if (!PassNarrowfilter(filter, rejectInitialOverlap, tCand, nn, fCand)) return;
 
         float align = -Dot(nn, dirU);
         int cls = FeatureClassFromPacked(fCand);
@@ -521,7 +511,7 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
     auto consider = [&](float t, const Vec3& n, uint32_t feat) {
         if (t < 0.0f || t > 1.0f) return;
         Vec3 nn = NormalizeSafe(n, {0,1,0});
-        if (!PassNarrowfilter(filter, rejectInitialOverlap, t, nn)) return;
+        if (!PassNarrowfilter(filter, rejectInitialOverlap, t, nn, feat)) return;
         float align = -Dot(nn, dirU);
         int cls = FeatureClassFromPacked(feat);
 

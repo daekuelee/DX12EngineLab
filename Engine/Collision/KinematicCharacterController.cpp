@@ -14,9 +14,10 @@
 //   IntegrateVertical  -> gravity + jump -> $v_y$, $\Delta y = v_y \cdot dt$
 //   Recover            -> overlap push-out from previous tick (Bullet: recoverFromPenetration)
 //   [capture x_sweep]  -> §3A baseline (post-recovery, pre-sweep)
-//   StepUp             -> lift by stepHeight + max($\Delta y$, 0)
-//   StepMove           -> iterative sweep+slide (lateral only)
-//   StepDown           -> drop by stepUp lift + max($-\Delta y$, 0), ground detect
+//   StepUp             -> upward/jump lift only
+//   StepMove           -> iterative lateral sweep+slide (+ optional TryStep)
+//   StepDown           -> positional drop/snap only
+//   EvaluateGroundSupport -> final onGround/groundNormal SSOT
 //   Writeback          -> $v_{next} = (x_{final} - x_{sweep}) / dt$ (section 3A)
 //
 // VELOCITY SEMANTICS (section 3A, non-negotiable):
@@ -102,12 +103,17 @@ void KinematicCharacterController::Tick(const CctInput& input, float dt)
         m_debug.recoverIters   = static_cast<uint32_t>(iters);
         m_debug.recoverPushMag = sq::Len(m_currentPosition - preRecover);
     }
+    m_debug.posAfterRecover = m_currentPosition;
 
     m_xSweep = m_currentPosition;
 
-    StepUp(input.walkMove);
+    StepUp();
+    m_debug.posAfterStepUp = m_currentPosition;
     StepMove(input.walkMove);
+    m_debug.posAfterStepMove = m_currentPosition;
     StepDown(dt);
+    m_debug.posAfterStepDown = m_currentPosition;
+    EvaluateGroundSupport(dt);
 
     // §3A: capture position for velocity BEFORE post-sweep cleanup
     m_xFinalPre = m_currentPosition;
@@ -189,9 +195,8 @@ void KinematicCharacterController::IntegrateVertical(const CctInput& input, floa
 // CONSUMES: m_currentPosition, verticalOffset, stepHeight
 //
 // ALGORITHM:
-//   stairLift = (vy < 0 && lateralIntent) ? stepHeight : 0
-//   jumpLift  = max(verticalOffset, 0)        // jump component
-//   lift = stairLift + jumpLift
+//   jumpLift  = max(verticalOffset, 0)        // jump component only
+//   lift = jumpLift
 //   Sweep upward by lift distance.
 //   On ceiling hit (normal dot up < 0): clip lift, zero upward velocity.
 //   On miss: full lift applied.
@@ -204,14 +209,11 @@ void KinematicCharacterController::IntegrateVertical(const CctInput& input, floa
 //         Checking > 0 would misclassify floors as ceilings.
 // EVIDENCE: CctDebug.stepUpOffset
 
-void KinematicCharacterController::StepUp(const sq::Vec3& walkMove)
+void KinematicCharacterController::StepUp()
 {
-    // Avoid idle hover oscillation: apply stair lift only when there is
-    // lateral motion intent in this tick.
-    const bool hasLateralIntent = sq::LenSq(walkMove) > (kMinDist * kMinDist);
-    float stairLift = (m_state.verticalVelocity < 0.0f && hasLateralIntent)
-        ? m_config.stepHeight
-        : 0.0f;
+    // Stair climb is handled by TryStep during StepMove.
+    // StepUp handles jump ascent / upward velocity only.
+    const float stairLift = 0.0f;
     float jumpLift  = (m_state.verticalOffset > 0.0f)   ? m_state.verticalOffset : 0.0f;
     float lift = stairLift + jumpLift;
 
@@ -282,15 +284,21 @@ void KinematicCharacterController::StepUp(const sq::Vec3& walkMove)
 
 void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
 {
-    float walkLen = sq::Len(walkMove);
+    const float startY = m_currentPosition.y;
+
+    // Hard-guard: StepMove is lateral-only. Strip any accidental up/down input.
+    sq::Vec3 lateralMove = walkMove - m_config.up * sq::Dot(walkMove, m_config.up);
+    float walkLen = sq::Len(lateralMove);
     if (walkLen < kMinDist) {
         m_debug.forwardIters = 0;
+        m_debug.stepMoveDeltaY = 0.0f;
         return;
     }
 
-    m_originalDirection = walkMove * (1.0f / walkLen);
-    m_targetPosition = m_currentPosition + walkMove;
+    m_originalDirection = lateralMove * (1.0f / walkLen);
+    m_targetPosition = m_currentPosition + lateralMove;
     constexpr uint32_t maxZeroHitPushes = 8u;
+    bool stepAttempted = false;
 
     float fraction = 1.0f;
     int iters = 0;
@@ -324,6 +332,15 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
 #endif
 
         if (hit.hit) {
+            m_debug.stepMoveHitCount++;
+            if (m_debug.stepMoveHitCount == 1) {
+                m_debug.stepMoveFirstTOI = hit.t;
+                m_debug.stepMoveFirstNormal = hit.normal;
+                m_debug.stepMoveFirstIndex = hit.index;
+            }
+
+            const float nUp = sq::Dot(hit.normal, m_config.up);
+            const bool wallLike = (nUp < m_maxSlopeCos);
             float tSkin = m_config.sweep.skin / (std::max)(remainLen, kMinDist);
             if (tSkin > 1.0f) tSkin = 1.0f;
 
@@ -333,7 +350,12 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
                 // Re-run sweep with updated current and the same target; break only after
                 // bounded retry budget to avoid infinite loops.
                 m_debug.zeroHitPushes++;
-                m_currentPosition = m_currentPosition + hit.normal * m_config.addedMargin;
+                sq::Vec3 pushNormal = hit.normal;
+                if (wallLike) {
+                    sq::Vec3 lateralN = hit.normal - m_config.up * nUp;
+                    pushNormal = sq::NormalizeSafe(lateralN, hit.normal);
+                }
+                m_currentPosition = m_currentPosition + pushNormal * m_config.addedMargin;
                 if (m_debug.zeroHitPushes >= maxZeroHitPushes) {
                     Recover();
                     m_debug.stuck = true;
@@ -351,9 +373,20 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
 
             // Advance to contact FIRST, then slide remainder
             m_currentPosition = m_currentPosition + remaining * safeT;
+
+            sq::Vec3 postContactRemain = m_targetPosition - m_currentPosition;
+            if (wallLike && !stepAttempted &&
+                sq::LenSq(postContactRemain) > kMinDist * kMinDist)
+            {
+                stepAttempted = true;
+                if (TryStep(postContactRemain)) {
+                    m_targetPosition = m_currentPosition;
+                    break;
+                }
+            }
+
             sq::Vec3 slideNormal = hit.normal;
-            float nUp = sq::Dot(hit.normal, m_config.up);
-            if (nUp < m_maxSlopeCos) {
+            if (wallLike) {
                 // Wall contacts can carry tiny vertical noise in narrowphase normals.
                 // Remove the up component so lateral movement cannot ratchet upward.
                 sq::Vec3 lateral = hit.normal - m_config.up * nUp;
@@ -386,28 +419,93 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
     m_debug.forwardIters = static_cast<uint32_t>(iters);
     if (iters >= m_config.maxForwardIters)
         m_debug.stuck = true;
+    m_debug.stepMoveDeltaY = m_currentPosition.y - startY;
+}
+
+bool KinematicCharacterController::TryStep(const sq::Vec3& lateralRemaining)
+{
+    const float lateralLen = sq::Len(lateralRemaining);
+    if (lateralLen < kMinDist) return false;
+    if (m_config.stepHeight <= kMinDist) return false;
+    if (!m_state.wasOnGround && !m_state.onGround) return false;
+
+    sq::Vec3 stepPos = m_currentPosition;
+
+    // 1) Lift by step height with ceiling filter.
+    sq::SweepFilter ceilFilter;
+    ceilFilter.refDir = m_config.up * -1.0f;
+    ceilFilter.minDot = m_maxSlopeCos;
+    ceilFilter.active = true;
+
+    const sq::Vec3 upDelta = m_config.up * m_config.stepHeight;
+    const float upDist = sq::Len(upDelta);
+sq::Hit upHit = SweepClosest(stepPos, upDelta, ceilFilter, true);
+    if (upHit.hit) {
+        const float safeT = (std::max)(0.0f, upHit.t - m_config.sweep.skin / (std::max)(upDist, kMinDist));
+        if (safeT <= kMinDist) return false;
+        stepPos = stepPos + upDelta * safeT;
+    } else {
+        stepPos = stepPos + upDelta;
+    }
+
+    // 2) Move laterally from lifted position.
+    sq::SweepFilter approachFilter;
+    approachFilter.refDir = sq::NormalizeSafe(lateralRemaining * -1.0f, m_config.up);
+    approachFilter.minDot = 1e-4f;
+    approachFilter.active = true;
+
+    sq::Hit sideHit = SweepClosest(stepPos, lateralRemaining, approachFilter, false);
+    if (sideHit.hit) return false;
+    stepPos = stepPos + lateralRemaining;
+
+    // 3) Settle down and require walkable support.
+    const float probeDist = (std::max)(m_config.contactOffset * 2.0f, m_config.sweep.skin);
+    const float settleDist = m_config.stepHeight + probeDist;
+    const sq::Vec3 downDelta = m_config.up * (-settleDist);
+
+    sq::SweepFilter groundFilter;
+    groundFilter.refDir = m_config.up;
+    groundFilter.minDot = m_maxSlopeCos;
+    groundFilter.active = true;
+    groundFilter.filterInitialOverlap = true;
+
+    auto trySettle = [&](uint8_t maxFeatureClass) -> bool {
+        sq::SweepFilter filter = groundFilter;
+        filter.maxFeatureClass = maxFeatureClass;
+        sq::Hit downHit = SweepClosest(stepPos, downDelta, filter, false);
+        if (!downHit.hit || !IsWalkable(downHit.normal)) return false;
+        const float safeT = (std::max)(0.0f, downHit.t - m_config.sweep.skin / (std::max)(settleDist, kMinDist));
+        stepPos = stepPos + downDelta * safeT;
+        m_currentPosition = stepPos;
+        return true;
+    };
+
+    if (trySettle(0)) return true; // face first
+    if (trySettle(2)) return true; // edge/vertex fallback
+    return false;
 }
 
 // =========================================================================
 // StepDown
 // =========================================================================
-// PRODUCES: m_currentPosition (lowered), onGround, groundNormal, verticalVelocity
+// PRODUCES: m_currentPosition (lowered)
 // CONSUMES: m_currentPosition, m_currentStepOffset, verticalVelocity, stepHeight
 //
 // ALGORITHM:
 //   dropDist = m_currentStepOffset + max(-verticalVelocity * dt, 0)
 //   Primary sweep downward by dropDist.
-//   If walkable hit: snap (with backoff), set grounded, zero verticalVelocity.
+//   If walkable hit: snap position (with backoff).
 //   If no hit and drop was small (gravity part <= stepHeight):
 //     Re-sweep with stepHeight to catch stair descent ("small drop" case).
-//   Otherwise: full drop, set airborne ("large drop" / cliff fall).
+//   Otherwise: full drop ("large drop" / cliff fall).
 //
 // WHY TWO SWEEPS:
 //   When stepping off a small ledge (< stepHeight), the primary sweep at
 //   gravity speed may undershoot. The secondary sweep at stepHeight distance
 //   finds the stair below, producing smooth descent instead of jittery fall.
 //
-// INVARIANT: grounded state is only set by a walkable hit (slope <= maxSlopeDeg).
+// INVARIANT: this phase does not finalize onGround. Ground state is decided by
+//            EvaluateGroundSupport().
 // HAZARD: if m_currentStepOffset is 0 and verticalVelocity >= 0, dropDist is 0
 //         -> no sweep -> remains in previous ground state (correct: no motion).
 // EVIDENCE: CctDebug.stepDownHit, CctDebug.fullDrop
@@ -416,7 +514,6 @@ void KinematicCharacterController::StepDown(float dt)
 {
     // Skip StepDown when ascending (vy > 0). No ground search needed.
     if (m_state.verticalVelocity > 0.0f) {
-        m_state.onGround = false;
         m_debug.stepDownSkipped = true;
         return;
     }
@@ -429,119 +526,150 @@ void KinematicCharacterController::StepDown(float dt)
     }
 
     float dropDist = m_currentStepOffset + downVelocityDt;
+    m_debug.stepDownDropDist = dropDist;
     if (dropDist < kMinDist) return;
 
-    // Walkable ground filter (Bullet: StepDown callback with m_up, m_maxSlopeCosine).
-    // Only surfaces where Dot(normal, up) >= maxSlopeCos survive.
-    // This prevents wall side-faces (t~0) from starving the floor hit.
     sq::SweepFilter groundFilter;
     groundFilter.refDir = m_config.up;
     groundFilter.minDot = m_maxSlopeCos;
     groundFilter.active = true;
-
-    // StepDown fallback policy: when rejectInitialOverlap=false, keep evaluating t>0
-    // candidates but still filter t==0 normals by walkable predicate.
-    sq::SweepFilter groundFilterInit = groundFilter;
-    groundFilterInit.filterInitialOverlap = true;
+    groundFilter.filterInitialOverlap = true;
 
     sq::Vec3 downDelta = m_config.up * (-dropDist);
     float dist = sq::Len(downDelta);
 
-    m_debug.stepDownDropDist = dropDist;
+    auto trySnap = [&](const sq::Vec3& delta, float deltaDist,
+                       bool rejectInitialOverlap, uint8_t maxFeatureClass) -> bool {
+        sq::SweepFilter filter = groundFilter;
+        filter.maxFeatureClass = maxFeatureClass;
+        sq::Hit hit = SweepClosest(m_currentPosition, delta, filter, rejectInitialOverlap);
 
-    auto tryApplyGround = [&](const sq::Hit& groundHit, const sq::Vec3& groundDelta, float groundDist) -> bool {
-        if (!groundHit.hit || !IsWalkable(groundHit.normal)) return false;
+        if (deltaDist <= kMinDist) return false;
+        if (!hit.hit || !IsWalkable(hit.normal)) return false;
 
-        float safeT = (groundDist > kMinDist)
-            ? (std::max)(0.0f, groundHit.t - m_config.sweep.skin / groundDist)
-            : 0.0f;
-        m_currentPosition = m_currentPosition + groundDelta * safeT;
-        m_state.onGround = true;
-        m_state.groundNormal = groundHit.normal;
-        m_state.verticalVelocity = 0.0f;
-        m_state.verticalOffset   = 0.0f;
-        m_state.wasJumping       = false;
+        float safeT = (std::max)(0.0f, hit.t - m_config.sweep.skin / deltaDist);
+        m_currentPosition = m_currentPosition + delta * safeT;
         m_debug.stepDownHit = true;
+        m_debug.stepDownHitTOI = hit.t;
+        m_debug.stepDownHitNormal = hit.normal;
+        m_debug.stepDownWalkable = true;
         return true;
     };
 
-    // Primary sweep rejects t==0 overlaps, matching movement-step semantics.
-    sq::Hit hit = SweepClosest(m_currentPosition, downDelta, groundFilter, true);
+    m_debug.stepDownHitTOI = 1.0f;
+    m_debug.stepDownHitNormal = sq::Vec3{0, 1, 0};
+    m_debug.stepDownWalkable = false;
 
-    m_debug.stepDownHitTOI    = hit.hit ? hit.t : 1.0f;
-    m_debug.stepDownHitNormal = hit.hit ? hit.normal : sq::Vec3{0, 1, 0};
-    m_debug.stepDownWalkable  = hit.hit ? IsWalkable(hit.normal) : false;
-
-    if (tryApplyGround(hit, downDelta, dist)) {
-        return;
-    }
-
-    // Case 1b: if primary misses due to initial-overlap starvation, retry with
-    // rejectInitialOverlap=false to recover floor contact in thin-geometry cases.
-    sq::Hit hitNoReject = SweepClosest(m_currentPosition, downDelta, groundFilterInit, false);
-    if (tryApplyGround(hitNoReject, downDelta, dist)) {
-        return;
-    }
+    if (trySnap(downDelta, dist, true, 0)) return;   // face-only
+    if (trySnap(downDelta, dist, true, 2)) return;   // edge/vertex fallback
+    if (trySnap(downDelta, dist, false, 0)) return;  // allow t==0
+    if (trySnap(downDelta, dist, false, 2)) return;  // allow t==0 + fallback
 
     // Case 2: small drop fallback — re-sweep at stepHeight for stair descent.
-    // Keep this path even if primary/secondary sweeps produced non-walkable hits,
-    // because filtering can starve the desired floor candidate at tiny t.
     if (downVelocityDt <= m_config.stepHeight) {
         float extendedDrop = m_currentStepOffset + m_config.stepHeight;
         sq::Vec3 extDown = m_config.up * (-extendedDrop);
         float extDist = sq::Len(extDown);
 
-        sq::Hit extHit = SweepClosest(m_currentPosition, extDown, groundFilter, true);
-        if (tryApplyGround(extHit, extDown, extDist)) {
-            return;
-        }
-
-        // Case 2b: same stepHeight retry with t==0 overlaps allowed.
-        // This handles the floor-contact lock where an exact overlap exists
-        // at the stair edge but the filtered rejectInitialOverlap=true path misses.
-        sq::Hit extHitNoReject = SweepClosest(m_currentPosition, extDown, groundFilterInit, false);
-        if (tryApplyGround(extHitNoReject, extDown, extDist)) {
-            return;
-        }
+        if (trySnap(extDown, extDist, true, 0)) return;
+        if (trySnap(extDown, extDist, true, 2)) return;
+        if (trySnap(extDown, extDist, false, 0)) return;
+        if (trySnap(extDown, extDist, false, 2)) return;
     }
 
-    // Case 3: no walkable ground found in down sweeps.
-    // Fallback to overlap-derived support before declaring airborne. This prevents
-    // floor-contact flicker when contact is present but sweep misses due narrow-phase
-    // near-zero jitter (especially on triangle seams).
-    {
-        float supportDepth = 0.0f;
-        sq::Vec3 supportNormal{};
-        if (HasWalkableSupport(supportDepth, supportNormal)) {
-            m_state.onGround = true;
-            m_state.groundNormal = supportNormal;
-            m_state.verticalVelocity = 0.0f;
-            m_state.verticalOffset   = 0.0f;   // zero on landing/support hold
-            m_state.wasJumping       = false;   // clear jump state on support
-            return;
-        }
-    }
-
-    // Distance-based ground latch: preserve support across one-frame misses
-    // only when we were grounded and the expected drop is small.
-    if (m_state.wasOnGround && downVelocityDt <= m_config.stepHeight) {
-        const float latchDist = (std::max)(m_config.contactOffset * 2.0f, m_config.sweep.skin);
-        const float latchDrop = (std::min)(dropDist, latchDist);
-        if (latchDrop > kMinDist) {
-            sq::Vec3 latchDown = m_config.up * (-latchDrop);
-            float latchLen = sq::Len(latchDown);
-            sq::Hit latchHit = SweepClosest(m_currentPosition, latchDown, groundFilterInit, false);
-            if (tryApplyGround(latchHit, latchDown, latchLen)) {
-                return;
-            }
-        }
-    }
-
-    // Case 4: no walkable ground found — full drop, airborne.
-    // With groundFilter, miss means NO walkable surface within downward sweep range.
+    // No walkable snap target in step-down sweeps: apply full drop.
     m_currentPosition = m_currentPosition + downDelta;
-    m_state.onGround = false;
     m_debug.fullDrop = true;
+}
+
+void KinematicCharacterController::EvaluateGroundSupport(float dt)
+{
+    m_state.onGround = false;
+    m_state.groundNormal = m_config.up;
+    m_debug.groundReason = CctGroundReason::None;
+    m_debug.groundFeatureClass = 255;
+
+    if (m_state.verticalVelocity > 0.0f) {
+        return;
+    }
+
+    const float probeDist = (std::max)(m_config.contactOffset * 2.0f, m_config.sweep.skin);
+    m_debug.groundProbeDist = probeDist;
+
+    auto applyGroundHit = [&](const sq::Hit& hit,
+                              const sq::Vec3& downDelta,
+                              float downLen,
+                              CctGroundReason reason) -> bool {
+        if (!hit.hit || !IsWalkable(hit.normal) || downLen <= kMinDist) return false;
+        float safeT = (std::max)(0.0f, hit.t - m_config.sweep.skin / downLen);
+        m_currentPosition = m_currentPosition + downDelta * safeT;
+        m_state.onGround = true;
+        m_state.groundNormal = hit.normal;
+        m_state.verticalVelocity = 0.0f;
+        m_state.verticalOffset = 0.0f;
+        m_state.wasJumping = false;
+        m_debug.groundReason = reason;
+        m_debug.groundFeatureClass = static_cast<uint8_t>(sq::FeatureClassFromPacked(hit.featureId));
+        return true;
+    };
+
+    auto trySweepProbe = [&](uint8_t maxFeatureClass, CctGroundReason reason) -> bool {
+        sq::SweepFilter groundFilter;
+        groundFilter.refDir = m_config.up;
+        groundFilter.minDot = m_maxSlopeCos;
+        groundFilter.active = true;
+        groundFilter.filterInitialOverlap = true;
+        groundFilter.maxFeatureClass = maxFeatureClass;
+
+        const sq::Vec3 downDelta = m_config.up * (-probeDist);
+        const float downLen = sq::Len(downDelta);
+        sq::Hit hit = SweepClosest(m_currentPosition, downDelta, groundFilter, false);
+        return applyGroundHit(hit, downDelta, downLen, reason);
+    };
+
+    // Ground policy: face first, then edge/vertex fallback.
+    if (trySweepProbe(0, CctGroundReason::ProbeFace)) return;
+    if (trySweepProbe(2, CctGroundReason::ProbeFallback)) return;
+
+    float supportDepth = 0.0f;
+    sq::Vec3 supportNormal{};
+    uint8_t supportCls = 255;
+    if (HasWalkableSupport(supportDepth, supportNormal,
+                           m_config.maxPenDepth, 1.0f, 0, &supportCls) ||
+        HasWalkableSupport(supportDepth, supportNormal,
+                           m_config.maxPenDepth, 1.0f, 2, &supportCls))
+    {
+        m_state.onGround = true;
+        m_state.groundNormal = supportNormal;
+        m_state.verticalVelocity = 0.0f;
+        m_state.verticalOffset = 0.0f;
+        m_state.wasJumping = false;
+        m_debug.groundReason = CctGroundReason::Overlap;
+        m_debug.groundFeatureClass = supportCls;
+        return;
+    }
+
+    const float downVelocityDt = (m_state.verticalVelocity < 0.0f)
+        ? -m_state.verticalVelocity * dt
+        : 0.0f;
+
+    if (m_state.wasOnGround && downVelocityDt <= m_config.stepHeight) {
+        const float latchDist = (std::min)(probeDist, m_config.stepHeight);
+        if (latchDist > kMinDist) {
+            sq::SweepFilter latchFilter;
+            latchFilter.refDir = m_config.up;
+            latchFilter.minDot = m_maxSlopeCos;
+            latchFilter.active = true;
+            latchFilter.filterInitialOverlap = true;
+            latchFilter.maxFeatureClass = 2;
+
+            const sq::Vec3 latchDown = m_config.up * (-latchDist);
+            const float latchLen = sq::Len(latchDown);
+            sq::Hit latchHit = SweepClosest(m_currentPosition, latchDown, latchFilter, false);
+            if (applyGroundHit(latchHit, latchDown, latchLen, CctGroundReason::Latch))
+                return;
+        }
+    }
 }
 
 // =========================================================================
@@ -627,7 +755,9 @@ bool KinematicCharacterController::Recover()
 
 bool KinematicCharacterController::HasWalkableSupport(float& outDepth, sq::Vec3& outNormal,
                                                      float minDepth,
-                                                     float supportRadiusMul) const
+                                                     float supportRadiusMul,
+                                                     uint8_t maxFeatureClass,
+                                                     uint8_t* outFeatureClass) const
 {
     sq::Vec3 segA = m_currentPosition + m_config.up * m_geom.radius;
     sq::Vec3 segB = m_currentPosition + m_config.up * (m_geom.radius + 2.0f * m_geom.halfHeight);
@@ -642,13 +772,17 @@ bool KinematicCharacterController::HasWalkableSupport(float& outDepth, sq::Vec3&
 
     outDepth = 0.0f;
     outNormal = {0.0f, 1.0f, 0.0f};
+    if (outFeatureClass) *outFeatureClass = 255;
 
     for (uint32_t i = 0; i < count; ++i) {
         if (contacts[i].depth <= minDepth) continue;
+        const int featClass = sq::FeatureClassFromPacked(contacts[i].featureId);
+        if (featClass > (int)maxFeatureClass) continue;
         if (!IsWalkable(contacts[i].normal)) continue;
 
         outDepth = contacts[i].depth;
         outNormal = contacts[i].normal;
+        if (outFeatureClass) *outFeatureClass = (uint8_t)featClass;
         return true;
     }
     return false;
@@ -664,7 +798,7 @@ bool KinematicCharacterController::HasWalkableSupport(float& outDepth, sq::Vec3&
 //   $v_{next} = \frac{x_{finalPre} - x_{sweep}}{dt}$
 //
 // $x_{finalPre}$ is the position after sweep phases (StepUp + StepMove +
-// StepDown) but BEFORE post-sweep cleanup. $x_{sweep}$ is the post-recovery
+// StepDown + EvaluateGroundSupport) but BEFORE post-sweep cleanup. $x_{sweep}$ is the post-recovery
 // baseline. Recovery + post-sweep cleanup NEVER feed into velocity.
 //
 // INVARIANT: $|dx_{corr}|$ should be bounded by skin + maxPenDepth.
