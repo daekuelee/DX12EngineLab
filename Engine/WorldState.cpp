@@ -362,7 +362,7 @@ namespace Engine
             floorA.kind     = coll::ColliderKind::Solid;
             floorA.mask     = coll::Q_Solid;
             floorA.userTag  = 0xFFFFFFFE;
-            floorA.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz0}, {fx1,fy,fz1}};
+            floorA.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz1}, {fx1,fy,fz0}};
             floorA.bounds   = Collision::sq::TriAABB(floorA.triVerts);
             descs.push_back(floorA);
 
@@ -371,7 +371,7 @@ namespace Engine
             floorB.kind     = coll::ColliderKind::Solid;
             floorB.mask     = coll::Q_Solid;
             floorB.userTag  = 0xFFFFFFFE;
-            floorB.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz1}, {fx0,fy,fz1}};
+            floorB.triVerts = {{fx0,fy,fz0}, {fx0,fy,fz1}, {fx1,fy,fz1}};
             floorB.bounds   = Collision::sq::TriAABB(floorB.triVerts);
             descs.push_back(floorB);
         }
@@ -415,7 +415,7 @@ namespace Engine
             floorA.kind     = coll::ColliderKind::Solid;
             floorA.mask     = coll::Q_Solid;
             floorA.userTag  = 0xFFFFFFFE;
-            floorA.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz0}, {fx1,fy,fz1}};
+            floorA.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz1}, {fx1,fy,fz0}};
             floorA.bounds   = Collision::sq::TriAABB(floorA.triVerts);
             descs.push_back(floorA);
 
@@ -424,7 +424,7 @@ namespace Engine
             floorB.kind     = coll::ColliderKind::Solid;
             floorB.mask     = coll::Q_Solid;
             floorB.userTag  = 0xFFFFFFFE;
-            floorB.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz1}, {fx0,fy,fz1}};
+            floorB.triVerts = {{fx0,fy,fz0}, {fx0,fy,fz1}, {fx1,fy,fz1}};
             floorB.bounds   = Collision::sq::TriAABB(floorB.triVerts);
             descs.push_back(floorB);
         }

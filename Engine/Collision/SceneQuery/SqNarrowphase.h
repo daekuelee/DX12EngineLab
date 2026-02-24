@@ -730,11 +730,11 @@ inline bool OverlapCapsuleTri(const Vec3& segA, const Vec3& segB, float radius,
     if (dist2 > epsD2) {
         out.normal = (qSeg - qTri) * (1.0f / dist);
     } else {
-        // Near-zero: use triangle face normal with positive bias (prevents seam sign fights)
+        // Near-zero: closest-pair direction is numerically unstable at shared edges.
+        // Use triangle-local fallback, then choose a deterministic sign.
         Vec3 n = TriNormalUnit(tri);
-        float side = Dot(qSeg - tri.p0, n);
-        // Positive bias: when |side| is tiny, always pick +n (deterministic at seams)
-        out.normal = (side < -kEpsPointInTri) ? (n * -1.0f) : n;
+        Vec3 fallback = (segA + segB) * 0.5f - (tri.p0 + tri.p1 + tri.p2) * (1.0f / 3.0f);
+        out.normal = NormalizeSafe(qSeg - qTri, NormalizeSafe(fallback, n));
     }
 
     out.featureId = feat;
