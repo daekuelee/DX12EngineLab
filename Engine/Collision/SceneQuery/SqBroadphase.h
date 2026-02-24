@@ -79,4 +79,17 @@ inline AABB CapsuleAabbAtT(const SweepCapsuleInput& in, float t, float extra)
     };
 }
 
+// ---- Static capsule AABB (no sweep, just position) ----------------------
+inline AABB CapsuleAabbStatic(const Vec3& segA, const Vec3& segB, float radius)
+{
+    return {
+        (std::min)(segA.x, segB.x) - radius,
+        (std::min)(segA.y, segB.y) - radius,
+        (std::min)(segA.z, segB.z) - radius,
+        (std::max)(segA.x, segB.x) + radius,
+        (std::max)(segA.y, segB.y) + radius,
+        (std::max)(segA.z, segB.z) + radius
+    };
+}
+
 }}} // namespace Engine::Collision::sq

@@ -119,6 +119,14 @@ struct Hit {
     uint32_t featureId = 0;  // packed: (prismFace<<8) | (sphereTriFeature)
 };
 
+struct OverlapContact {
+    Vec3     normal{0, 1, 0};
+    float    depth    = 0.0f;
+    PrimType type     = PrimType::Aabb;
+    uint32_t index    = 0;
+    uint32_t featureId = 0;
+};
+
 struct SweepCapsuleInput {
     Vec3  segA0;    // bottom sphere center at t=0
     Vec3  segB0;    // top sphere center at t=0
@@ -130,6 +138,23 @@ struct SweepConfig {
     float skin       = 1e-4f;   // contact offset
     float tieEpsT    = 1e-6f;   // tolerance for t tie-breaks
     bool  twoSidedTris = true;
+};
+
+// ---- Sweep filter (Bullet-equivalent callback predicate) ----------------
+// Applied inside SweepCapsuleClosestHit_Fast after narrowphase, before
+// BetterHit selection. Rejects candidates where Dot(hitNormal, refDir) < minDot.
+//
+// Per-stage usage (matches Bullet btKinematicClosestNotMeConvexResultCallback):
+//   StepUp:   refDir = -up,  minDot = maxSlopeCos  (only ceilings block)
+//   StepMove: refDir = -dir, minDot = ε_approach    (only approach surfaces block)
+//   StepDown: refDir = +up,  minDot = maxSlopeCos  (only walkable ground blocks)
+//
+// Default: active=false → no filtering → backward compatible.
+
+struct SweepFilter {
+    Vec3  refDir{0, 1, 0};  // reference direction for dot test
+    float minDot = -2.0f;   // minimum Dot(hitNormal, refDir) to accept
+    bool  active = false;    // false = no filtering
 };
 
 static_assert(sizeof(AABB) == 24, "AABB must be 24 bytes POD");

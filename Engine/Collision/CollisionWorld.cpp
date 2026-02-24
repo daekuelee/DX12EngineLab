@@ -53,10 +53,11 @@ void CollisionWorld::BuildStatic(const std::vector<ColliderDesc>& colliders)
 sq::Hit CollisionWorld::SweepCapsuleClosest(
     const sq::SweepCapsuleInput& in,
     const sq::SweepConfig& cfg,
-    QueryMask /*queryMask*/) const
+    QueryMask /*queryMask*/,
+    const sq::SweepFilter& filter) const
 {
     // BVH contains only Solid colliders. Triggers excluded at BuildStatic.
-    sq::Hit hit = sq::SweepCapsuleClosestHit_Fast(m_bvh, in, cfg, m_scratch);
+    sq::Hit hit = sq::SweepCapsuleClosestHit_Fast(m_bvh, in, cfg, m_scratch, filter);
     if (hit.hit) {
         // Remap BVH-local index → m_descs index by primitive type
         if (hit.type == sq::PrimType::Tri)

@@ -112,7 +112,8 @@ inline Hit SweepCapsuleClosestHit_Fast(
     const StaticBVH& bvh,
     const SweepCapsuleInput& in,
     const SweepConfig& cfg,
-    QueryScratch& scratch)
+    QueryScratch& scratch,
+    const SweepFilter& filter = SweepFilter{})
 {
     Hit best{};
     best.hit = false;
@@ -153,6 +154,11 @@ inline Hit SweepCapsuleClosestHit_Fast(
 
                 float t; Vec3 n; uint32_t f;
                 if (!SweepCapsulePrim_TOI01(bvh, in, cfg, pref, t, n, f))
+                    continue;
+
+                // Sweep filter: reject candidates by normal predicate
+                // (Bullet-equivalent: addSingleResult returning 1.0 to skip)
+                if (filter.active && Dot(n, filter.refDir) < filter.minDot)
                     continue;
 
                 if (t < lo || t > hi) continue;

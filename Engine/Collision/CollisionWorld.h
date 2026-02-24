@@ -76,9 +76,12 @@ public:
 
     // Sweep capsule against BVH. Returns earliest Solid hit along displacement.
     // Only colliders whose mask & queryMask != 0 participate.
+    // filter: optional normal predicate applied inside candidate enumeration
+    //         (Bullet-equivalent sweep callback filtering).
     sq::Hit SweepCapsuleClosest(const sq::SweepCapsuleInput& in,
                                 const sq::SweepConfig& cfg,
-                                QueryMask queryMask = Q_Solid) const;
+                                QueryMask queryMask = Q_Solid,
+                                const sq::SweepFilter& filter = sq::SweepFilter{}) const;
 
     // Overlap capsule at a position. Returns count of overlapping colliders.
     // outIds receives up to maxIds collider indices (sorted by index for determinism).

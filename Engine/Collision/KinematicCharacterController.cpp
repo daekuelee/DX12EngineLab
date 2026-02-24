@@ -122,6 +122,9 @@ void KinematicCharacterController::Tick(const CctInput& input, float dt)
     }
 
     Writeback(dt);
+
+    // Sweep filter diagnostics: track onGround state transitions
+    m_debug.onGroundToggles = (m_state.onGround != m_state.wasOnGround) ? 1 : 0;
 }
 
 // =========================================================================
@@ -219,7 +222,16 @@ void KinematicCharacterController::StepUp()
         return;
     }
 
-    sq::Hit hit = SweepClosest(m_currentPosition, upDelta);
+    // Ceiling filter (Bullet: StepUp callback with -m_up, m_maxSlopeCosine).
+    // Only surfaces where Dot(normal, -up) >= maxSlopeCos survive, i.e.,
+    // normals facing downward (ceilings). Walls and floors are ignored,
+    // preventing wall side-faces at t~0 from blocking the upward lift.
+    sq::SweepFilter ceilFilter;
+    ceilFilter.refDir = m_config.up * -1.0f;   // -up (downward)
+    ceilFilter.minDot = m_maxSlopeCos;
+    ceilFilter.active = true;
+
+    sq::Hit hit = SweepClosest(m_currentPosition, upDelta, ceilFilter);
 
     if (hit.hit) {
         // Advance with skin backoff to avoid sitting at exact contact
@@ -227,13 +239,12 @@ void KinematicCharacterController::StepUp()
         m_currentPosition = m_currentPosition + upDelta * safeT;
         m_currentStepOffset = dist * safeT;
 
-        // Ceiling hit: surface normal faces downward -> Dot(n, up) < 0
-        if (sq::Dot(hit.normal, m_config.up) < 0.0f) {
-            if (m_state.verticalVelocity > 0.0f)
-                m_state.verticalVelocity = 0.0f;
-        }
+        // All hits that survive the ceiling filter have Dot(n, up) < 0.
+        // Kill upward velocity on ceiling contact.
+        if (m_state.verticalVelocity > 0.0f)
+            m_state.verticalVelocity = 0.0f;
 
-        // If jumping and StepUp hit something, kill the jump.
+        // If jumping and StepUp hit ceiling, kill the jump.
         // Force currentStepOffset = stepHeight so StepDown sweeps far enough.
         if (m_state.verticalOffset > 0.0f) {
             m_state.verticalOffset   = 0.0f;
@@ -287,7 +298,17 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
         float remainLen = sq::Len(remaining);
         if (remainLen < kMinDist) break;
 
-        sq::Hit hit = SweepClosest(m_currentPosition, remaining);
+        // Approach filter (Bullet: StepForwardAndStrafe callback with sweepDirNeg, 0.0).
+        // refDir = -Normalize(remaining): points opposite to motion.
+        // minDot = ε_approach (1e-4): rejects tangential (dot~0) and retreating surfaces.
+        // This prevents t~0 re-hits from surfaces the capsule is sliding along.
+        // Recomputed each iteration because slide changes the remaining direction.
+        sq::SweepFilter approachFilter;
+        approachFilter.refDir = sq::NormalizeSafe(remaining * -1.0f, m_config.up);
+        approachFilter.minDot = 1e-4f;
+        approachFilter.active = true;
+
+        sq::Hit hit = SweepClosest(m_currentPosition, remaining, approachFilter);
 
         // Fraction budget (ex4.cpp line 431)
         fraction -= hit.hit ? hit.t : 1.0f;
@@ -387,12 +408,28 @@ void KinematicCharacterController::StepDown(float dt)
     float dropDist = m_currentStepOffset + downVelocityDt;
     if (dropDist < kMinDist) return;
 
+    // Walkable ground filter (Bullet: StepDown callback with m_up, m_maxSlopeCosine).
+    // Only surfaces where Dot(normal, up) >= maxSlopeCos survive.
+    // This prevents wall side-faces (t~0) from starving the floor hit.
+    sq::SweepFilter groundFilter;
+    groundFilter.refDir = m_config.up;
+    groundFilter.minDot = m_maxSlopeCos;
+    groundFilter.active = true;
+
     sq::Vec3 downDelta = m_config.up * (-dropDist);
     float dist = sq::Len(downDelta);
 
-    sq::Hit hit = SweepClosest(m_currentPosition, downDelta);
+    m_debug.stepDownDropDist = dropDist;
 
-    // Case 1: walkable ground found — snap and set grounded
+    sq::Hit hit = SweepClosest(m_currentPosition, downDelta, groundFilter);
+
+    m_debug.stepDownHitTOI    = hit.hit ? hit.t : 1.0f;
+    m_debug.stepDownHitNormal = hit.hit ? hit.normal : sq::Vec3{0, 1, 0};
+    m_debug.stepDownWalkable  = hit.hit ? IsWalkable(hit.normal) : false;
+
+    // Case 1: walkable ground found — snap and set grounded.
+    // With the groundFilter active, all surviving hits ARE walkable.
+    // The IsWalkable check is kept for defense-in-depth.
     if (hit.hit && IsWalkable(hit.normal)) {
         float safeT = (dist > kMinDist)
             ? (std::max)(0.0f, hit.t - m_config.sweep.skin / dist)
@@ -407,13 +444,14 @@ void KinematicCharacterController::StepDown(float dt)
         return;
     }
 
-    // Case 2: no hit + small drop — re-sweep at stepHeight for stair descent
+    // Case 2: no hit + small drop — re-sweep at stepHeight for stair descent.
+    // Same groundFilter applied — only walkable surfaces visible.
     if (!hit.hit && downVelocityDt <= m_config.stepHeight) {
         float extendedDrop = m_currentStepOffset + m_config.stepHeight;
         sq::Vec3 extDown = m_config.up * (-extendedDrop);
         float extDist = sq::Len(extDown);
 
-        sq::Hit extHit = SweepClosest(m_currentPosition, extDown);
+        sq::Hit extHit = SweepClosest(m_currentPosition, extDown, groundFilter);
         if (extHit.hit && IsWalkable(extHit.normal)) {
             float safeT = (extDist > kMinDist)
                 ? (std::max)(0.0f, extHit.t - m_config.sweep.skin / extDist)
@@ -429,43 +467,10 @@ void KinematicCharacterController::StepDown(float dt)
         }
     }
 
-    // Case 2.5: Overlap-based ground probe fallback.
-    // When sweep returns non-walkable (cube side-face overlap at t=0),
-    // use overlap query to find walkable ground beneath.
-    if (hit.hit && !IsWalkable(hit.normal) && m_state.wasOnGround) {
-        float probeLower = m_config.contactOffset * 2.0f;
-        sq::Vec3 probePos = m_currentPosition - m_config.up * probeLower;
-        sq::Vec3 segA = probePos + m_config.up * m_geom.radius;
-        sq::Vec3 segB = probePos + m_config.up * (m_geom.radius + 2.0f * m_geom.halfHeight);
-
-        sq::OverlapContact contacts[32];
-        uint32_t count = m_world->OverlapCapsuleContacts(
-            segA, segB, m_geom.radius, Q_Solid, contacts, 32);
-
-        for (uint32_t i = 0; i < count; ++i) {
-            if (IsWalkable(contacts[i].normal)) {
-                m_state.onGround       = true;
-                m_state.groundNormal   = contacts[i].normal;
-                m_state.verticalVelocity = 0.0f;
-                m_state.verticalOffset = 0.0f;
-                m_state.wasJumping     = false;
-                m_debug.stepDownHit    = true;
-                m_debug.seamRecovery   = true;
-                return;
-            }
-        }
-    }
-
-    // Case 3: large drop or non-walkable surface — airborne
-    if (hit.hit) {
-        // Hit non-walkable surface — advance to contact but remain airborne
-        float safeT = (dist > kMinDist)
-            ? (std::max)(0.0f, hit.t - m_config.sweep.skin / dist)
-            : 0.0f;
-        m_currentPosition = m_currentPosition + downDelta * safeT;
-    } else {
-        m_currentPosition = m_currentPosition + downDelta;
-    }
+    // Case 3: no walkable ground found — full drop, airborne.
+    // With groundFilter, hit.hit==false means NO walkable surface in sweep range.
+    // Apply full downward displacement (gravity).
+    m_currentPosition = m_currentPosition + downDelta;
     m_state.onGround = false;
     m_debug.fullDrop = true;
 }
@@ -553,10 +558,11 @@ void KinematicCharacterController::Writeback(float dt)
 // =========================================================================
 
 sq::Hit KinematicCharacterController::SweepClosest(
-    const sq::Vec3& from, const sq::Vec3& delta) const
+    const sq::Vec3& from, const sq::Vec3& delta,
+    const sq::SweepFilter& filter) const
 {
     sq::SweepCapsuleInput in = MakeSweepInput(from, delta);
-    return m_world->SweepCapsuleClosest(in, m_config.sweep);
+    return m_world->SweepCapsuleClosest(in, m_config.sweep, Q_Solid, filter);
 }
 
 sq::SweepCapsuleInput KinematicCharacterController::MakeSweepInput(
@@ -582,13 +588,6 @@ void KinematicCharacterController::SlideAlongNormal(const sq::Vec3& hitNormal)
     if (proj < 0.0f) {
         m_targetPosition = m_targetPosition - hitNormal * proj;
     }
-}
-
-sq::Hit KinematicCharacterController::ProbeGround(
-    const sq::Vec3& from, float distance) const
-{
-    sq::Vec3 downDelta = m_config.up * (-distance);
-    return SweepClosest(from, downDelta);
 }
 
 bool KinematicCharacterController::IsWalkable(const sq::Vec3& nUnit) const

@@ -113,9 +113,14 @@ struct CctDebug {
     float    stepDownHitTOI      = 1.0f;
     sq::Vec3 stepDownHitNormal{};
     bool     stepDownWalkable    = false;
-    bool     seamRecovery       = false;  // StepDown: overlap fallback set grounded
     uint32_t skinWouldEatTOI    = 0;      // StepMove: cases where skin/dist >= hit.t
     float    postRecoverMag     = 0.0f;   // post-sweep cleanup displacement magnitude
+
+    // Sweep filter diagnostics
+    uint32_t stepUpFilterRejects   = 0;  // candidates rejected by ceiling filter
+    uint32_t stepMoveFilterRejects = 0;  // candidates rejected by approach filter
+    uint32_t stepDownFilterRejects = 0;  // candidates rejected by walkable filter
+    uint32_t onGroundToggles       = 0;  // 1 if onGround changed this tick, else 0
 
     // §3A velocity semantics evidence
     float    dxIntentMag     = 0.0f;   // |x_final - x_sweep| (sweep displacement)

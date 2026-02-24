@@ -75,7 +75,9 @@ private:
     // ---- Helpers ----
 
     // Sweep capsule from current position along delta. Returns hit.
-    sq::Hit SweepClosest(const sq::Vec3& from, const sq::Vec3& delta) const;
+    // filter: optional normal predicate (Bullet-equivalent per-stage filtering).
+    sq::Hit SweepClosest(const sq::Vec3& from, const sq::Vec3& delta,
+                         const sq::SweepFilter& filter = sq::SweepFilter{}) const;
 
     // Build SweepCapsuleInput from feet position and displacement.
     sq::SweepCapsuleInput MakeSweepInput(const sq::Vec3& posFeet,
@@ -83,9 +85,6 @@ private:
 
     // Slide displacement along a collision normal (perpendicular component).
     void SlideAlongNormal(const sq::Vec3& hitNormal);
-
-    // Ground probe: sweep downward, check walkable, return hit info.
-    sq::Hit ProbeGround(const sq::Vec3& from, float distance) const;
 
     bool IsWalkable(const sq::Vec3& nUnit) const;
 
