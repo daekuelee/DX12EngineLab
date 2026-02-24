@@ -170,6 +170,7 @@ void KinematicCharacterController::IntegrateVertical(const CctInput& input, floa
     if (input.jump && m_state.onGround) {
         m_state.verticalVelocity = m_config.jumpSpeed;
         m_state.onGround = false;
+        m_groundStickyTimer = 0.0f;
     }
 
     // Gravity ALWAYS applies (even grounded).
@@ -289,7 +290,6 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
 
     m_originalDirection = walkMove * (1.0f / walkLen);
     m_targetPosition = m_currentPosition + walkMove;
-    constexpr uint32_t maxZeroHitPushes = 8u;
 
     float fraction = 1.0f;
     int iters = 0;
@@ -333,7 +333,7 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
                 // bounded retry budget to avoid infinite loops.
                 m_debug.zeroHitPushes++;
                 m_currentPosition = m_currentPosition + hit.normal * m_config.addedMargin;
-                if (m_debug.zeroHitPushes >= maxZeroHitPushes) {
+                if (m_debug.zeroHitPushes >= m_config.maxZeroHitPushes) {
                     Recover();
                     m_debug.stuck = true;
                     break;
@@ -405,6 +405,7 @@ void KinematicCharacterController::StepDown(float dt)
     // Skip StepDown when ascending (vy > 0). No ground search needed.
     if (m_state.verticalVelocity > 0.0f) {
         m_state.onGround = false;
+        m_groundStickyTimer = 0.0f;
         m_debug.stepDownSkipped = true;
         return;
     }
@@ -426,6 +427,8 @@ void KinematicCharacterController::StepDown(float dt)
     groundFilter.refDir = m_config.up;
     groundFilter.minDot = m_maxSlopeCos;
     groundFilter.active = true;
+    sq::SweepFilter groundFilterInit = groundFilter;
+    groundFilterInit.filterInitialOverlap = true;
 
     sq::Vec3 downDelta = m_config.up * (-dropDist);
     float dist = sq::Len(downDelta);
@@ -444,6 +447,7 @@ void KinematicCharacterController::StepDown(float dt)
         m_state.verticalVelocity = 0.0f;
         m_state.verticalOffset   = 0.0f;
         m_state.wasJumping       = false;
+        m_groundStickyTimer = m_config.groundStickyTime;
         m_debug.stepDownHit = true;
         return true;
     };
@@ -461,7 +465,7 @@ void KinematicCharacterController::StepDown(float dt)
 
     // Case 1b: if primary misses due to initial-overlap starvation, retry with
     // rejectInitialOverlap=false to recover floor contact in thin-geometry cases.
-    sq::Hit hitNoReject = SweepClosest(m_currentPosition, downDelta, groundFilter, false);
+    sq::Hit hitNoReject = SweepClosest(m_currentPosition, downDelta, groundFilterInit, false);
     if (tryApplyGround(hitNoReject, downDelta, dist)) {
         return;
     }
@@ -482,7 +486,7 @@ void KinematicCharacterController::StepDown(float dt)
         // Case 2b: same stepHeight retry with t==0 overlaps allowed.
         // This handles the floor-contact lock where an exact overlap exists
         // at the stair edge but the filtered rejectInitialOverlap=true path misses.
-        sq::Hit extHitNoReject = SweepClosest(m_currentPosition, extDown, groundFilter, false);
+        sq::Hit extHitNoReject = SweepClosest(m_currentPosition, extDown, groundFilterInit, false);
         if (tryApplyGround(extHitNoReject, extDown, extDist)) {
             return;
         }
@@ -501,6 +505,7 @@ void KinematicCharacterController::StepDown(float dt)
             m_state.verticalVelocity = 0.0f;
             m_state.verticalOffset   = 0.0f;   // zero on landing/support hold
             m_state.wasJumping       = false;   // clear jump state on support
+            m_groundStickyTimer = m_config.groundStickyTime;
             return;
         }
     }
@@ -517,14 +522,29 @@ void KinematicCharacterController::StepDown(float dt)
             m_state.verticalVelocity = 0.0f;
             m_state.verticalOffset   = 0.0f;
             m_state.wasJumping       = false;
+            m_groundStickyTimer = m_config.groundStickyTime;
             return;
         }
+    }
+
+    // Short hysteresis for near-zero down sweeps:
+    // keep grounded briefly across tiny TOI misses to suppress floor flicker.
+    if (m_state.wasOnGround && m_groundStickyTimer > 0.0f &&
+        downVelocityDt <= (m_config.contactOffset + m_config.walkableNearZeroEps)) {
+        m_state.onGround = true;
+        m_state.groundNormal = m_config.up;
+        m_state.verticalVelocity = 0.0f;
+        m_state.verticalOffset   = 0.0f;
+        m_state.wasJumping       = false;
+        m_groundStickyTimer = (std::max)(0.0f, m_groundStickyTimer - dt);
+        return;
     }
 
     // Case 4: no walkable ground found — full drop, airborne.
     // With groundFilter, miss means NO walkable surface within downward sweep range.
     m_currentPosition = m_currentPosition + downDelta;
     m_state.onGround = false;
+    m_groundStickyTimer = 0.0f;
     m_debug.fullDrop = true;
 }
 
@@ -579,14 +599,14 @@ bool KinematicCharacterController::Recover()
         pushSum = contacts[0].normal * (contacts[0].depth - slop);
     }
 
-    // Direction: normalized accumulated push (or fallback deepest normal).
-    sq::Vec3 pushDir = sq::NormalizeSafe(pushSum, {0.0f, 1.0f, 0.0f});
-    // Apply fraction in direction only, then clamp by contactOffset.
-    sq::Vec3 push = pushDir * m_config.recoverAlpha;
-    float pushLen = sq::Len(push);
-    if (pushLen > m_config.contactOffset && pushLen > kMinDist) {
-        push = push * (m_config.contactOffset / pushLen);
-    }
+    // Depth-proportional recovery: alpha * |sum|, clamped by contactOffset.
+    float sumLen = sq::Len(pushSum);
+    if (sumLen < kMinDist) return false;
+    sq::Vec3 pushDir = pushSum * (1.0f / sumLen);
+    float pushMag = m_config.recoverAlpha * sumLen;
+    if (pushMag < kMinDist) pushMag = kMinDist;
+    if (pushMag > m_config.contactOffset) pushMag = m_config.contactOffset;
+    sq::Vec3 push = pushDir * pushMag;
 
     m_currentPosition = m_currentPosition + push;
 

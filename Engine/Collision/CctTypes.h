@@ -56,7 +56,10 @@ struct CctConfig {
     float maxPenDepth   = 0.005f;     // derived from contactOffset
     int   maxForwardIters = 10;       // StepForwardAndStrafe iteration limit
     int   maxRecoverIters = 8;        // Deepest-only: 1 contact per iter, budget for 3-cube corners
+    uint32_t maxZeroHitPushes = 8;    // StepMove near-zero retry budget
     float recoverAlpha    = 0.2f;     // Bullet: 0.2 (GS projection fraction per contact)
+    float walkableNearZeroEps = 1e-4f; // StepDown near-zero TOI threshold
+    float groundStickyTime = 0.03f;   // keep grounded briefly across tiny miss frames
     sq::SweepConfig sweep;            // skin, tieEpsT
 };
 

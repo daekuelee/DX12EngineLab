@@ -172,7 +172,8 @@ inline Hit SweepCapsuleClosestHit_Fast(
 
                 // Sweep filter: reject candidates by normal predicate
                 // (Bullet-equivalent: addSingleResult returning 1.0 to skip)
-                if (filter.active && (rejectInitialOverlap || t > 0.0f) &&
+                if (filter.active &&
+                    (rejectInitialOverlap || filter.filterInitialOverlap || t > 0.0f) &&
                     Dot(n, filter.refDir) < filter.minDot)
                     continue;
 

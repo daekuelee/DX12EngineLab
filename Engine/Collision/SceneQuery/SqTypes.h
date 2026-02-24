@@ -150,11 +150,14 @@ struct SweepConfig {
 //   StepDown: refDir = +up,  minDot = maxSlopeCos  (only walkable ground blocks)
 //
 // Default: active=false → no filtering → backward compatible.
+// filterInitialOverlap=true can be enabled for stages that must enforce the
+// predicate on t==0 overlap candidates.
 
 struct SweepFilter {
     Vec3  refDir{0, 1, 0};  // reference direction for dot test
     float minDot = -2.0f;   // minimum Dot(hitNormal, refDir) to accept
     bool  active = false;    // false = no filtering
+    bool  filterInitialOverlap = false; // true: apply filter even when t==0 and rejectInitialOverlap==false
 };
 
 static_assert(sizeof(AABB) == 24, "AABB must be 24 bytes POD");

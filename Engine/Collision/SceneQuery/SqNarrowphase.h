@@ -45,6 +45,7 @@ namespace Engine { namespace Collision { namespace sq {
 // ---- Epsilon constants for narrowphase ----------------------------------
 inline constexpr float kNpEpsAlign = 1e-6f;   // alignment tie-break tolerance
 inline constexpr float kNpColinearEps = 1e-4f; // capsule axis || motion threshold
+inline constexpr float kNpEpsParallel = 1e-8f; // narrowphase plane-motion parallel threshold
 
 // Feature priority class for tie-breaking:
 //   0=face, 1=edge, 2=vertex, 3=prism-side (lowest).
@@ -67,12 +68,21 @@ inline bool PassNarrowfilter(const SweepFilter* filter,
                             const Vec3& n)
 {
     if (!filter || !filter->active) return true;
-    // Keep initial-overlap (t==0) candidates from being filtered when
-    // the caller wants them (rejectInitialOverlap==false), matching query-level
-    // behavior and preventing the "filtered t==0 then early return" starvation.
-    if (!rejectInitialOverlap && t <= 0.0f)
+    // Keep initial-overlap (t==0) candidates from being filtered when the
+    // caller wants them (rejectInitialOverlap==false), unless the stage
+    // explicitly requires filtering on initial overlap.
+    if (!rejectInitialOverlap && !filter->filterInitialOverlap && t <= 0.0f)
         return true;
     return Dot(n, filter->refDir) >= filter->minDot;
+}
+
+// Initial-overlap normal policy (PhysX-style):
+// prefer -dir to avoid closest-pair normal jitter around t~=0.
+inline Vec3 InitialOverlapNormal(const Vec3& delta, const Vec3& fallback)
+{
+    if (LenSq(delta) > kEpsSq)
+        return NormalizeSafe(delta * -1.0f, fallback);
+    return NormalizeSafe(fallback, {0, 1, 0});
 }
 
 // =========================================================================
@@ -158,9 +168,7 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
     uint32_t initFeat = 0xFFFFFFFFu;
     if (!rejectInitialOverlap &&
         DistPointTriangleSq(c0, tri, &q0, &initFeat) <= r*r) {
-        Vec3 fallback = NormalizeSafe(delta * -1.0f, {0,1,0});
-        Vec3 n0 = NormalizeSafe(c0 - q0, fallback);
-        if (Dot(n0, delta) > 0.0f) n0 = n0 * -1.0f;
+        Vec3 n0 = InitialOverlapNormal(delta, c0 - q0);
         consider(0.0f, n0, initFeat);
     }
 
@@ -174,7 +182,7 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
         float dist0 = Dot(n, c0 - tri.p0);
         float distV = Dot(n, delta);
 
-        if (Abs(distV) > kEpsParallel) {
+        if (Abs(distV) > kNpEpsParallel) {
             auto tryPlane = [&](float targetDist, uint32_t fId) {
                 float t = (targetDist - dist0) / distV;
                 if (t < 0.0f || t > 1.0f) return;
@@ -366,9 +374,7 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
     if (!rejectInitialOverlap &&
         DistSegmentTriangleSq(in.segA0, in.segB0, srcTri,
                              &qSeg, &qTri, &initFeat) <= r*r) {
-        Vec3 fallback = NormalizeSafe(in.delta * -1.0f, {0,1,0});
-        Vec3 n0 = NormalizeSafe(qSeg - qTri, fallback);
-        if (Dot(n0, in.delta) > 0.0f) n0 = n0 * -1.0f;
+        Vec3 n0 = InitialOverlapNormal(in.delta, qSeg - qTri);
         consider(0.0f, n0, initFeat);
     }
 
@@ -378,10 +384,9 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
         float t;
         Vec3 n;
         uint32_t f;
-        if (!SweepSphereTri_TOI01(c0, r, in.delta, srcTri, cfg.twoSidedTris,
+        if (SweepSphereTri_TOI01(c0, r, in.delta, srcTri, cfg.twoSidedTris,
                                  t, n, f, filter, rejectInitialOverlap, cfg.tieEpsT))
-            return false;
-        consider(t, n, f);
+            consider(t, n, f);
         if (!std::isfinite(bestT)) return false;
         outT = bestT;
         outN = bestN;
@@ -398,10 +403,9 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
         float t;
         Vec3 n;
         uint32_t f;
-        if (!SweepSphereTri_TOI01(frontCenter, r, in.delta, srcTri, cfg.twoSidedTris,
+        if (SweepSphereTri_TOI01(frontCenter, r, in.delta, srcTri, cfg.twoSidedTris,
                                  t, n, f, filter, rejectInitialOverlap, cfg.tieEpsT))
-            return false;
-        consider(t, n, f);
+            consider(t, n, f);
         if (!std::isfinite(bestT)) return false;
         outT = bestT;
         outN = bestN;
@@ -553,9 +557,7 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
             }
         }
         if (bestD2 <= r*r) {
-            Vec3 fallback = NormalizeSafe(in.delta * -1.0f, {0,1,0});
-            Vec3 overlapN = NormalizeSafe(bestSeg - bestTri, fallback);
-            if (Dot(overlapN, in.delta) > 0.0f) overlapN = overlapN * -1.0f;
+            Vec3 overlapN = InitialOverlapNormal(in.delta, bestSeg - bestTri);
             consider(0.0f, overlapN, bestFeat);
         }
     }
