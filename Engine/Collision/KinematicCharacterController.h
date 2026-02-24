@@ -77,7 +77,8 @@ private:
     // Sweep capsule from current position along delta. Returns hit.
     // filter: optional normal predicate (Bullet-equivalent per-stage filtering).
     sq::Hit SweepClosest(const sq::Vec3& from, const sq::Vec3& delta,
-                         const sq::SweepFilter& filter = sq::SweepFilter{}) const;
+                         const sq::SweepFilter& filter = sq::SweepFilter{},
+                         bool rejectInitialOverlap = false) const;
 
     // Build SweepCapsuleInput from feet position and displacement.
     sq::SweepCapsuleInput MakeSweepInput(const sq::Vec3& posFeet,

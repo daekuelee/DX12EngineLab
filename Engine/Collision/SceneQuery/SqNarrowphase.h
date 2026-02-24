@@ -13,7 +13,7 @@
 // POLICY:
 //   - Epsilon values come from SweepConfig (skin, tieEpsT) or SqMath.h constants.
 //   - No ad-hoc float literals except documented numerical guards.
-//   - Tie-break cascade: t -> alignment -> featureId (within narrowphase).
+//   - Tie-break cascade: t -> feature class -> alignment -> featureId (within narrowphase).
 //   - All functions are pure. No side effects, no mutable statics.
 //
 // CONTRACT:
@@ -46,6 +46,30 @@ namespace Engine { namespace Collision { namespace sq {
 inline constexpr float kNpEpsAlign = 1e-6f;   // alignment tie-break tolerance
 inline constexpr float kNpColinearEps = 1e-4f; // capsule axis || motion threshold
 
+// Feature priority class for tie-breaking:
+//   0=face, 1=edge, 2=vertex, 3=prism-side (lowest).
+inline int FeatureClassFromPacked(uint32_t packedFeature)
+{
+    const uint32_t triFeat = packedFeature & 0xFFu;
+    const uint32_t prismFace = (packedFeature >> 8) & 0xFFu;
+    if (packedFeature == 0xFFFFFFFFu) return 3;
+    if (prismFace > 0) return 3;
+    if (triFeat == 0) return 0;
+    if (triFeat <= 3) return 1;
+    return 2;
+}
+
+// Filter acceptance policy used by narrowphase:
+//   - apply Dot(normal, refDir) >= minDot when filter is active.
+inline bool PassNarrowfilter(const SweepFilter* filter,
+                            bool /*rejectInitialOverlap*/,
+                            float /*t*/,
+                            const Vec3& n)
+{
+    if (!filter || !filter->active) return true;
+    return Dot(n, filter->refDir) >= filter->minDot;
+}
+
 // =========================================================================
 // Sphere vs Triangle TOI (7 features: face + 3 edges + 3 vertices)
 // =========================================================================
@@ -56,66 +80,87 @@ inline constexpr float kNpColinearEps = 1e-4f; // capsule axis || motion thresho
 // Feature encoding:
 //   0 = face (plane hit), 1-3 = edge cylinders, 4-6 = vertex spheres
 //
-// Tie-break: smallest t; within tieEpsT: largest alignment; then smallest feature ID.
+// Tie-break: smallest t; within tieEpsT: feature class -> alignment -> feature ID.
+// Feature class: face(0) < edge(1) < vertex(2) < prism-side(3).
 inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
                                  const Triangle& tri, bool twoSided,
-                                 float& outT, Vec3& outN, uint32_t& outF)
+                                 float& outT, Vec3& outN, uint32_t& outF,
+                                 const SweepFilter* filter = nullptr,
+                                 bool rejectInitialOverlap = false,
+                                 float tieEpsT = kNpEpsAlign)
 {
-    const float epsT = kNpEpsAlign;
-
     Vec3 p1 = c0 + delta;
 
-    // Initial overlap: true sphere-triangle distance
-    Vec3 q0;
-    if (DistPointTriangleSq(c0, tri, &q0) <= r*r) {
-        outT = 0.0f;
-        Vec3 fallback = NormalizeSafe(delta * -1.0f, {0,1,0});
-        outN = NormalizeSafe(c0 - q0, fallback);
-        outF = 0;
-        if (Dot(outN, delta) > 0.0f) outN = outN * -1.0f;
-        return true;
-    }
+    float bestT = std::numeric_limits<float>::infinity();
+    float bestAlign = -std::numeric_limits<float>::infinity();
+    int bestClass = 4;
+    Vec3 bestN{0, 1, 0};
+    uint32_t bestF = 0;
 
     // Degenerate triangle detection
     Vec3 nd = Cross(tri.p1 - tri.p0, tri.p2 - tri.p0);
     float nd2 = LenSq(nd);
     bool degenerate = (nd2 <= kEpsSq);
-    Vec3 n = degenerate ? Vec3{0,1,0} : NormalizeSafe(nd, {0,1,0});
-
-    // One-sided: cull whole triangle if backfacing motion
-    if (!twoSided) {
-        if (LenSq(delta) > kEpsSq && Dot(n, delta) > 0.0f) return false;
-    }
+    Vec3 n = degenerate ? Vec3{0, 1, 0} : NormalizeSafe(nd, {0,1,0});
 
     Vec3 dirU = NormalizeSafe(delta, {0,1,0});
-
-    float bestT = std::numeric_limits<float>::infinity();
-    float bestAlign = -std::numeric_limits<float>::infinity();
-    Vec3  bestN{0,1,0};
-    uint32_t bestF = 0;
 
     auto consider = [&](float tCand, const Vec3& nCand, uint32_t fCand) {
         if (tCand < 0.0f || tCand > 1.0f) return;
 
         Vec3 nn = NormalizeSafe(nCand, n);
-        float align = -Dot(nn, dirU);
+        if (!PassNarrowfilter(filter, rejectInitialOverlap, tCand, nn)) return;
 
-        if (tCand < bestT - epsT) {
-            bestT = tCand; bestN = nn; bestF = fCand; bestAlign = align;
+        float align = -Dot(nn, dirU);
+        int cls = FeatureClassFromPacked(fCand);
+
+        if (tCand < bestT - tieEpsT) {
+            bestT = tCand;
+            bestN = nn;
+            bestF = fCand;
+            bestClass = cls;
+            bestAlign = align;
             return;
         }
 
-        if (Abs(tCand - bestT) <= epsT) {
+        if (Abs(tCand - bestT) <= tieEpsT) {
+            if (cls < bestClass) {
+                bestT = tCand;
+                bestN = nn;
+                bestF = fCand;
+                bestClass = cls;
+                bestAlign = align;
+                return;
+            }
             if (align > bestAlign + kNpEpsAlign) {
-                bestT = tCand; bestN = nn; bestF = fCand; bestAlign = align;
+                bestT = tCand;
+                bestN = nn;
+                bestF = fCand;
+                bestAlign = align;
                 return;
             }
             if (Abs(align - bestAlign) <= kNpEpsAlign && fCand < bestF) {
-                bestT = tCand; bestN = nn; bestF = fCand; bestAlign = align;
-                return;
+                bestT = tCand;
+                bestN = nn;
+                bestF = fCand;
+                bestAlign = align;
             }
         }
     };
+
+    // Initial overlap: true sphere-triangle distance
+    Vec3 q0;
+    if (!rejectInitialOverlap && DistPointTriangleSq(c0, tri, &q0) <= r*r) {
+        Vec3 fallback = NormalizeSafe(delta * -1.0f, {0,1,0});
+        Vec3 n0 = NormalizeSafe(c0 - q0, fallback);
+        if (Dot(n0, delta) > 0.0f) n0 = n0 * -1.0f;
+        consider(0.0f, n0, 0xFFFFFFFFu);
+    }
+
+    // One-sided: cull whole triangle if backfacing motion
+    if (!twoSided) {
+        if (LenSq(delta) > kEpsSq && Dot(n, delta) > 0.0f) return false;
+    }
 
     // 1) Face candidate (plane intersection)
     if (!degenerate) {
@@ -186,7 +231,7 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
     outN = bestN;
     outF = bestF;
 
-    // Normal opposed to motion
+    // Normal opposed to motion.
     if (Dot(outN, delta) > 0.0f) outN = outN * -1.0f;
 
     return true;
@@ -249,73 +294,131 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
     const SweepConfig& cfg,
     float& outT,
     Vec3& outN,
-    uint32_t& outFeat)
+    uint32_t& outFeat,
+    bool rejectInitialOverlap,
+    const SweepFilter* filter = nullptr)
 {
     const float r = in.radius + cfg.skin;
 
     if (LenSq(in.delta) <= kEpsSq) return false;
 
-    // Midpoint and half-segment
     Vec3 c0 = (in.segA0 + in.segB0) * 0.5f;
     Vec3 a  = (in.segA0 - in.segB0) * 0.5f;
+    Vec3 dirU = NormalizeSafe(in.delta, {0,1,0});
 
-    // Initial overlap: capsule segment vs triangle
     Vec3 qSeg, qTri;
-    if (DistSegmentTriangleSq(in.segA0, in.segB0, srcTri, &qSeg, &qTri) <= r*r) {
-        outT = 0.0f;
+    float bestT = std::numeric_limits<float>::infinity();
+    float bestAlign = -std::numeric_limits<float>::infinity();
+    int bestClass = 4;
+    Vec3 bestN{0,1,0};
+    uint32_t bestF = 0;
+
+    auto consider = [&](float tCand, const Vec3& nCand, uint32_t fCand) {
+        if (tCand < 0.0f || tCand > 1.0f) return;
+
+        Vec3 nn = NormalizeSafe(nCand, {0,1,0});
+        if (!PassNarrowfilter(filter, rejectInitialOverlap, tCand, nn)) return;
+
+        float align = -Dot(nn, dirU);
+        int cls = FeatureClassFromPacked(fCand);
+
+        if (tCand < bestT - cfg.tieEpsT) {
+            bestT = tCand;
+            bestN = nn;
+            bestF = fCand;
+            bestClass = cls;
+            bestAlign = align;
+            return;
+        }
+        if (Abs(tCand - bestT) <= cfg.tieEpsT) {
+            if (cls < bestClass) {
+                bestT = tCand;
+                bestN = nn;
+                bestF = fCand;
+                bestClass = cls;
+                bestAlign = align;
+                return;
+            }
+            if (align > bestAlign + kNpEpsAlign) {
+                bestT = tCand;
+                bestN = nn;
+                bestF = fCand;
+                bestAlign = align;
+                return;
+            }
+            if (Abs(align - bestAlign) <= kNpEpsAlign && fCand < bestF) {
+                bestT = tCand;
+                bestN = nn;
+                bestF = fCand;
+                bestAlign = align;
+            }
+        }
+    };
+
+    if (!rejectInitialOverlap &&
+        DistSegmentTriangleSq(in.segA0, in.segB0, srcTri, &qSeg, &qTri) <= r*r) {
         Vec3 fallback = NormalizeSafe(in.delta * -1.0f, {0,1,0});
-        outN = NormalizeSafe(qSeg - qTri, fallback);
-        outFeat = 0xFFFFFFFFu;
-        if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
-        return true;
+        Vec3 n0 = NormalizeSafe(qSeg - qTri, fallback);
+        if (Dot(n0, in.delta) > 0.0f) n0 = n0 * -1.0f;
+        consider(0.0f, n0, 0xFFFFFFFFu);
     }
 
     // Degenerate capsule -> sphere
     float a2 = LenSq(a);
     if (a2 <= kEpsSq) {
-        return SweepSphereTri_TOI01(c0, r, in.delta, srcTri, cfg.twoSidedTris,
-                                    outT, outN, outFeat);
+        float t;
+        Vec3 n;
+        uint32_t f;
+        if (!SweepSphereTri_TOI01(c0, r, in.delta, srcTri, cfg.twoSidedTris,
+                                 t, n, f, filter, rejectInitialOverlap, cfg.tieEpsT))
+            return false;
+        consider(t, n, f);
+        if (!std::isfinite(bestT)) return false;
+        outT = bestT;
+        outN = bestN;
+        outFeat = bestF;
+        if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
+        return true;
     }
 
     // Colinear shortcut: capsule axis || motion direction
-    Vec3 dirU = NormalizeSafe(in.delta, {0,1,0});
     float halfHeight = std::sqrt(a2);
     Vec3 axisU = a * (1.0f / halfHeight);
     if (Abs(Dot(axisU, dirU)) > 1.0f - kNpColinearEps) {
         Vec3 frontCenter = c0 + dirU * halfHeight;
-        return SweepSphereTri_TOI01(frontCenter, r, in.delta, srcTri,
-                                    cfg.twoSidedTris, outT, outN, outFeat);
+        float t;
+        Vec3 n;
+        uint32_t f;
+        if (!SweepSphereTri_TOI01(frontCenter, r, in.delta, srcTri, cfg.twoSidedTris,
+                                 t, n, f, filter, rejectInitialOverlap, cfg.tieEpsT))
+            return false;
+        consider(t, n, f);
+        if (!std::isfinite(bestT)) return false;
+        outT = bestT;
+        outN = bestN;
+        outFeat = bestF;
+        if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
+        return true;
     }
 
     // Extrude triangle and sweep sphere center vs prism faces
     Triangle faces[7];
     uint32_t faceCount = BuildExtrudedFaces7(srcTri, a, faces);
-
-    float bestT = std::numeric_limits<float>::infinity();
-    Vec3  bestN = {0,1,0};
-    uint32_t bestF = 0;
-
     for (uint32_t i = 0; i < faceCount; ++i) {
-        float t; Vec3 n; uint32_t f;
-        // Artificial faces: always two-sided
-        if (!SweepSphereTri_TOI01(c0, r, in.delta, faces[i], true, t, n, f))
+        float t;
+        Vec3 n;
+        uint32_t f;
+        if (!SweepSphereTri_TOI01(c0, r, in.delta, faces[i], true, t, n, f,
+                                 filter, rejectInitialOverlap, cfg.tieEpsT))
             continue;
-
-        uint32_t feat = (i << 8) | (f & 0xFF);
-
-        if (!std::isfinite(bestT) || (t < bestT) ||
-            (Abs(t - bestT) < cfg.tieEpsT && feat < bestF))
-        {
-            bestT = t;
-            bestN = n;
-            bestF = feat;
-        }
+        consider(t, n, (i << 8) | (f & 0xFFu));
     }
 
     if (!std::isfinite(bestT)) return false;
     outT = bestT;
     outN = bestN;
     outFeat = bestF;
+    if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
     return true;
 }
 
@@ -383,7 +486,9 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
     const SweepCapsuleInput& in,
     const Triangle boxSurfaceTris[12],
     const SweepConfig& cfg,
-    float& outT, Vec3& outN, uint32_t& outFeat)
+    float& outT, Vec3& outN, uint32_t& outFeat,
+    bool rejectInitialOverlap,
+    const SweepFilter* filter = nullptr)
 {
     const float r = in.radius + cfg.skin;
     if (LenSq(in.delta) <= kEpsSq) return false;
@@ -391,8 +496,38 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
     Vec3 c0 = (in.segA0 + in.segB0) * 0.5f;
     Vec3 a  = (in.segA0 - in.segB0) * 0.5f;
 
+    Vec3 dirU = NormalizeSafe(in.delta, {0,1,0});
+    float bestT = std::numeric_limits<float>::infinity();
+    float bestAlign = -std::numeric_limits<float>::infinity();
+    int bestClass = 4;
+    Vec3  bestN{0,1,0};
+    uint32_t bestF = 0;
+
+    auto consider = [&](float t, const Vec3& n, uint32_t feat) {
+        if (t < 0.0f || t > 1.0f) return;
+        Vec3 nn = NormalizeSafe(n, {0,1,0});
+        if (!PassNarrowfilter(filter, rejectInitialOverlap, t, nn)) return;
+        float align = -Dot(nn, dirU);
+        int cls = FeatureClassFromPacked(feat);
+
+        if (t < bestT - cfg.tieEpsT) {
+            bestT = t; bestN = nn; bestF = feat; bestClass = cls; bestAlign = align; return;
+        }
+        if (Abs(t - bestT) <= cfg.tieEpsT) {
+            if (cls < bestClass) {
+                bestT = t; bestN = nn; bestF = feat; bestClass = cls; bestAlign = align; return;
+            }
+            if (align > bestAlign + kNpEpsAlign) {
+                bestT = t; bestN = nn; bestF = feat; bestAlign = align; return;
+            }
+            if (Abs(align - bestAlign) <= kNpEpsAlign && feat < bestF) {
+                bestT = t; bestN = nn; bestF = feat; bestAlign = align;
+            }
+        }
+    };
+
     // Initial overlap: capsule segment vs box surface (12 tris)
-    {
+    if (!rejectInitialOverlap) {
         float bestD2 = std::numeric_limits<float>::infinity();
         Vec3 bestSeg{}, bestTri{};
         for (uint32_t i = 0; i < 12; ++i) {
@@ -402,45 +537,21 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
             if (d2 < bestD2) { bestD2 = d2; bestSeg = qSeg; bestTri = qTri; }
         }
         if (bestD2 <= r*r) {
-            outT = 0.0f;
             Vec3 fallback = NormalizeSafe(in.delta * -1.0f, {0,1,0});
-            outN = NormalizeSafe(bestSeg - bestTri, fallback);
-            if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
-            outFeat = 0xFFFFFFFFu;
-            return true;
+            Vec3 overlapN = NormalizeSafe(bestSeg - bestTri, fallback);
+            if (Dot(overlapN, in.delta) > 0.0f) overlapN = overlapN * -1.0f;
+            consider(0.0f, overlapN, 0xFFFFFFFFu);
         }
     }
 
     // Degenerate capsule -> sphere vs box
     const float a2 = LenSq(a);
     if (a2 <= kEpsSq) {
-        float bestT = std::numeric_limits<float>::infinity();
-        float bestAlign = -std::numeric_limits<float>::infinity();
-        uint32_t bestF = 0;
-        Vec3 bestN{0,1,0};
-        Vec3 dirU = NormalizeSafe(in.delta, {0,1,0});
-
-        auto consider = [&](float t, const Vec3& n, uint32_t feat) {
-            const float epsA = kNpEpsAlign;
-            Vec3 nn = NormalizeSafe(n, {0,1,0});
-            float align = -Dot(nn, dirU);
-            if (t < bestT - cfg.tieEpsT) {
-                bestT=t; bestN=nn; bestF=feat; bestAlign=align; return;
-            }
-            if (Abs(t-bestT) <= cfg.tieEpsT) {
-                if (align > bestAlign + epsA) {
-                    bestT=t; bestN=nn; bestF=feat; bestAlign=align; return;
-                }
-                if (Abs(align-bestAlign) <= epsA && feat < bestF) {
-                    bestT=t; bestN=nn; bestF=feat; bestAlign=align;
-                }
-            }
-        };
-
         for (uint32_t i = 0; i < 12; ++i) {
             float t; Vec3 n; uint32_t f;
             if (!SweepSphereTri_TOI01(c0, r, in.delta, boxSurfaceTris[i],
-                                       true, t, n, f))
+                                       true, t, n, f, filter,
+                                       rejectInitialOverlap, cfg.tieEpsT))
                 continue;
             consider(t, n, (i << 8) | (f & 0xFF));
         }
@@ -452,49 +563,25 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
     }
 
     // Main path: extrude each face tri by capsule half-segment and sphere-sweep
-    float bestT = std::numeric_limits<float>::infinity();
-    float bestAlign = -std::numeric_limits<float>::infinity();
-    Vec3  bestN{0,1,0};
-    uint32_t bestF = 0;
+        for (uint32_t triId = 0; triId < 12; ++triId) {
+            Triangle faces[7];
+            uint32_t faceCount = BuildExtrudedFaces7(boxSurfaceTris[triId], a, faces);
 
-    Vec3 dirU = NormalizeSafe(in.delta, {0,1,0});
-
-    auto consider = [&](float t, const Vec3& n, uint32_t feat) {
-        const float epsA = kNpEpsAlign;
-        Vec3 nn = NormalizeSafe(n, {0,1,0});
-        float align = -Dot(nn, dirU);
-        if (t < bestT - cfg.tieEpsT) {
-            bestT=t; bestN=nn; bestF=feat; bestAlign=align; return;
-        }
-        if (Abs(t-bestT) <= cfg.tieEpsT) {
-            if (align > bestAlign + epsA) {
-                bestT=t; bestN=nn; bestF=feat; bestAlign=align; return;
-            }
-            if (Abs(align-bestAlign) <= epsA && feat < bestF) {
-                bestT=t; bestN=nn; bestF=feat; bestAlign=align;
+            for (uint32_t prismFace = 0; prismFace < faceCount; ++prismFace) {
+                float t; Vec3 n; uint32_t f;
+                if (!SweepSphereTri_TOI01(c0, r, in.delta, faces[prismFace],
+                                       true, t, n, f, filter,
+                                       rejectInitialOverlap, cfg.tieEpsT))
+                    continue;
+                uint32_t feat = (triId << 16) | (prismFace << 8) | (f & 0xFF);
+                consider(t, n, feat);
             }
         }
-    };
-
-    for (uint32_t triId = 0; triId < 12; ++triId) {
-        Triangle faces[7];
-        uint32_t faceCount = BuildExtrudedFaces7(boxSurfaceTris[triId], a, faces);
-
-        for (uint32_t prismFace = 0; prismFace < faceCount; ++prismFace) {
-            float t; Vec3 n; uint32_t f;
-            if (!SweepSphereTri_TOI01(c0, r, in.delta, faces[prismFace],
-                                       true, t, n, f))
-                continue;
-            uint32_t feat = (triId << 16) | (prismFace << 8) | (f & 0xFF);
-            consider(t, n, feat);
-        }
-    }
 
     if (!std::isfinite(bestT)) return false;
     outT = bestT;
     outN = bestN;
     outFeat = bestF;
-    if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
     return true;
 }
 
@@ -502,22 +589,28 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
 
 inline bool SweepCapsuleAabb_PhysXLike_TOI01(
     const SweepCapsuleInput& in, const AABB& box, const SweepConfig& cfg,
-    float& outT, Vec3& outN, uint32_t& outFeat)
+    float& outT, Vec3& outN, uint32_t& outFeat,
+    bool rejectInitialOverlap = false,
+    const SweepFilter* filter = nullptr)
 {
     Vec3 p[8]; Triangle tris[12];
     BuildAabbPoints8(box, p);
     BuildBoxSurfaceTris12(p, tris);
-    return SweepCapsuleBox_TrisExtruded_TOI01(in, tris, cfg, outT, outN, outFeat);
+    return SweepCapsuleBox_TrisExtruded_TOI01(in, tris, cfg, outT, outN, outFeat,
+                                              rejectInitialOverlap, filter);
 }
 
 inline bool SweepCapsuleObb_PhysXLike_TOI01(
     const SweepCapsuleInput& in, const OBB& box, const SweepConfig& cfg,
-    float& outT, Vec3& outN, uint32_t& outFeat)
+    float& outT, Vec3& outN, uint32_t& outFeat,
+    bool rejectInitialOverlap = false,
+    const SweepFilter* filter = nullptr)
 {
     Vec3 p[8]; Triangle tris[12];
     BuildObbPoints8(box, p);
     BuildBoxSurfaceTris12(p, tris);
-    return SweepCapsuleBox_TrisExtruded_TOI01(in, tris, cfg, outT, outN, outFeat);
+    return SweepCapsuleBox_TrisExtruded_TOI01(in, tris, cfg, outT, outN, outFeat,
+                                              rejectInitialOverlap, filter);
 }
 
 // =========================================================================

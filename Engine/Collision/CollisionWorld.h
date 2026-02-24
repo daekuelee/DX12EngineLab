@@ -81,7 +81,8 @@ public:
     sq::Hit SweepCapsuleClosest(const sq::SweepCapsuleInput& in,
                                 const sq::SweepConfig& cfg,
                                 QueryMask queryMask = Q_Solid,
-                                const sq::SweepFilter& filter = sq::SweepFilter{}) const;
+                                const sq::SweepFilter& filter = sq::SweepFilter{},
+                                bool rejectInitialOverlap = false) const;
 
     // Overlap capsule at a position. Returns count of overlapping colliders.
     // outIds receives up to maxIds collider indices (sorted by index for determinism).

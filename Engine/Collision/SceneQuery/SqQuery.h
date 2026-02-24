@@ -74,20 +74,25 @@ inline bool SweepCapsulePrim_TOI01(
     const SweepCapsuleInput& in,
     const SweepConfig& cfg,
     const PrimRef& pref,
+    bool rejectInitialOverlap,
+    const SweepFilter* filter,
     float& outT, Vec3& outN, uint32_t& outFeat)
 {
     switch (pref.type) {
         case PrimType::Tri:
             return SweepCapsuleTri_PhysXLike_TOI01(
-                in, bvh.tris[pref.index], cfg, outT, outN, outFeat);
+                in, bvh.tris[pref.index], cfg, outT, outN, outFeat,
+                rejectInitialOverlap, filter);
 
         case PrimType::Aabb:
             return SweepCapsuleAabb_PhysXLike_TOI01(
-                in, bvh.aabbs[pref.index], cfg, outT, outN, outFeat);
+                in, bvh.aabbs[pref.index], cfg, outT, outN, outFeat,
+                rejectInitialOverlap, filter);
 
         case PrimType::Obb:
             return SweepCapsuleObb_PhysXLike_TOI01(
-                in, bvh.obbs[pref.index], cfg, outT, outN, outFeat);
+                in, bvh.obbs[pref.index], cfg, outT, outN, outFeat,
+                rejectInitialOverlap, filter);
 
         default:
             return false;
@@ -113,7 +118,8 @@ inline Hit SweepCapsuleClosestHit_Fast(
     const SweepCapsuleInput& in,
     const SweepConfig& cfg,
     QueryScratch& scratch,
-    const SweepFilter& filter = SweepFilter{})
+    const SweepFilter& filter = SweepFilter{},
+    bool rejectInitialOverlap = false)
 {
     Hit best{};
     best.hit = false;
@@ -153,12 +159,16 @@ inline Hit SweepCapsuleClosestHit_Fast(
                 if (lo >= best.t || lo > hi) continue;
 
                 float t; Vec3 n; uint32_t f;
-                if (!SweepCapsulePrim_TOI01(bvh, in, cfg, pref, t, n, f))
+                if (!SweepCapsulePrim_TOI01(bvh, in, cfg, pref,
+                                           rejectInitialOverlap,
+                                           filter.active ? &filter : nullptr,
+                                           t, n, f))
                     continue;
 
                 // Sweep filter: reject candidates by normal predicate
                 // (Bullet-equivalent: addSingleResult returning 1.0 to skip)
-                if (filter.active && Dot(n, filter.refDir) < filter.minDot)
+                if (filter.active && (rejectInitialOverlap || t > 0.0f) &&
+                    Dot(n, filter.refDir) < filter.minDot)
                     continue;
 
                 if (t < lo || t > hi) continue;

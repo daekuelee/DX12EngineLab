@@ -231,7 +231,7 @@ void KinematicCharacterController::StepUp()
     ceilFilter.minDot = m_maxSlopeCos;
     ceilFilter.active = true;
 
-    sq::Hit hit = SweepClosest(m_currentPosition, upDelta, ceilFilter);
+    sq::Hit hit = SweepClosest(m_currentPosition, upDelta, ceilFilter, true);
 
     if (hit.hit) {
         // Advance with skin backoff to avoid sitting at exact contact
@@ -289,6 +289,7 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
 
     m_originalDirection = walkMove * (1.0f / walkLen);
     m_targetPosition = m_currentPosition + walkMove;
+    constexpr uint32_t maxZeroHitPushes = 8u;
 
     float fraction = 1.0f;
     int iters = 0;
@@ -308,7 +309,7 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
         approachFilter.minDot = 1e-4f;
         approachFilter.active = true;
 
-        sq::Hit hit = SweepClosest(m_currentPosition, remaining, approachFilter);
+        sq::Hit hit = SweepClosest(m_currentPosition, remaining, approachFilter, false);
 
         // Fraction budget (ex4.cpp line 431)
         fraction -= hit.hit ? hit.t : 1.0f;
@@ -322,11 +323,18 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
 #endif
 
         if (hit.hit) {
-            if (hit.t <= 0.0f) {
-                // t=0: initial overlap — push out and retry
-                m_currentPosition = m_currentPosition + hit.normal * m_config.addedMargin;
-                m_targetPosition  = m_targetPosition  + hit.normal * m_config.addedMargin;
+            float tSkin = m_config.sweep.skin / (std::max)(remainLen, kMinDist);
+            if (tSkin > 1.0f) tSkin = 1.0f;
+
+            if (hit.t <= (tSkin + m_config.sweep.tieEpsT)) {
+                // near-zero / skin-dominated hit: push current only, keep target untouched
                 m_debug.zeroHitPushes++;
+                m_currentPosition = m_currentPosition + hit.normal * m_config.addedMargin;
+                if (m_debug.zeroHitPushes >= maxZeroHitPushes) {
+                    Recover();
+                    m_debug.stuck = true;
+                    break;
+                }
                 continue;
             }
 
@@ -421,7 +429,7 @@ void KinematicCharacterController::StepDown(float dt)
 
     m_debug.stepDownDropDist = dropDist;
 
-    sq::Hit hit = SweepClosest(m_currentPosition, downDelta, groundFilter);
+    sq::Hit hit = SweepClosest(m_currentPosition, downDelta, groundFilter, true);
 
     m_debug.stepDownHitTOI    = hit.hit ? hit.t : 1.0f;
     m_debug.stepDownHitNormal = hit.hit ? hit.normal : sq::Vec3{0, 1, 0};
@@ -451,7 +459,7 @@ void KinematicCharacterController::StepDown(float dt)
         sq::Vec3 extDown = m_config.up * (-extendedDrop);
         float extDist = sq::Len(extDown);
 
-        sq::Hit extHit = SweepClosest(m_currentPosition, extDown, groundFilter);
+        sq::Hit extHit = SweepClosest(m_currentPosition, extDown, groundFilter, true);
         if (extHit.hit && IsWalkable(extHit.normal)) {
             float safeT = (extDist > kMinDist)
                 ? (std::max)(0.0f, extHit.t - m_config.sweep.skin / extDist)
@@ -484,7 +492,8 @@ void KinematicCharacterController::StepDown(float dt)
 // ALGORITHM (Bullet single-pass architecture):
 //   overlaps = OverlapCapsuleContacts(capsuleSegA, capsuleSegB, radius)
 //   if none: return false
-//   for each overlap with depth > slop: push m_currentPosition outward by (depth-slop)*alpha
+//   sum normals for all overlaps with depth > slop, fallback to deepest if sum collapses,
+//   apply alpha, clamp by contactOffset, then push once.
 //   return true if any push applied
 //   Outer while-loop in Tick() calls this repeatedly (up to maxRecoverIters).
 //
@@ -505,20 +514,37 @@ bool KinematicCharacterController::Recover()
 
     if (count == 0) return false;
 
-    // Deepest-only: contacts[0] is deepest (sorted by -depth, type, index, featureId)
-    const float depth = contacts[0].depth;
-    const float slop  = m_config.maxPenDepth;
-    if (depth <= slop) return false;
+    const float slop = m_config.maxPenDepth;
 
-    float push = (depth - slop) * m_config.recoverAlpha;
+    // Sum over-penetration correction vectors.
+    sq::Vec3 pushSum{0, 0, 0};
+    bool anyContactOverSlop = false;
+    for (uint32_t i = 0; i < count; ++i) {
+        float pen = contacts[i].depth - slop;
+        if (pen > 0.0f) {
+            anyContactOverSlop = true;
+            pushSum = pushSum + contacts[i].normal * pen;
+        }
+    }
 
-    // Clamp push to contactOffset per iteration (SSOT-derived, prevents teleport corrections)
-    push = (std::min)(push, m_config.contactOffset);
+    if (!anyContactOverSlop) return false;
 
-    m_currentPosition = m_currentPosition + contacts[0].normal * push;
+    // If accumulated direction is degenerate, fallback deterministically to deepest contact.
+    if (sq::LenSq(pushSum) < kMinDist * kMinDist) {
+        pushSum = contacts[0].normal * (contacts[0].depth - slop);
+    }
+
+    // Apply recovery fraction, then clamp total correction by contactOffset.
+    sq::Vec3 push = pushSum * m_config.recoverAlpha;
+    float pushLen = sq::Len(push);
+    if (pushLen > m_config.contactOffset && pushLen > kMinDist) {
+        push = push * (m_config.contactOffset / pushLen);
+    }
+
+    m_currentPosition = m_currentPosition + push;
 
     // Debug: track deepest overlap depth for convergence diagnosis
-    m_debug.recoverDeepestDepth = depth;
+    m_debug.recoverDeepestDepth = contacts[0].depth;
 
     return true;
 }
@@ -561,10 +587,12 @@ void KinematicCharacterController::Writeback(float dt)
 
 sq::Hit KinematicCharacterController::SweepClosest(
     const sq::Vec3& from, const sq::Vec3& delta,
-    const sq::SweepFilter& filter) const
+    const sq::SweepFilter& filter,
+    bool rejectInitialOverlap) const
 {
     sq::SweepCapsuleInput in = MakeSweepInput(from, delta);
-    return m_world->SweepCapsuleClosest(in, m_config.sweep, Q_Solid, filter);
+    return m_world->SweepCapsuleClosest(in, m_config.sweep, Q_Solid,
+                                        filter, rejectInitialOverlap);
 }
 
 sq::SweepCapsuleInput KinematicCharacterController::MakeSweepInput(
