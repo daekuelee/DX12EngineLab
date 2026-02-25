@@ -78,11 +78,28 @@ private:
 
     // ---- Helpers ----
 
+    // Sweep call sites are tagged by phase so query-debug rejects can be
+    // accumulated into phase-specific CctDebug counters.
+    enum class SweepPhase : uint8_t {
+        StepUp = 0,
+        StepMove = 1,
+        StepDown = 2,
+        GroundProbe = 3,
+        TryStepUp = 4,
+        TryStepSide = 5,
+        TryStepDown = 6
+    };
+
     // Sweep capsule from current position along delta. Returns hit.
     // filter: optional normal predicate (Bullet-equivalent per-stage filtering).
     sq::Hit SweepClosest(const sq::Vec3& from, const sq::Vec3& delta,
+                         SweepPhase phase,
                          const sq::SweepFilter& filter = sq::SweepFilter{},
-                         bool rejectInitialOverlap = false) const;
+                         bool rejectInitialOverlap = false);
+
+    // Map query-level debug counters to CCT phase buckets.
+    void AccumulateSweepQueryDebug(SweepPhase phase,
+                                   const sq::SweepQueryDebugStats& queryDebug);
 
     // Build SweepCapsuleInput from feet position and displacement.
     sq::SweepCapsuleInput MakeSweepInput(const sq::Vec3& posFeet,

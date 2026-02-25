@@ -50,6 +50,36 @@ void CollisionWorld::BuildStatic(const std::vector<ColliderDesc>& colliders)
     BuildStatic(colliders.data(), static_cast<uint32_t>(colliders.size()));
 }
 
+MoveSweepResult CollisionWorld::SweepCapsuleClosestMove(
+    const sq::SweepCapsuleInput& in,
+    const sq::SweepConfig& cfg,
+    QueryMask /*queryMask*/,
+    const sq::SweepFilter& filter,
+    bool rejectInitialOverlap) const
+{
+    MoveSweepResult out{};
+
+    sq::CharacterMoveSweepCallback callback;
+    callback.filter = filter.active ? &filter : nullptr;
+    callback.queryDebug = &out.queryDebug;
+
+    // BVH contains only Solid colliders. Triggers excluded at BuildStatic.
+    out.hit = sq::SweepCapsuleClosestHit_Callback(
+        m_bvh, in, cfg, m_scratch,
+        filter.active ? &filter : nullptr,
+        callback,
+        rejectInitialOverlap);
+
+    if (out.hit.hit) {
+        // Remap BVH-local index → m_descs index by primitive type
+        if (out.hit.type == sq::PrimType::Tri)
+            out.hit.index = m_solidTriRemap[out.hit.index];
+        else
+            out.hit.index = m_solidRemap[out.hit.index];
+    }
+    return out;
+}
+
 sq::Hit CollisionWorld::SweepCapsuleClosest(
     const sq::SweepCapsuleInput& in,
     const sq::SweepConfig& cfg,
@@ -57,17 +87,8 @@ sq::Hit CollisionWorld::SweepCapsuleClosest(
     const sq::SweepFilter& filter,
     bool rejectInitialOverlap) const
 {
-    // BVH contains only Solid colliders. Triggers excluded at BuildStatic.
-    sq::Hit hit = sq::SweepCapsuleClosestHit_Fast(m_bvh, in, cfg, m_scratch,
-                                                  filter, rejectInitialOverlap);
-    if (hit.hit) {
-        // Remap BVH-local index → m_descs index by primitive type
-        if (hit.type == sq::PrimType::Tri)
-            hit.index = m_solidTriRemap[hit.index];
-        else
-            hit.index = m_solidRemap[hit.index];
-    }
-    return hit;
+    // Compatibility wrapper for legacy call sites.
+    return SweepCapsuleClosestMove(in, cfg, Q_Solid, filter, rejectInitialOverlap).hit;
 }
 
 uint32_t CollisionWorld::OverlapCapsule(

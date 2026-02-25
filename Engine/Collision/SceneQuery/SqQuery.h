@@ -15,7 +15,8 @@
 //
 // CONTRACT:
 //   - Standalone: includes SqNarrowphase.h, SqBVH.h, SqBroadphase.h.
-//   - SweepCapsuleClosestHit_Fast is the ONLY public query entry point.
+//   - SweepCapsuleClosestHit_Callback is the policy-driven entry point.
+//   - SweepCapsuleClosestHit_Fast is a compatibility wrapper.
 //   - StaticBVH must be immutable during query lifetime.
 //   - QueryScratch.sp is reset to 0 at function entry.
 //
@@ -31,6 +32,7 @@
 #include "SqNarrowphase.h"
 #include "SqBVH.h"
 #include "SqBroadphase.h"
+#include "SqCallbacks.h"
 #include "SqPrimitiveTests.h"
 
 namespace Engine { namespace Collision { namespace sq {
@@ -105,25 +107,32 @@ inline bool SweepCapsulePrim_TOI01(
 }
 
 // =========================================================================
-// Main query: capsule sweep closest hit via BVH DFS
+// Main query: capsule sweep closest hit via BVH DFS (callback policy)
 // =========================================================================
 //
-// Consumes: immutable StaticBVH, SweepCapsuleInput, SweepConfig, QueryScratch
-// Produces: Hit (earliest contact along displacement delta)
+// TEMPLATE CONTRACT:
+//   Callback must provide:
+//     QueryHitType PreFilter(const PrimRef&)
+//     QueryHitType PostFilter(const PrimRef&, float t, const Vec3& n,
+//                             uint32_t featureId, bool isInitialOverlap,
+//                             bool rejectInitialOverlapEnabled)
 //
-// Algorithm:
-//   1. Compute capsule AABB at t=0 expanded by skin (matches narrowphase radius+skin)
-//   2. Test root node time-window; push onto stack if valid
-//   3. DFS loop: pop node, prune by tEnter >= best.t
-//      - Leaf: test each primitive (time-window + narrowphase + BetterHit)
-//      - Internal: push children (right first for deterministic left-first popping)
-//   4. Return best Hit
-inline Hit SweepCapsuleClosestHit_Fast(
+// PARAMETERS:
+//   narrowphaseFilter:
+//     Optional low-level filter forwarded to narrowphase kernels.
+//     Use nullptr for no narrowphase-time filtering.
+//
+// RETURN:
+//   Earliest blocking hit only. TOUCH results can be counted/debugged by callback
+//   but are not returned by this closest-hit API.
+template <typename Callback>
+inline Hit SweepCapsuleClosestHit_Callback(
     const StaticBVH& bvh,
     const SweepCapsuleInput& in,
     const SweepConfig& cfg,
     QueryScratch& scratch,
-    const SweepFilter& filter = SweepFilter{},
+    const SweepFilter* narrowphaseFilter,
+    Callback& callback,
     bool rejectInitialOverlap = false)
 {
     Hit best{};
@@ -155,6 +164,9 @@ inline Hit SweepCapsuleClosestHit_Fast(
             for (uint32_t k = 0; k < node.primCount; ++k) {
                 const PrimRef& pref = bvh.prims[bvh.primIdx[node.primStart + k]];
 
+                if (callback.PreFilter(pref) == QueryHitType::None)
+                    continue;
+
                 float pE, pL;
                 if (!AabbAabb_SweepInterval01(cap0, in.delta, pref.bounds, pE, pL))
                     continue;
@@ -166,27 +178,21 @@ inline Hit SweepCapsuleClosestHit_Fast(
                 float t; Vec3 n; uint32_t f;
                 if (!SweepCapsulePrim_TOI01(bvh, in, cfg, pref,
                                            rejectInitialOverlap,
-                                           filter.active ? &filter : nullptr,
+                                           narrowphaseFilter,
                                            t, n, f))
                     continue;
 
-                // Sweep filter: reject candidates by normal predicate
-                // (Bullet-equivalent: addSingleResult returning 1.0 to skip)
-                if (filter.active) {
-                    const bool isInitial = (t <= 0.0f);
-                    const bool applyFilter = !isInitial ||
-                        rejectInitialOverlap || filter.filterInitialOverlap;
-                    if (applyFilter && FeatureClassFromPacked(f) > (int)filter.maxFeatureClass)
-                        continue;
-                    if (applyFilter && Dot(n, filter.refDir) < filter.minDot)
-                        continue;
-                }
+                const bool isInitialOverlap = (t <= 0.0f);
+                const QueryHitType hitType =
+                    callback.PostFilter(pref, t, n, f, isInitialOverlap, rejectInitialOverlap);
+                if (hitType == QueryHitType::None) continue;
+                if (hitType != QueryHitType::Block) continue;
 
                 if (t < lo || t > hi) continue;
 
                 if (!best.hit || BetterHit(t, pref.type, pref.index, f,
-                                            best.t, best.type, best.index,
-                                            best.featureId, cfg.tieEpsT))
+                                           best.t, best.type, best.index,
+                                           best.featureId, cfg.tieEpsT))
                 {
                     best.hit = true;
                     best.t = t;
@@ -218,6 +224,31 @@ inline Hit SweepCapsuleClosestHit_Fast(
     }
 
     return best;
+}
+
+// =========================================================================
+// Main query: capsule sweep closest hit via BVH DFS
+// =========================================================================
+//
+// Compatibility wrapper that preserves the old function signature while
+// routing through the callback-based core path.
+inline Hit SweepCapsuleClosestHit_Fast(
+    const StaticBVH& bvh,
+    const SweepCapsuleInput& in,
+    const SweepConfig& cfg,
+    QueryScratch& scratch,
+    const SweepFilter& filter = SweepFilter{},
+    bool rejectInitialOverlap = false)
+{
+    CharacterMoveSweepCallback callback;
+    callback.filter = filter.active ? &filter : nullptr;
+    callback.queryDebug = nullptr;
+
+    return SweepCapsuleClosestHit_Callback(
+        bvh, in, cfg, scratch,
+        filter.active ? &filter : nullptr,
+        callback,
+        rejectInitialOverlap);
 }
 
 // =========================================================================
