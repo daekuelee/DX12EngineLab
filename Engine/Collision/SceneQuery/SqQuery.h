@@ -176,8 +176,6 @@ inline Hit SweepCapsuleClosestHit_Fast(
                     const bool isInitial = (t <= 0.0f);
                     const bool applyFilter = !isInitial ||
                         rejectInitialOverlap || filter.filterInitialOverlap;
-                    if (applyFilter && FeatureClassFromPacked(f) > (int)filter.maxFeatureClass)
-                        continue;
                     if (applyFilter && Dot(n, filter.refDir) < filter.minDot)
                         continue;
                 }

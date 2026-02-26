@@ -127,19 +127,6 @@ struct OverlapContact {
     uint32_t featureId = 0;
 };
 
-// Feature priority class used by tie-break / filter policies:
-//   0 = face, 1 = edge, 2 = vertex, 3 = prism-side / fallback.
-inline int FeatureClassFromPacked(uint32_t packedFeature)
-{
-    const uint32_t triFeat = packedFeature & 0xFFu;
-    const uint32_t prismFace = (packedFeature >> 8) & 0xFFu;
-    if (packedFeature == 0xFFFFFFFFu) return 3;
-    if (prismFace > 0u) return 3;
-    if (triFeat == 0u) return 0;
-    if (triFeat <= 3u) return 1;
-    return 2;
-}
-
 struct SweepCapsuleInput {
     Vec3  segA0;    // bottom sphere center at t=0
     Vec3  segB0;    // top sphere center at t=0
@@ -169,7 +156,6 @@ struct SweepFilter {
     float minDot = -2.0f;   // minimum Dot(hitNormal, refDir) to accept
     bool  active = false;    // false = no filtering
     bool  filterInitialOverlap = false; // apply filter on t==0 when rejectInitialOverlap=false
-    uint8_t maxFeatureClass = 3; // reject candidates with FeatureClass > this value
 };
 
 static_assert(sizeof(AABB) == 24, "AABB must be 24 bytes POD");

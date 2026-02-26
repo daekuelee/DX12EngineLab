@@ -203,16 +203,15 @@ namespace Engine
             char buf[512];
             sprintf_s(buf,
                 "[KCC_TICK] pos=(%.2f,%.2f,%.2f) gnd=%d vy=%.2f "
-                "REC(i=%u p=%.4f) SU=%.2f SM(i=%u z=%u stuck=%d dy=%.4f) "
-                "SD(hit=%d walk=%d drop=%.3f) G(r=%u c=%u pd=%.3f) dx=(%.4f,%.4f)\n",
+                "REC(i=%u p=%.4f) SU=%.2f SM(i=%u z=%u stuck=%d) "
+                "SD(hit=%d walk=%d drop=%.3f) dx=(%.4f,%.4f)\n",
                 cs2.posFeet.x, cs2.posFeet.y, cs2.posFeet.z,
                 cs2.onGround ? 1 : 0, cs2.verticalVelocity,
                 dbg.recoverIters, dbg.recoverPushMag,
                 dbg.stepUpOffset,
-                dbg.forwardIters, dbg.zeroHitPushes, dbg.stuck ? 1 : 0, dbg.stepMoveDeltaY,
+                dbg.forwardIters, dbg.zeroHitPushes, dbg.stuck ? 1 : 0,
                 dbg.stepDownHit ? 1 : 0, dbg.stepDownWalkable ? 1 : 0,
                 dbg.stepDownDropDist,
-                static_cast<uint32_t>(dbg.groundReason), dbg.groundFeatureClass, dbg.groundProbeDist,
                 dbg.dxIntentMag, dbg.dxCorrMag);
             OutputDebugStringA(buf);
         }
