@@ -50,44 +50,6 @@ void CollisionWorld::BuildStatic(const std::vector<ColliderDesc>& colliders)
     BuildStatic(colliders.data(), static_cast<uint32_t>(colliders.size()));
 }
 
-MoveSweepPolicyResult CollisionWorld::SweepCapsuleMovePolicy(
-    const sq::SweepCapsuleInput& in,
-    const sq::SweepConfig& cfg,
-    QueryMask /*queryMask*/,
-    const sq::SweepFilter& filter,
-    bool rejectInitialOverlap) const
-{
-    MoveSweepPolicyResult out{};
-
-    sq::CharacterMoveSweepCallback callback;
-    callback.filter = filter.active ? &filter : nullptr;
-    callback.policyDebug = nullptr;
-
-    // BVH contains only Solid colliders. Triggers excluded at BuildStatic.
-    out.policy = sq::SweepCapsulePolicy(
-        m_bvh, in, cfg, m_scratch,
-        filter.active ? &filter : nullptr,
-        callback,
-        rejectInitialOverlap);
-
-    if (out.policy.block.hit) {
-        // Remap BVH-local index → m_descs index by primitive type
-        if (out.policy.block.type == sq::PrimType::Tri)
-            out.policy.block.index = m_solidTriRemap[out.policy.block.index];
-        else
-            out.policy.block.index = m_solidRemap[out.policy.block.index];
-    }
-
-    for (auto& touch : out.policy.touches) {
-        if (touch.type == sq::PrimType::Tri)
-            touch.index = m_solidTriRemap[touch.index];
-        else
-            touch.index = m_solidRemap[touch.index];
-    }
-
-    return out;
-}
-
 sq::Hit CollisionWorld::SweepCapsuleClosest(
     const sq::SweepCapsuleInput& in,
     const sq::SweepConfig& cfg,
@@ -95,8 +57,17 @@ sq::Hit CollisionWorld::SweepCapsuleClosest(
     const sq::SweepFilter& filter,
     bool rejectInitialOverlap) const
 {
-    // Compatibility wrapper for legacy call sites.
-    return SweepCapsuleMovePolicy(in, cfg, Q_Solid, filter, rejectInitialOverlap).BlockHit();
+    // BVH contains only Solid colliders. Triggers excluded at BuildStatic.
+    sq::Hit hit = sq::SweepCapsuleClosestHit_Fast(m_bvh, in, cfg, m_scratch,
+                                                  filter, rejectInitialOverlap);
+    if (hit.hit) {
+        // Remap BVH-local index → m_descs index by primitive type
+        if (hit.type == sq::PrimType::Tri)
+            hit.index = m_solidTriRemap[hit.index];
+        else
+            hit.index = m_solidRemap[hit.index];
+    }
+    return hit;
 }
 
 uint32_t CollisionWorld::OverlapCapsule(

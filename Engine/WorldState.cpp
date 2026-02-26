@@ -55,8 +55,6 @@ namespace Engine
             cctCfg.stepHeight    = m_config.maxStepHeight;
             cctCfg.fallSpeed     = 55.0f;
             cctCfg.contactOffset = 0.02f;  // SSOT: all epsilons derived in KCC ctor
-            cctCfg.useSweepDrivenStep = true;
-            cctCfg.enablePreStepUp = false;
 
             m_cct = std::make_unique<Collision::KinematicCharacterController>(
                 &m_collisionWorld, geom, cctCfg);
@@ -202,13 +200,11 @@ namespace Engine
         {
             const auto& dbg = m_cct->getDebug();
             const auto& cs2 = m_cct->getState();
-            char buf[1024];
+            char buf[512];
             sprintf_s(buf,
                 "[KCC_TICK] pos=(%.2f,%.2f,%.2f) gnd=%d vy=%.2f "
                 "REC(i=%u p=%.4f) SU=%.2f SM(i=%u z=%u stuck=%d dy=%.4f) "
-                "SD(hit=%d walk=%d drop=%.3f) G(r=%u c=%u pd=%.3f) dx=(%.4f,%.4f) "
-                "des=(%.3f,%.3f) app=(%.3f,%.3f) opp=%.4f bd=%u "
-                "stp(a=%d ok=%d rr=%u up=%.3f dn=%.3f)\n",
+                "SD(hit=%d walk=%d drop=%.3f) G(r=%u c=%u pd=%.3f) dx=(%.4f,%.4f)\n",
                 cs2.posFeet.x, cs2.posFeet.y, cs2.posFeet.z,
                 cs2.onGround ? 1 : 0, cs2.verticalVelocity,
                 dbg.recoverIters, dbg.recoverPushMag,
@@ -217,12 +213,7 @@ namespace Engine
                 dbg.stepDownHit ? 1 : 0, dbg.stepDownWalkable ? 1 : 0,
                 dbg.stepDownDropDist,
                 static_cast<uint32_t>(dbg.groundReason), dbg.groundFeatureClass, dbg.groundProbeDist,
-                dbg.dxIntentMag, dbg.dxCorrMag,
-                dbg.stepMoveDesiredLateral.x, dbg.stepMoveDesiredLateral.z,
-                dbg.stepMoveAppliedLateral.x, dbg.stepMoveAppliedLateral.z,
-                dbg.stepMoveOpposeDot, dbg.stepMoveBackdriveClamps,
-                dbg.stepAttempted ? 1 : 0, dbg.stepAccepted ? 1 : 0,
-                static_cast<uint32_t>(dbg.stepRejectReason), dbg.stepTryUp, dbg.stepTryDown);
+                dbg.dxIntentMag, dbg.dxCorrMag);
             OutputDebugStringA(buf);
         }
 #endif  // CCT_DEBUG_TICK

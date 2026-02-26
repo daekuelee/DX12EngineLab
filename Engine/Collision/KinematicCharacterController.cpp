@@ -107,15 +107,7 @@ void KinematicCharacterController::Tick(const CctInput& input, float dt)
 
     m_xSweep = m_currentPosition;
 
-    // Modern step architecture:
-    // - pre StepUp is jump/upward only
-    // - stair climb is handled from StepMove blocking hits via TryStep
-    if (m_config.enablePreStepUp || m_state.verticalOffset > 0.0f) {
-        StepUp();
-    } else {
-        m_currentStepOffset = 0.0f;
-        m_debug.stepUpOffset = 0.0f;
-    }
+    StepUp();
     m_debug.posAfterStepUp = m_currentPosition;
     StepMove(input.walkMove);
     m_debug.posAfterStepMove = m_currentPosition;
@@ -242,8 +234,7 @@ void KinematicCharacterController::StepUp()
     ceilFilter.minDot = m_maxSlopeCos;
     ceilFilter.active = true;
 
-    sq::Hit hit = SweepClosest(m_currentPosition, upDelta,
-                               SweepPhase::StepUp, ceilFilter, true);
+    sq::Hit hit = SweepClosest(m_currentPosition, upDelta, ceilFilter, true);
 
     if (hit.hit) {
         // Advance with skin backoff to avoid sitting at exact contact
@@ -294,22 +285,10 @@ void KinematicCharacterController::StepUp()
 void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
 {
     const float startY = m_currentPosition.y;
-    const sq::Vec3 stepMoveStart = m_currentPosition;
 
     // Hard-guard: StepMove is lateral-only. Strip any accidental up/down input.
     sq::Vec3 lateralMove = walkMove - m_config.up * sq::Dot(walkMove, m_config.up);
     float walkLen = sq::Len(lateralMove);
-
-    m_debug.stepMoveDesiredLateral = lateralMove;
-    m_debug.stepMoveAppliedLateral = sq::Vec3{0, 0, 0};
-    m_debug.stepMoveOpposeDot = 0.0f;
-    m_debug.stepMoveBackdriveClamps = 0;
-    m_debug.stepAttempted = false;
-    m_debug.stepAccepted = false;
-    m_debug.stepRejectReason = CctStepRejectReason::None;
-    m_debug.stepTryUp = 0.0f;
-    m_debug.stepTryDown = 0.0f;
-
     if (walkLen < kMinDist) {
         m_debug.forwardIters = 0;
         m_debug.stepMoveDeltaY = 0.0f;
@@ -339,8 +318,7 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
         approachFilter.minDot = 1e-4f;
         approachFilter.active = true;
 
-        sq::Hit hit = SweepClosest(m_currentPosition, remaining,
-                                   SweepPhase::StepMove, approachFilter, false);
+        sq::Hit hit = SweepClosest(m_currentPosition, remaining, approachFilter, false);
 
         // Fraction budget (ex4.cpp line 431)
         fraction -= hit.hit ? hit.t : 1.0f;
@@ -368,33 +346,16 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
 
             const float nearZeroEps = m_config.sweep.tieEpsT;
             if (hit.t <= (tSkin + nearZeroEps)) {
-                // near-zero / skin-dominated hit:
-                // keep target immutable, Recover first, then fallback to filtered push.
+                // near-zero / skin-dominated hit: push current only, keep target untouched.
+                // Re-run sweep with updated current and the same target; break only after
+                // bounded retry budget to avoid infinite loops.
                 m_debug.zeroHitPushes++;
-                bool recovered = Recover();
-                if (!recovered) {
-                    sq::Vec3 pushDir = hit.normal;
-                    if (wallLike) {
-                        sq::Vec3 lateralN = hit.normal - m_config.up * nUp;
-                        float lateralLenSq = sq::LenSq(lateralN);
-                        if (lateralLenSq > kMinDist * kMinDist)
-                            pushDir = lateralN * (1.0f / std::sqrt(lateralLenSq));
-                    }
-
-                    // Remove component opposite to desired input to avoid reverse drift.
-                    float oppose = sq::Dot(pushDir, m_originalDirection);
-                    if (oppose < 0.0f) {
-                        pushDir = pushDir - m_originalDirection * oppose;
-                        m_debug.stepMoveBackdriveClamps++;
-                    }
-
-                    float pushLenSq = sq::LenSq(pushDir);
-                    if (pushLenSq > kMinDist * kMinDist) {
-                        pushDir = pushDir * (1.0f / std::sqrt(pushLenSq));
-                        m_currentPosition = m_currentPosition + pushDir * m_config.addedMargin;
-                    }
+                sq::Vec3 pushNormal = hit.normal;
+                if (wallLike) {
+                    sq::Vec3 lateralN = hit.normal - m_config.up * nUp;
+                    pushNormal = sq::NormalizeSafe(lateralN, hit.normal);
                 }
-
+                m_currentPosition = m_currentPosition + pushNormal * m_config.addedMargin;
                 if (m_debug.zeroHitPushes >= maxZeroHitPushes) {
                     Recover();
                     m_debug.stuck = true;
@@ -414,19 +375,13 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
             m_currentPosition = m_currentPosition + remaining * safeT;
 
             sq::Vec3 postContactRemain = m_targetPosition - m_currentPosition;
-            if (m_config.useSweepDrivenStep && wallLike && !stepAttempted &&
+            if (wallLike && !stepAttempted &&
                 sq::LenSq(postContactRemain) > kMinDist * kMinDist)
             {
                 stepAttempted = true;
-                m_debug.stepAttempted = true;
-                CctStepRejectReason rejectReason = CctStepRejectReason::None;
-                if (TryStep(postContactRemain, &rejectReason)) {
-                    m_debug.stepAccepted = true;
-                    m_debug.stepRejectReason = CctStepRejectReason::None;
+                if (TryStep(postContactRemain)) {
                     m_targetPosition = m_currentPosition;
                     break;
-                } else {
-                    m_debug.stepRejectReason = rejectReason;
                 }
             }
 
@@ -461,41 +416,19 @@ void KinematicCharacterController::StepMove(const sq::Vec3& walkMove)
         }
     }
 
-    sq::Vec3 appliedLateral = m_currentPosition - stepMoveStart;
-    appliedLateral = appliedLateral - m_config.up * sq::Dot(appliedLateral, m_config.up);
-    m_debug.stepMoveAppliedLateral = appliedLateral;
-    m_debug.stepMoveOpposeDot = sq::Dot(appliedLateral, m_originalDirection);
-
     m_debug.forwardIters = static_cast<uint32_t>(iters);
     if (iters >= m_config.maxForwardIters)
         m_debug.stuck = true;
     m_debug.stepMoveDeltaY = m_currentPosition.y - startY;
 }
 
-bool KinematicCharacterController::TryStep(const sq::Vec3& lateralRemaining,
-                                           CctStepRejectReason* outReason)
+bool KinematicCharacterController::TryStep(const sq::Vec3& lateralRemaining)
 {
-    if (outReason) *outReason = CctStepRejectReason::None;
-    if (!m_config.useSweepDrivenStep) {
-        if (outReason) *outReason = CctStepRejectReason::Disabled;
-        return false;
-    }
-
     const float lateralLen = sq::Len(lateralRemaining);
-    if (lateralLen < kMinDist) {
-        if (outReason) *outReason = CctStepRejectReason::TooSmallMove;
-        return false;
-    }
-    if (m_config.stepHeight <= kMinDist) {
-        if (outReason) *outReason = CctStepRejectReason::Disabled;
-        return false;
-    }
-    if (!m_state.wasOnGround && !m_state.onGround) {
-        if (outReason) *outReason = CctStepRejectReason::NotGrounded;
-        return false;
-    }
+    if (lateralLen < kMinDist) return false;
+    if (m_config.stepHeight <= kMinDist) return false;
+    if (!m_state.wasOnGround && !m_state.onGround) return false;
 
-    const sq::Vec3 stepStart = m_currentPosition;
     sq::Vec3 stepPos = m_currentPosition;
 
     // 1) Lift by step height with ceiling filter.
@@ -506,15 +439,10 @@ bool KinematicCharacterController::TryStep(const sq::Vec3& lateralRemaining,
 
     const sq::Vec3 upDelta = m_config.up * m_config.stepHeight;
     const float upDist = sq::Len(upDelta);
-    m_debug.stepTryUp = upDist;
-    sq::Hit upHit = SweepClosest(stepPos, upDelta,
-                                 SweepPhase::TryStepUp, ceilFilter, true);
+sq::Hit upHit = SweepClosest(stepPos, upDelta, ceilFilter, true);
     if (upHit.hit) {
         const float safeT = (std::max)(0.0f, upHit.t - m_config.sweep.skin / (std::max)(upDist, kMinDist));
-        if (safeT <= kMinDist) {
-            if (outReason) *outReason = CctStepRejectReason::UpBlocked;
-            return false;
-        }
+        if (safeT <= kMinDist) return false;
         stepPos = stepPos + upDelta * safeT;
     } else {
         stepPos = stepPos + upDelta;
@@ -526,19 +454,14 @@ bool KinematicCharacterController::TryStep(const sq::Vec3& lateralRemaining,
     approachFilter.minDot = 1e-4f;
     approachFilter.active = true;
 
-    sq::Hit sideHit = SweepClosest(stepPos, lateralRemaining,
-                                   SweepPhase::TryStepSide, approachFilter, false);
-    if (sideHit.hit) {
-        if (outReason) *outReason = CctStepRejectReason::SideBlocked;
-        return false;
-    }
+    sq::Hit sideHit = SweepClosest(stepPos, lateralRemaining, approachFilter, false);
+    if (sideHit.hit) return false;
     stepPos = stepPos + lateralRemaining;
 
     // 3) Settle down and require walkable support.
     const float probeDist = (std::max)(m_config.contactOffset * 2.0f, m_config.sweep.skin);
     const float settleDist = m_config.stepHeight + probeDist;
     const sq::Vec3 downDelta = m_config.up * (-settleDist);
-    m_debug.stepTryDown = settleDist;
 
     sq::SweepFilter groundFilter;
     groundFilter.refDir = m_config.up;
@@ -546,32 +469,19 @@ bool KinematicCharacterController::TryStep(const sq::Vec3& lateralRemaining,
     groundFilter.active = true;
     groundFilter.filterInitialOverlap = true;
 
-    auto trySettle = [&](uint8_t maxFeatureClass, bool rejectInitialOverlap) -> bool {
+    auto trySettle = [&](uint8_t maxFeatureClass) -> bool {
         sq::SweepFilter filter = groundFilter;
         filter.maxFeatureClass = maxFeatureClass;
-        sq::Hit downHit = SweepClosest(stepPos, downDelta,
-                                       SweepPhase::TryStepDown,
-                                       filter, rejectInitialOverlap);
+        sq::Hit downHit = SweepClosest(stepPos, downDelta, filter, false);
         if (!downHit.hit || !IsWalkable(downHit.normal)) return false;
         const float safeT = (std::max)(0.0f, downHit.t - m_config.sweep.skin / (std::max)(settleDist, kMinDist));
-        sq::Vec3 candidate = stepPos + downDelta * safeT;
-
-        float finalStepUp = sq::Dot(candidate - stepStart, m_config.up);
-        if (finalStepUp > m_config.stepHeight + m_config.sweep.skin) {
-            if (outReason) *outReason = CctStepRejectReason::HeightExceeded;
-            return false;
-        }
-
-        m_currentPosition = candidate;
+        stepPos = stepPos + downDelta * safeT;
+        m_currentPosition = stepPos;
         return true;
     };
 
-    if (trySettle(0, true))  return true; // walkable face, no t==0
-    if (trySettle(0, false)) return true; // walkable face, allow t==0
-    if (trySettle(2, true))  return true; // fallback edge/vertex
-    if (trySettle(2, false)) return true; // fallback edge/vertex + t==0
-    if (outReason && *outReason == CctStepRejectReason::None)
-        *outReason = CctStepRejectReason::NoWalkableDown;
+    if (trySettle(0)) return true; // face first
+    if (trySettle(2)) return true; // edge/vertex fallback
     return false;
 }
 
@@ -632,9 +542,7 @@ void KinematicCharacterController::StepDown(float dt)
                        bool rejectInitialOverlap, uint8_t maxFeatureClass) -> bool {
         sq::SweepFilter filter = groundFilter;
         filter.maxFeatureClass = maxFeatureClass;
-        sq::Hit hit = SweepClosest(m_currentPosition, delta,
-                                   SweepPhase::StepDown,
-                                   filter, rejectInitialOverlap);
+        sq::Hit hit = SweepClosest(m_currentPosition, delta, filter, rejectInitialOverlap);
 
         if (deltaDist <= kMinDist) return false;
         if (!hit.hit || !IsWalkable(hit.normal)) return false;
@@ -715,9 +623,7 @@ void KinematicCharacterController::EvaluateGroundSupport(float dt)
 
         const sq::Vec3 downDelta = m_config.up * (-probeDist);
         const float downLen = sq::Len(downDelta);
-        sq::Hit hit = SweepClosest(m_currentPosition, downDelta,
-                                   SweepPhase::GroundProbe,
-                                   groundFilter, false);
+        sq::Hit hit = SweepClosest(m_currentPosition, downDelta, groundFilter, false);
         return applyGroundHit(hit, downDelta, downLen, reason);
     };
 
@@ -759,9 +665,7 @@ void KinematicCharacterController::EvaluateGroundSupport(float dt)
 
             const sq::Vec3 latchDown = m_config.up * (-latchDist);
             const float latchLen = sq::Len(latchDown);
-            sq::Hit latchHit = SweepClosest(m_currentPosition, latchDown,
-                                            SweepPhase::GroundProbe,
-                                            latchFilter, false);
+            sq::Hit latchHit = SweepClosest(m_currentPosition, latchDown, latchFilter, false);
             if (applyGroundHit(latchHit, latchDown, latchLen, CctGroundReason::Latch))
                 return;
         }
@@ -920,74 +824,14 @@ void KinematicCharacterController::Writeback(float dt)
 // Helpers
 // =========================================================================
 
-// -------------------------------------------------------------------------
-// AccumulateSweepQueryDebug
-// -------------------------------------------------------------------------
-// WHY:
-//   Sweep query now emits callback-level debug stats per call.
-//   CCT diagnostics expose phase-oriented counters (step-up / move / step-down).
-//   This function maps low-level reject counts into existing phase buckets.
-//
-// POLICY:
-//   - Count both pre and post filter rejects.
-//   - Route TryStep sub-phases to nearest parent bucket:
-//       TryStepUp   -> stepUpFilterRejects
-//       TryStepSide -> stepMoveFilterRejects
-//       TryStepDown -> stepDownFilterRejects
-void KinematicCharacterController::AccumulateSweepQueryDebug(
-    SweepPhase phase,
-    const sq::SweepPolicyDebugTrace& queryDebug)
-{
-    const uint32_t totalRejects = queryDebug.preFilterRejects + queryDebug.postFilterRejects;
-    if (totalRejects == 0) return;
-
-    switch (phase) {
-        case SweepPhase::StepUp:
-        case SweepPhase::TryStepUp:
-            m_debug.stepUpFilterRejects += totalRejects;
-            break;
-        case SweepPhase::StepMove:
-        case SweepPhase::TryStepSide:
-            m_debug.stepMoveFilterRejects += totalRejects;
-            break;
-        case SweepPhase::StepDown:
-        case SweepPhase::GroundProbe:
-        case SweepPhase::TryStepDown:
-            m_debug.stepDownFilterRejects += totalRejects;
-            break;
-        default:
-            break;
-    }
-}
-
-// -------------------------------------------------------------------------
-// SweepClosest
-// -------------------------------------------------------------------------
-// Single movement sweep entry for controller phases.
-//
-// FLOW:
-//   1) Build capsule sweep input from feet anchor.
-//   2) Execute world sweep with callback policy + query debug capture.
-//   3) Accumulate debug counters into phase-oriented CCT diagnostics.
-//   4) Return earliest blocking hit.
-//
-// NOTE:
-//   rejectInitialOverlap controls narrowphase behavior for t==0 candidates.
-//   PostFilter may still apply additional policy depending on filter settings.
 sq::Hit KinematicCharacterController::SweepClosest(
     const sq::Vec3& from, const sq::Vec3& delta,
-    SweepPhase phase,
     const sq::SweepFilter& filter,
-    bool rejectInitialOverlap)
+    bool rejectInitialOverlap) const
 {
     sq::SweepCapsuleInput in = MakeSweepInput(from, delta);
-
-    MoveSweepPolicyResult policySweep =
-        m_world->SweepCapsuleMovePolicy(in, m_config.sweep, Q_Solid,
+    return m_world->SweepCapsuleClosest(in, m_config.sweep, Q_Solid,
                                         filter, rejectInitialOverlap);
-
-    AccumulateSweepQueryDebug(phase, policySweep.policy.debug);
-    return policySweep.BlockHit();
 }
 
 sq::SweepCapsuleInput KinematicCharacterController::MakeSweepInput(

@@ -65,18 +65,6 @@ struct ColliderDesc {
     uint32_t       userTag = 0;        // gameplay payload (teleport id, etc.)
 };
 
-// ---- Sweep diagnostics + result payload ------------------------------------
-//
-// Used by movement codepaths that want both:
-//   1) closest blocking hit, and
-//   2) callback-level debug counters + touch list.
-struct MoveSweepPolicyResult {
-    sq::SweepPolicyResult policy{};
-
-    inline bool HasBlock() const { return policy.HasBlock(); }
-    inline const sq::Hit& BlockHit() const { return policy.block; }
-};
-
 // ---- CollisionWorld ---------------------------------------------------------
 
 class CollisionWorld {
@@ -85,14 +73,6 @@ public:
     // Caller-owned data is copied into internal storage.
     void BuildStatic(const ColliderDesc* colliders, uint32_t count);
     void BuildStatic(const std::vector<ColliderDesc>& colliders);
-
-    // Sweep capsule against BVH with policy result output.
-    // Returns closest block + touches + policy debug trace.
-    MoveSweepPolicyResult SweepCapsuleMovePolicy(const sq::SweepCapsuleInput& in,
-                                                 const sq::SweepConfig& cfg,
-                                                 QueryMask queryMask = Q_Solid,
-                                                 const sq::SweepFilter& filter = sq::SweepFilter{},
-                                                 bool rejectInitialOverlap = false) const;
 
     // Sweep capsule against BVH. Returns earliest Solid hit along displacement.
     // Only colliders whose mask & queryMask != 0 participate.
