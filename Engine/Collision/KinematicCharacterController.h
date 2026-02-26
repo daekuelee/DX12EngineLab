@@ -99,7 +99,7 @@ private:
 
     // Map query-level debug counters to CCT phase buckets.
     void AccumulateSweepQueryDebug(SweepPhase phase,
-                                   const sq::SweepQueryDebugStats& queryDebug);
+                                   const sq::SweepPolicyDebugTrace& queryDebug);
 
     // Build SweepCapsuleInput from feet position and displacement.
     sq::SweepCapsuleInput MakeSweepInput(const sq::Vec3& posFeet,

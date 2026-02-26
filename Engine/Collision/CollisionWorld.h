@@ -69,10 +69,12 @@ struct ColliderDesc {
 //
 // Used by movement codepaths that want both:
 //   1) closest blocking hit, and
-//   2) callback-level debug counters (pre/post filter rejects, accepts).
-struct MoveSweepResult {
-    sq::Hit hit{};
-    sq::SweepQueryDebugStats queryDebug{};
+//   2) callback-level debug counters + touch list.
+struct MoveSweepPolicyResult {
+    sq::SweepPolicyResult policy{};
+
+    inline bool HasBlock() const { return policy.HasBlock(); }
+    inline const sq::Hit& BlockHit() const { return policy.block; }
 };
 
 // ---- CollisionWorld ---------------------------------------------------------
@@ -84,13 +86,13 @@ public:
     void BuildStatic(const ColliderDesc* colliders, uint32_t count);
     void BuildStatic(const std::vector<ColliderDesc>& colliders);
 
-    // Sweep capsule against BVH with callback debug output.
-    // Returns both closest hit and query-level debug counters.
-    MoveSweepResult SweepCapsuleClosestMove(const sq::SweepCapsuleInput& in,
-                                            const sq::SweepConfig& cfg,
-                                            QueryMask queryMask = Q_Solid,
-                                            const sq::SweepFilter& filter = sq::SweepFilter{},
-                                            bool rejectInitialOverlap = false) const;
+    // Sweep capsule against BVH with policy result output.
+    // Returns closest block + touches + policy debug trace.
+    MoveSweepPolicyResult SweepCapsuleMovePolicy(const sq::SweepCapsuleInput& in,
+                                                 const sq::SweepConfig& cfg,
+                                                 QueryMask queryMask = Q_Solid,
+                                                 const sq::SweepFilter& filter = sq::SweepFilter{},
+                                                 bool rejectInitialOverlap = false) const;
 
     // Sweep capsule against BVH. Returns earliest Solid hit along displacement.
     // Only colliders whose mask & queryMask != 0 participate.

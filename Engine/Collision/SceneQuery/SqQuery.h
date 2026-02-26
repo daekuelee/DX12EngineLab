@@ -15,8 +15,8 @@
 //
 // CONTRACT:
 //   - Standalone: includes SqNarrowphase.h, SqBVH.h, SqBroadphase.h.
-//   - SweepCapsuleClosestHit_Callback is the policy-driven entry point.
-//   - SweepCapsuleClosestHit_Fast is a compatibility wrapper.
+//   - SweepCapsulePolicy is the policy-driven entry point.
+//   - SweepCapsuleClosestBlock_Fast is a compatibility wrapper.
 //   - StaticBVH must be immutable during query lifetime.
 //   - QueryScratch.sp is reset to 0 at function entry.
 //
@@ -34,6 +34,8 @@
 #include "SqBroadphase.h"
 #include "SqCallbacks.h"
 #include "SqPrimitiveTests.h"
+#include <algorithm>
+#include <vector>
 
 namespace Engine { namespace Collision { namespace sq {
 
@@ -106,8 +108,43 @@ inline bool SweepCapsulePrim_TOI01(
     }
 }
 
+struct SweepTouch {
+    float t = 1.0f;
+    PrimType type = PrimType::Aabb;
+    uint32_t index = 0;
+    Vec3 normal{0, 1, 0};
+    uint32_t featureId = 0;
+    bool isInitialOverlap = false;
+};
+
+struct SweepPolicyResult {
+    Hit block{};
+    std::vector<SweepTouch> touches;
+    SweepPolicyDebugTrace debug{};
+
+    inline bool HasBlock() const { return block.hit; }
+};
+
+static constexpr uint32_t kSweepTouchReserveDefault = 32;
+
+// Bind callback debug pointer if callback type exposes `policyDebug`.
+template <typename CallbackT>
+inline auto BindPolicyDebugTrace(CallbackT& callback,
+                                 SweepPolicyDebugTrace* debugTrace,
+                                 int) -> decltype(callback.policyDebug = debugTrace, void())
+{
+    callback.policyDebug = debugTrace;
+}
+
+template <typename CallbackT>
+inline void BindPolicyDebugTrace(CallbackT&,
+                                 SweepPolicyDebugTrace*,
+                                 long)
+{
+}
+
 // =========================================================================
-// Main query: capsule sweep closest hit via BVH DFS (callback policy)
+// Main query: capsule sweep policy result via BVH DFS (callback policy)
 // =========================================================================
 //
 // TEMPLATE CONTRACT:
@@ -123,10 +160,12 @@ inline bool SweepCapsulePrim_TOI01(
 //     Use nullptr for no narrowphase-time filtering.
 //
 // RETURN:
-//   Earliest blocking hit only. TOUCH results can be counted/debugged by callback
-//   but are not returned by this closest-hit API.
+//   Policy output containing:
+//     - closest blocking hit,
+//     - touch list (trimmed by Cut-at-Block),
+//     - debug counters.
 template <typename Callback>
-inline Hit SweepCapsuleClosestHit_Callback(
+inline SweepPolicyResult SweepCapsulePolicy(
     const StaticBVH& bvh,
     const SweepCapsuleInput& in,
     const SweepConfig& cfg,
@@ -135,9 +174,13 @@ inline Hit SweepCapsuleClosestHit_Callback(
     Callback& callback,
     bool rejectInitialOverlap = false)
 {
-    Hit best{};
-    best.hit = false;
-    best.t = 1.0f;
+    SweepPolicyResult out{};
+    out.block.hit = false;
+    out.block.t = 1.0f;
+    out.touches.reserve(kSweepTouchReserveDefault);
+
+    Callback callbackCopy = callback;
+    BindPolicyDebugTrace(callbackCopy, &out.debug, 0);
 
     // Moving capsule AABB at t=0 expanded by skin (match narrowphase radius+skin)
     AABB cap0 = CapsuleAabbAtT(in, 0.0f, cfg.skin);
@@ -146,15 +189,15 @@ inline Hit SweepCapsuleClosestHit_Callback(
 
     float rE, rL;
     if (!AabbAabb_SweepInterval01(cap0, in.delta, bvh.nodes[bvh.root].bounds, rE, rL))
-        return best;
+        return out;
 
     scratch.stack[scratch.sp++] = { bvh.root, rE, rL };
 
     while (scratch.sp) {
         NodeTask task = scratch.stack[--scratch.sp];
 
-        if (task.tEnter >= best.t) continue;
-        if (task.tExit  > best.t)  task.tExit = best.t;
+        if (task.tEnter >= out.block.t) continue;
+        if (task.tExit  > out.block.t)  task.tExit = out.block.t;
         if (task.tEnter > task.tExit) continue;
 
         const BVHNode& node = bvh.nodes[task.node];
@@ -164,8 +207,10 @@ inline Hit SweepCapsuleClosestHit_Callback(
             for (uint32_t k = 0; k < node.primCount; ++k) {
                 const PrimRef& pref = bvh.prims[bvh.primIdx[node.primStart + k]];
 
-                if (callback.PreFilter(pref) == QueryHitType::None)
+                if (callbackCopy.PreFilter(pref) == QueryHitType::None) {
+                    out.debug.preFilterRejects++;
                     continue;
+                }
 
                 float pE, pL;
                 if (!AabbAabb_SweepInterval01(cap0, in.delta, pref.bounds, pE, pL))
@@ -173,7 +218,7 @@ inline Hit SweepCapsuleClosestHit_Callback(
 
                 float lo = (std::max)(task.tEnter, pE);
                 float hi = (std::min)(task.tExit,  pL);
-                if (lo >= best.t || lo > hi) continue;
+                if (lo >= out.block.t || lo > hi) continue;
 
                 float t; Vec3 n; uint32_t f;
                 if (!SweepCapsulePrim_TOI01(bvh, in, cfg, pref,
@@ -184,22 +229,34 @@ inline Hit SweepCapsuleClosestHit_Callback(
 
                 const bool isInitialOverlap = (t <= 0.0f);
                 const QueryHitType hitType =
-                    callback.PostFilter(pref, t, n, f, isInitialOverlap, rejectInitialOverlap);
+                    callbackCopy.PostFilter(pref, t, n, f, isInitialOverlap, rejectInitialOverlap);
                 if (hitType == QueryHitType::None) continue;
-                if (hitType != QueryHitType::Block) continue;
 
                 if (t < lo || t > hi) continue;
 
-                if (!best.hit || BetterHit(t, pref.type, pref.index, f,
-                                           best.t, best.type, best.index,
-                                           best.featureId, cfg.tieEpsT))
+                if (hitType == QueryHitType::Touch) {
+                    if (!out.HasBlock() || t <= (out.block.t + cfg.tieEpsT)) {
+                        out.touches.push_back({ t, pref.type, pref.index, n, f, isInitialOverlap });
+                        out.debug.acceptedTouches++;
+                    }
+                    continue;
+                }
+
+                if (!out.block.hit || BetterHit(t, pref.type, pref.index, f,
+                                                out.block.t, out.block.type, out.block.index,
+                                                out.block.featureId, cfg.tieEpsT))
                 {
-                    best.hit = true;
-                    best.t = t;
-                    best.type = pref.type;
-                    best.index = pref.index;
-                    best.normal = n;
-                    best.featureId = f;
+                    out.block.hit = true;
+                    out.block.t = t;
+                    out.block.type = pref.type;
+                    out.block.index = pref.index;
+                    out.block.normal = n;
+                    out.block.featureId = f;
+
+                    // Cut-at-Block: keep touches only up to earliest block.
+                    auto newEnd = std::remove_if(out.touches.begin(), out.touches.end(),
+                        [&](const SweepTouch& touch) { return touch.t > (out.block.t + cfg.tieEpsT); });
+                    out.touches.erase(newEnd, out.touches.end());
                 }
             }
             continue;
@@ -213,7 +270,7 @@ inline Hit SweepCapsuleClosestHit_Callback(
                 return;
             float lo = (std::max)(task.tEnter, cE);
             float hi = (std::min)(task.tExit,  cL);
-            if (hi > best.t) hi = best.t;
+            if (hi > out.block.t) hi = out.block.t;
             if (lo > hi) return;
             scratch.stack[scratch.sp++] = { child, lo, hi };
         };
@@ -223,16 +280,22 @@ inline Hit SweepCapsuleClosestHit_Callback(
         pushChild(node.left);
     }
 
-    return best;
+    std::sort(out.touches.begin(), out.touches.end(),
+        [&](const SweepTouch& a, const SweepTouch& b) {
+            return BetterHit(a.t, a.type, a.index, a.featureId,
+                             b.t, b.type, b.index, b.featureId, cfg.tieEpsT);
+        });
+
+    return out;
 }
 
 // =========================================================================
-// Main query: capsule sweep closest hit via BVH DFS
+// Main query: capsule sweep closest blocking hit via BVH DFS
 // =========================================================================
 //
 // Compatibility wrapper that preserves the old function signature while
-// routing through the callback-based core path.
-inline Hit SweepCapsuleClosestHit_Fast(
+// routing through the policy-based core path.
+inline Hit SweepCapsuleClosestBlock_Fast(
     const StaticBVH& bvh,
     const SweepCapsuleInput& in,
     const SweepConfig& cfg,
@@ -242,13 +305,14 @@ inline Hit SweepCapsuleClosestHit_Fast(
 {
     CharacterMoveSweepCallback callback;
     callback.filter = filter.active ? &filter : nullptr;
-    callback.queryDebug = nullptr;
+    callback.policyDebug = nullptr;
 
-    return SweepCapsuleClosestHit_Callback(
+    SweepPolicyResult policy = SweepCapsulePolicy(
         bvh, in, cfg, scratch,
         filter.active ? &filter : nullptr,
         callback,
         rejectInitialOverlap);
+    return policy.block;
 }
 
 // =========================================================================

@@ -154,7 +154,7 @@ struct SweepConfig {
 };
 
 // ---- Sweep filter (Bullet-equivalent callback predicate) ----------------
-// Applied inside SweepCapsuleClosestHit_Fast after narrowphase, before
+// Applied inside SweepCapsuleClosestBlock_Fast after narrowphase, before
 // BetterHit selection. Rejects candidates where Dot(hitNormal, refDir) < minDot.
 //
 // Per-stage usage (matches Bullet btKinematicClosestNotMeConvexResultCallback):

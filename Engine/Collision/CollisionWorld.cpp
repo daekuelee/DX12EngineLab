@@ -50,33 +50,41 @@ void CollisionWorld::BuildStatic(const std::vector<ColliderDesc>& colliders)
     BuildStatic(colliders.data(), static_cast<uint32_t>(colliders.size()));
 }
 
-MoveSweepResult CollisionWorld::SweepCapsuleClosestMove(
+MoveSweepPolicyResult CollisionWorld::SweepCapsuleMovePolicy(
     const sq::SweepCapsuleInput& in,
     const sq::SweepConfig& cfg,
     QueryMask /*queryMask*/,
     const sq::SweepFilter& filter,
     bool rejectInitialOverlap) const
 {
-    MoveSweepResult out{};
+    MoveSweepPolicyResult out{};
 
     sq::CharacterMoveSweepCallback callback;
     callback.filter = filter.active ? &filter : nullptr;
-    callback.queryDebug = &out.queryDebug;
+    callback.policyDebug = nullptr;
 
     // BVH contains only Solid colliders. Triggers excluded at BuildStatic.
-    out.hit = sq::SweepCapsuleClosestHit_Callback(
+    out.policy = sq::SweepCapsulePolicy(
         m_bvh, in, cfg, m_scratch,
         filter.active ? &filter : nullptr,
         callback,
         rejectInitialOverlap);
 
-    if (out.hit.hit) {
+    if (out.policy.block.hit) {
         // Remap BVH-local index → m_descs index by primitive type
-        if (out.hit.type == sq::PrimType::Tri)
-            out.hit.index = m_solidTriRemap[out.hit.index];
+        if (out.policy.block.type == sq::PrimType::Tri)
+            out.policy.block.index = m_solidTriRemap[out.policy.block.index];
         else
-            out.hit.index = m_solidRemap[out.hit.index];
+            out.policy.block.index = m_solidRemap[out.policy.block.index];
     }
+
+    for (auto& touch : out.policy.touches) {
+        if (touch.type == sq::PrimType::Tri)
+            touch.index = m_solidTriRemap[touch.index];
+        else
+            touch.index = m_solidRemap[touch.index];
+    }
+
     return out;
 }
 
@@ -88,7 +96,7 @@ sq::Hit CollisionWorld::SweepCapsuleClosest(
     bool rejectInitialOverlap) const
 {
     // Compatibility wrapper for legacy call sites.
-    return SweepCapsuleClosestMove(in, cfg, Q_Solid, filter, rejectInitialOverlap).hit;
+    return SweepCapsuleMovePolicy(in, cfg, Q_Solid, filter, rejectInitialOverlap).BlockHit();
 }
 
 uint32_t CollisionWorld::OverlapCapsule(

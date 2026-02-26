@@ -936,7 +936,7 @@ void KinematicCharacterController::Writeback(float dt)
 //       TryStepDown -> stepDownFilterRejects
 void KinematicCharacterController::AccumulateSweepQueryDebug(
     SweepPhase phase,
-    const sq::SweepQueryDebugStats& queryDebug)
+    const sq::SweepPolicyDebugTrace& queryDebug)
 {
     const uint32_t totalRejects = queryDebug.preFilterRejects + queryDebug.postFilterRejects;
     if (totalRejects == 0) return;
@@ -982,12 +982,12 @@ sq::Hit KinematicCharacterController::SweepClosest(
 {
     sq::SweepCapsuleInput in = MakeSweepInput(from, delta);
 
-    MoveSweepResult moveSweep =
-        m_world->SweepCapsuleClosestMove(in, m_config.sweep, Q_Solid,
-                                         filter, rejectInitialOverlap);
+    MoveSweepPolicyResult policySweep =
+        m_world->SweepCapsuleMovePolicy(in, m_config.sweep, Q_Solid,
+                                        filter, rejectInitialOverlap);
 
-    AccumulateSweepQueryDebug(phase, moveSweep.queryDebug);
-    return moveSweep.hit;
+    AccumulateSweepQueryDebug(phase, policySweep.policy.debug);
+    return policySweep.BlockHit();
 }
 
 sq::SweepCapsuleInput KinematicCharacterController::MakeSweepInput(

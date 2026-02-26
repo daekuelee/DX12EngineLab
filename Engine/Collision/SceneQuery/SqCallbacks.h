@@ -41,11 +41,11 @@ enum class QueryHitType : uint8_t {
 };
 
 // ---------------------------------------------------------------------------
-// SweepQueryDebugStats
+// SweepPolicyDebugTrace
 // ---------------------------------------------------------------------------
 // Caller-owned optional counters for query diagnostics.
 // This is intentionally POD so it can be stack-allocated and zero-initialized.
-struct SweepQueryDebugStats {
+struct SweepPolicyDebugTrace {
     uint32_t preFilterRejects         = 0;
     uint32_t postFilterRejects        = 0;
     uint32_t postFilterFeatureRejects = 0;
@@ -63,7 +63,7 @@ struct SweepQueryDebugStats {
 //   - No virtual functions; intended for inline dispatch in query loops.
 struct CharacterMoveSweepCallback {
     const SweepFilter* filter = nullptr;
-    SweepQueryDebugStats* queryDebug = nullptr;
+    SweepPolicyDebugTrace* policyDebug = nullptr;
 
     // -----------------------------------------------------------------------
     // PreFilter
@@ -109,7 +109,7 @@ struct CharacterMoveSweepCallback {
         (void)t;
 
         if (!filter || !filter->active) {
-            if (queryDebug) queryDebug->acceptedBlocks++;
+            if (policyDebug) policyDebug->acceptedBlocks++;
             return QueryHitType::Block;
         }
 
@@ -119,23 +119,23 @@ struct CharacterMoveSweepCallback {
         if (applyFilter) {
             const int featureClass = FeatureClassFromPacked(featureId);
             if (featureClass > static_cast<int>(filter->maxFeatureClass)) {
-                if (queryDebug) {
-                    queryDebug->postFilterRejects++;
-                    queryDebug->postFilterFeatureRejects++;
+                if (policyDebug) {
+                    policyDebug->postFilterRejects++;
+                    policyDebug->postFilterFeatureRejects++;
                 }
                 return QueryHitType::None;
             }
 
             if (Dot(normal, filter->refDir) < filter->minDot) {
-                if (queryDebug) {
-                    queryDebug->postFilterRejects++;
-                    queryDebug->postFilterNormalRejects++;
+                if (policyDebug) {
+                    policyDebug->postFilterRejects++;
+                    policyDebug->postFilterNormalRejects++;
                 }
                 return QueryHitType::None;
             }
         }
 
-        if (queryDebug) queryDebug->acceptedBlocks++;
+        if (policyDebug) policyDebug->acceptedBlocks++;
         return QueryHitType::Block;
     }
 };
