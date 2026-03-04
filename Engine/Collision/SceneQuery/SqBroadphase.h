@@ -15,6 +15,7 @@
 //
 // CONTRACT:
 //   - Standalone: includes only SqTypes.h.
+//   - AabbAabb_SweepInterval: in/out interval refinement on caller range.
 //   - AabbAabb_SweepInterval01: returns true if overlap window exists in [0,1].
 //   - CapsuleAabbAtT: produces conservative AABB for capsule at time t.
 //
@@ -32,21 +33,37 @@
 namespace Engine { namespace Collision { namespace sq {
 
 // ---- Time-window: moving AABB vs static AABB ----------------------------
-// a(t) = a0 + v*t, t in [0,1].
-// Returns true if overlap window [tEnter, tExit] exists and intersects [0,1].
-inline bool AabbAabb_SweepInterval01(const AABB& a0, const Vec3& v, const AABB& b,
-                                      float& tEnter, float& tExit)
+// General in/out form.
+// a(t) = a0 + v*t. Caller provides an initial time window [tEnter, tExit].
+// This function intersects that window with this AABB pair's overlap window.
+inline bool AabbAabb_SweepInterval(const AABB& a0, const Vec3& v, const AABB& b,
+                                   float& tEnter, float& tExit)
 {
-    tEnter = 0.0f; tExit = 1.0f;
+    if (tEnter > tExit) return false;
 
     auto axis = [&](float aMin, float aMax, float vel, float bMin, float bMax) -> bool {
-        if (Abs(vel) < kEpsParallel) return !(aMax < bMin || aMin > bMax);
-        float t0 = (bMin - aMax) / vel;
-        float t1 = (bMax - aMin) / vel;
-        float enter = (std::min)(t0, t1);
-        float exit  = (std::max)(t0, t1);
-        tEnter = (std::max)(tEnter, enter);
-        tExit  = (std::min)(tExit,  exit);
+        if (Abs(vel) < kEpsParallel) {
+            // No relative motion on this axis -> must already overlap on this axis.
+            return !(aMax < bMin || aMin > bMax);
+        }
+
+        // What this axis solves:
+        //   A(t) = [aMin + vel*t, aMax + vel*t], B = [bMin, bMax]
+        //   overlap <=> (aMin + vel*t <= bMax) and (aMax + vel*t >= bMin)
+        //
+        // Rearranged bounds use:
+        //   t0 = (bMin - aMax) / vel
+        //   t1 = (bMax - aMin) / vel
+        //
+        // If vel < 0, inequality direction flips automatically through min/max,
+        // so negative velocity needs no special-case branch.
+        const float t0 = (bMin - aMax) / vel;
+        const float t1 = (bMax - aMin) / vel;
+        const float axisEnter = (std::min)(t0, t1);
+        const float axisExit = (std::max)(t0, t1);
+
+        tEnter = (std::max)(tEnter, axisEnter);
+        tExit = (std::min)(tExit, axisExit);
         return tEnter <= tExit;
     };
 
@@ -54,10 +71,16 @@ inline bool AabbAabb_SweepInterval01(const AABB& a0, const Vec3& v, const AABB& 
     if (!axis(a0.minY, a0.maxY, v.y, b.minY, b.maxY)) return false;
     if (!axis(a0.minZ, a0.maxZ, v.z, b.minZ, b.maxZ)) return false;
 
-    if (tExit < 0.0f || tEnter > 1.0f) return false;
-    tEnter = (std::max)(tEnter, 0.0f);
-    tExit  = (std::min)(tExit,  1.0f);
     return tEnter <= tExit;
+}
+
+// Normalized [0,1] wrapper.
+inline bool AabbAabb_SweepInterval01(const AABB& a0, const Vec3& v, const AABB& b,
+                                     float& tEnter, float& tExit)
+{
+    tEnter = 0.0f;
+    tExit = 1.0f;
+    return AabbAabb_SweepInterval(a0, v, b, tEnter, tExit);
 }
 
 // ---- Capsule AABB at time t (translation only) --------------------------

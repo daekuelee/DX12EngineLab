@@ -135,8 +135,9 @@ inline Hit SweepCapsuleClosestHit_Fast(
 
     scratch.sp = 0;
 
-    float rE, rL;
-    if (!AabbAabb_SweepInterval01(cap0, in.delta, bvh.nodes[bvh.root].bounds, rE, rL))
+    float rE = 0.0f;
+    float rL = best.t;
+    if (!AabbAabb_SweepInterval(cap0, in.delta, bvh.nodes[bvh.root].bounds, rE, rL))
         return best;
 
     scratch.stack[scratch.sp++] = { bvh.root, rE, rL };
@@ -155,13 +156,13 @@ inline Hit SweepCapsuleClosestHit_Fast(
             for (uint32_t k = 0; k < node.primCount; ++k) {
                 const PrimRef& pref = bvh.prims[bvh.primIdx[node.primStart + k]];
 
-                float pE, pL;
-                if (!AabbAabb_SweepInterval01(cap0, in.delta, pref.bounds, pE, pL))
-                    continue;
+                float pE = task.tEnter;
+                float pL = task.tExit;
+                if (pL > best.t) pL = best.t;
 
-                float lo = (std::max)(task.tEnter, pE);
-                float hi = (std::min)(task.tExit,  pL);
-                if (lo >= best.t || lo > hi) continue;
+                if (!AabbAabb_SweepInterval(cap0, in.delta, pref.bounds, pE, pL))
+                    continue;
+                if (pE >= best.t) continue;
 
                 float t; Vec3 n; uint32_t f;
                 if (!SweepCapsulePrim_TOI01(bvh, in, cfg, pref,
@@ -180,7 +181,7 @@ inline Hit SweepCapsuleClosestHit_Fast(
                         continue;
                 }
 
-                if (t < lo || t > hi) continue;
+                if (t < pE || t > pL) continue;
 
                 if (!best.hit || BetterHit(t, pref.type, pref.index, f,
                                             best.t, best.type, best.index,
@@ -200,14 +201,14 @@ inline Hit SweepCapsuleClosestHit_Fast(
         // Internal node: push children
         // SSOT: right first, left last (left popped first = deterministic DFS order)
         auto pushChild = [&](uint32_t child) {
-            float cE, cL;
-            if (!AabbAabb_SweepInterval01(cap0, in.delta, bvh.nodes[child].bounds, cE, cL))
+            float cE = task.tEnter;
+            float cL = task.tExit;
+            if (cL > best.t) cL = best.t;
+
+            if (!AabbAabb_SweepInterval(cap0, in.delta, bvh.nodes[child].bounds, cE, cL))
                 return;
-            float lo = (std::max)(task.tEnter, cE);
-            float hi = (std::min)(task.tExit,  cL);
-            if (hi > best.t) hi = best.t;
-            if (lo > hi) return;
-            scratch.stack[scratch.sp++] = { child, lo, hi };
+            if (cE >= best.t) return;
+            scratch.stack[scratch.sp++] = { child, cE, cL };
         };
 
         // Deterministic order: right pushed first, left pushed last (popped first)
