@@ -28,8 +28,20 @@ PhysX keeps public `PxVec3` as three public floats and uses internal SIMD types 
 
 Do not make `Vec3` itself a 16-byte SIMD type.
 
+## SIMD Backend V1
+
+- `Engine::Math::simd::Vec3V` is an internal backend type only.
+- `Vec3V` may use SSE registers or scalar fallback depending on compile flags.
+- `LoadU(Vec3)` and `StoreU(Vec3V)` are the boundary between storage and backend.
+- `EL_MATH_FORCE_SCALAR` disables SIMD at compile time.
+- `EL_MATH_ENABLE_SIMD` is a compile-time route flag, not a runtime dispatch mechanism.
+- V1 covers parity for add, subtract, scale, component multiply, min, max, abs, dot, and cross.
+- V1 intentionally does not provide SIMD normalization or rsqrt behavior.
+- BVH or SceneQuery hot-path adoption must happen in a later patch after parity tests pass.
+
 ## Required Tests
 
 - Compile-only include proof for `Engine/Math/Vec3.h`.
 - Static assertions for size, alignment, standard layout, and trivial copyability.
 - Deterministic checks for `Dot`, `Cross`, `NormalizeSafe`, projection, rejection, and component min/max.
+- SIMD parity self-test for scalar fallback and SIMD-enabled builds.

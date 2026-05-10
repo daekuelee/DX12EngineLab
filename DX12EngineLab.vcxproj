@@ -137,6 +137,8 @@
     <ClInclude Include="Engine\WorldCollisionMath.h" />
     <ClInclude Include="Engine\Math\MathCommon.h" />
     <ClInclude Include="Engine\Math\Vec3.h" />
+    <ClInclude Include="Engine\Math\Vec3Simd.h" />
+    <ClInclude Include="Engine\Math\Vec3SimdSelfTest.h" />
     <ClInclude Include="Engine\Collision\CollisionTypes.h" />
     <ClInclude Include="Engine\Collision\CollisionSceneView.h" />
     <ClInclude Include="Engine\Collision\CapsuleMovement.h" />
@@ -189,6 +191,7 @@
     <ClCompile Include="Engine\FrameClock.cpp" />
     <ClCompile Include="Engine\WorldState.cpp" />
     <ClCompile Include="Engine\Math\Vec3_compilecheck.cpp" />
+    <ClCompile Include="Engine\Math\Vec3SimdSelfTest.cpp" />
     <ClCompile Include="Engine\Collision\CapsuleMovement.cpp" />
     <ClCompile Include="Engine\Collision\CollisionWorld.cpp" />
     <ClCompile Include="Engine\Collision\KinematicCharacterController.cpp" />
