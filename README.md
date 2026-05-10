@@ -128,15 +128,9 @@ Important KCC contracts currently documented in source:
 - larger KCC work is intentionally deferred until a concrete repro returns:
   `docs/audits/kcc/13-post-initial-mtd-remaining-work.md`
 
-Safe portfolio wording:
-
-> Built and instrumented an experimental capsule KCC / SceneQuery subsystem and
-> fixed visible wall-climb/upward-pop cases by separating sweep hits, initial
-> overlap recovery, and pose-only correction semantics.
-
-Unsafe wording:
-
-> Production-grade character controller.
+The current collision claim is intentionally scoped: this is an experimental
+capsule KCC / SceneQuery subsystem used to debug wall-climb/upward-pop behavior
+and clarify movement contracts. It is not presented as production physics.
 
 ### 4. Sweep, initial overlap, and MTD-like recovery
 
@@ -244,14 +238,9 @@ What has been implemented or instrumented:
 - documented claim boundary for SIMD/SoA work:
   `docs/audits/scenequery/12-bvh4-simd-soa-traversal-hardening.md`
 
-Allowed claim:
-
-> Hardened a BVH4 packet child-test prototype so scalar and packet traversal
-> share collector semantics while exposing packet-lane metrics.
-
-Disallowed claim:
-
-> Implemented PhysX BV4 or proved SIMD speedup.
+The BVH4 work is framed as a measured prototype boundary: scalar and packet
+child-test paths share collector semantics, and packet-lane metrics are exposed
+for verification. It is not a claim of PhysX BV4 parity or proven speedup.
 
 ## Demo Evidence
 
