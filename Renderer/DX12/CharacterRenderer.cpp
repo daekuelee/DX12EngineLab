@@ -91,10 +91,15 @@ namespace Renderer
 
     void CharacterRenderer::SetPawnTransform(float posX, float posY, float posZ, float yaw)
     {
-        m_posX = posX;
-        m_posY = posY;
-        m_posZ = posZ;
-        m_yaw = yaw;
+        SetPawnTransform({
+            {posX, posY, posZ},
+            Engine::Math::QuatFromYawY(yaw)
+        });
+    }
+
+    void CharacterRenderer::SetPawnTransform(const Engine::Math::RigidTransform& transform)
+    {
+        m_pawnTransform = Engine::Math::NormalizeRigidTransformSafe(transform);
     }
 
     DirectX::XMFLOAT4X4 CharacterRenderer::BuildPartWorldMatrix(int partIndex) const
@@ -105,9 +110,12 @@ namespace Renderer
         XMMATRIX scale = XMMatrixScaling(part.scaleX, part.scaleY, part.scaleZ);
         XMMATRIX localTranslate = XMMatrixTranslation(part.offsetX, part.offsetY, part.offsetZ);
 
-        // Build pawn world transform: rotate around Y * translate to pawn position
-        XMMATRIX pawnRotate = XMMatrixRotationY(m_yaw);
-        XMMATRIX pawnTranslate = XMMatrixTranslation(m_posX, m_posY, m_posZ);
+        // Build pawn world transform from the rigid pose boundary.
+        const Engine::Math::Quat q = m_pawnTransform.rotation;
+        const Engine::Math::Vec3 p = m_pawnTransform.position;
+        XMVECTOR pawnQuat = XMVectorSet(q.x, q.y, q.z, q.w);
+        XMMATRIX pawnRotate = XMMatrixRotationQuaternion(pawnQuat);
+        XMMATRIX pawnTranslate = XMMatrixTranslation(p.x, p.y, p.z);
 
         // Compose: Scale * LocalOffset * PawnRotation * PawnTranslation
         XMMATRIX world = XMMatrixMultiply(scale, localTranslate);

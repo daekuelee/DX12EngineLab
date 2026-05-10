@@ -7,6 +7,7 @@
 #include <vector>
 #include "InputState.h"
 #include "WorldTypes.h"
+#include "Math/Transform.h"
 #include "Collision/CollisionWorld.h"
 #include "Collision/KinematicCharacterController.h"
 #include "../Renderer/DX12/KccTraceTypes.h"
@@ -27,6 +28,7 @@ namespace Engine
         void TickFixed(const InputState& input, float fixedDt);   // 60 Hz physics
         void TickFrame(float frameDt);                            // Variable dt smoothing
         DirectX::XMFLOAT4X4 BuildViewProj(float aspect) const;
+        Math::RigidTransform BuildPawnRenderTransform() const;
         Renderer::HUDSnapshot BuildSnapshot() const;
         void ApplyKccTraceUi(const Renderer::KccTraceUiState& state,
                               const Renderer::KccTraceUiActions& actions);

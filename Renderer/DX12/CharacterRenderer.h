@@ -4,6 +4,7 @@
 #include <wrl/client.h>
 #include <DirectXMath.h>
 #include <cstdint>
+#include "../../Engine/Math/Transform.h"
 
 namespace Renderer
 {
@@ -45,6 +46,7 @@ namespace Renderer
 
         // Called by App each frame
         void SetPawnTransform(float posX, float posY, float posZ, float yaw);
+        void SetPawnTransform(const Engine::Math::RigidTransform& transform);
 
         // Write matrices to CPU-accessible memory (called by Dx12Context after UploadArena::Allocate)
         void WriteMatrices(void* dest);
@@ -68,8 +70,7 @@ namespace Renderer
         ID3D12Device* m_device = nullptr;
         Microsoft::WRL::ComPtr<ID3D12Resource> m_transformsBuffer;  // DEFAULT heap
         D3D12_GPU_DESCRIPTOR_HANDLE m_srvGpuHandle = {};  // Persistent SRV (reserved slot 3)
-        float m_posX = 0, m_posY = 0, m_posZ = 0;
-        float m_yaw = 0;
+        Engine::Math::RigidTransform m_pawnTransform{};
         bool m_valid = false;
 
         static const CharacterPart s_parts[PartCount];

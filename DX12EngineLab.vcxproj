@@ -136,6 +136,7 @@
     <ClInclude Include="Engine\WorldTypes.h" />
     <ClInclude Include="Engine\WorldCollisionMath.h" />
     <ClInclude Include="Engine\Math\MathCommon.h" />
+    <ClInclude Include="Engine\Math\Transform.h" />
     <ClInclude Include="Engine\Math\Vec3.h" />
     <ClInclude Include="Engine\Math\Vec3Simd.h" />
     <ClInclude Include="Engine\Math\Vec3SimdSelfTest.h" />
@@ -190,6 +191,7 @@
     <ClCompile Include="Engine\App.cpp" />
     <ClCompile Include="Engine\FrameClock.cpp" />
     <ClCompile Include="Engine\WorldState.cpp" />
+    <ClCompile Include="Engine\Math\Transform_compilecheck.cpp" />
     <ClCompile Include="Engine\Math\Vec3_compilecheck.cpp" />
     <ClCompile Include="Engine\Math\Vec3SimdSelfTest.cpp" />
     <ClCompile Include="Engine\Collision\CapsuleMovement.cpp" />

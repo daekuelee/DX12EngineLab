@@ -215,12 +215,7 @@ namespace Engine
             m_renderer.SetHUDSnapshot(snap);
 
             // Send pawn transform for character rendering
-            m_renderer.SetPawnTransform(
-                m_worldState.GetPawnPosX(),
-                m_worldState.GetPawnPosY(),
-                m_worldState.GetPawnPosZ(),
-                m_worldState.GetControlYaw()
-            );
+            m_renderer.SetPawnTransform(m_worldState.BuildPawnRenderTransform());
         }
         // else: Free camera mode - renderer uses its internal FreeCamera
 
