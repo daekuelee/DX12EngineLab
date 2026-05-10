@@ -35,6 +35,7 @@
 #include "SqBVH.h"
 #include "SqBroadphase.h"
 #include "SqPrimitiveTests.h"
+#include "SqMetrics.h"
 
 namespace Engine { namespace Collision { namespace sq {
 
@@ -56,26 +57,44 @@ struct QueryScratch {
     uint32_t sp = 0;
     uint32_t maxSp = 0;
     bool overflowed = false;
+    QueryMetrics metrics{};
 };
 
-inline void ResetQueryScratch(QueryScratch& scratch)
+inline void ResetQueryScratch(QueryScratch& scratch,
+                              QueryKind kind = QueryKind::Unknown,
+                              QueryBackend backend = QueryBackend::BinaryBVH)
 {
     scratch.sp = 0;
     scratch.maxSp = 0;
     scratch.overflowed = false;
+    ResetQueryMetrics(scratch.metrics, kind, backend);
 }
 
 inline bool PushQueryTask(QueryScratch& scratch, const NodeTask& task)
 {
     if (scratch.sp >= QueryScratch::Capacity) {
         scratch.overflowed = true;
+        scratch.metrics.overflowed = true;
         return false;
     }
 
     scratch.stack[scratch.sp++] = task;
-    if (scratch.maxSp < scratch.sp)
+    if (scratch.maxSp < scratch.sp) {
         scratch.maxSp = scratch.sp;
+        scratch.metrics.maxStackDepth = scratch.maxSp;
+    }
     return true;
+}
+
+inline void FinishSweepQueryMetrics(QueryMetrics& metrics, const Hit& hit)
+{
+    metrics.resultHit = hit.hit;
+    metrics.resultT = hit.t;
+}
+
+inline void FinishOverlapQueryMetrics(QueryMetrics& metrics, uint32_t contactCount)
+{
+    metrics.resultContactCount = contactCount;
 }
 
 // ---- Deterministic hit comparison (SSOT tie-break cascade) ---------------
@@ -146,18 +165,30 @@ inline void ConsiderSweepCapsulePrim(
     float tExit,
     const SweepFilter& filter,
     bool rejectInitialOverlap,
-    Hit& best)
+    Hit& best,
+    QueryMetrics* metrics = nullptr)
 {
     if (tExit > best.t) tExit = best.t;
 
-    if (!AabbAabb_SweepInterval(cap0, in.delta, pref.bounds, tEnter, tExit))
+    if (metrics)
+        ++metrics->primitiveAabbTests;
+
+    if (!AabbAabb_SweepInterval(cap0, in.delta, pref.bounds, tEnter, tExit)) {
+        if (metrics)
+            ++metrics->primitiveAabbRejects;
         return;
-    if (tEnter >= best.t)
+    }
+    if (tEnter >= best.t) {
+        if (metrics)
+            ++metrics->primitiveTimePrunes;
         return;
+    }
 
     float t; Vec3 n; uint32_t f;
     bool startPenetrating = false;
     float penetrationDepth = 0.0f;
+    if (metrics)
+        ++metrics->narrowphaseCalls;
     if (!SweepCapsulePrim_TOI01(bvh, in, cfg, pref,
                                rejectInitialOverlap,
                                filter.active ? &filter : nullptr,
@@ -165,19 +196,33 @@ inline void ConsiderSweepCapsulePrim(
                                penetrationDepth))
         return;
 
+    if (metrics)
+        ++metrics->rawHits;
+
     if (filter.active) {
         const bool applyFilter = !startPenetrating || filter.filterInitialOverlap;
-        if (applyFilter && Dot(n, filter.refDir) < filter.minDot)
+        if (applyFilter && Dot(n, filter.refDir) < filter.minDot) {
+            if (metrics)
+                ++metrics->filterRejects;
             return;
+        }
     }
 
-    if (t < tEnter || t > tExit)
+    if (t < tEnter || t > tExit) {
+        if (metrics)
+            ++metrics->primitiveTimePrunes;
         return;
+    }
+
+    if (metrics)
+        ++metrics->acceptedHits;
 
     if (!best.hit || BetterHit(t, pref.type, pref.index, f,
                                 best.t, best.type, best.index,
                                 best.featureId, cfg.tieEpsT))
     {
+        if (metrics)
+            ++metrics->bestHitUpdates;
         best.hit = true;
         best.t = t;
         best.type = pref.type;
@@ -194,8 +239,12 @@ inline Hit SweepCapsuleClosestHit_LinearFallback(
     const SweepCapsuleInput& in,
     const SweepConfig& cfg,
     const SweepFilter& filter,
-    bool rejectInitialOverlap)
+    bool rejectInitialOverlap,
+    QueryMetrics* metrics = nullptr)
 {
+    if (metrics)
+        metrics->fallbackUsed = true;
+
     Hit best{};
     best.hit = false;
     best.t = 1.0f;
@@ -207,7 +256,7 @@ inline Hit SweepCapsuleClosestHit_LinearFallback(
     for (uint32_t i = 0; i < static_cast<uint32_t>(bvh.prims.size()); ++i) {
         const PrimRef& pref = bvh.prims[i];
         ConsiderSweepCapsulePrim(bvh, in, cfg, cap0, pref, 0.0f, best.t,
-                                 filter, rejectInitialOverlap, best);
+                                 filter, rejectInitialOverlap, best, metrics);
     }
 
     return best;
@@ -239,7 +288,7 @@ inline Hit SweepCapsuleClosestHit_Fast(
     best.hit = false;
     best.t = 1.0f;
 
-    ResetQueryScratch(scratch);
+    ResetQueryScratch(scratch, QueryKind::SweepCapsuleClosest, QueryBackend::BinaryBVH);
 
     if (IsEmptyBVH(bvh))
         return best;
@@ -249,27 +298,39 @@ inline Hit SweepCapsuleClosestHit_Fast(
 
     float rE = 0.0f;
     float rL = best.t;
-    if (!AabbAabb_SweepInterval(cap0, in.delta, bvh.nodes[bvh.root].bounds, rE, rL))
+    ++scratch.metrics.nodeAabbTests;
+    if (!AabbAabb_SweepInterval(cap0, in.delta, bvh.nodes[bvh.root].bounds, rE, rL)) {
+        ++scratch.metrics.nodeAabbRejects;
         return best;
+    }
 
     PushQueryTask(scratch, { bvh.root, rE, rL });
 
     while (scratch.sp) {
         NodeTask task = scratch.stack[--scratch.sp];
+        ++scratch.metrics.nodesPopped;
 
-        if (task.tEnter >= best.t) continue;
+        if (task.tEnter >= best.t) {
+            ++scratch.metrics.nodeTimePrunes;
+            continue;
+        }
         if (task.tExit  > best.t)  task.tExit = best.t;
-        if (task.tEnter > task.tExit) continue;
+        if (task.tEnter > task.tExit) {
+            ++scratch.metrics.nodeTimePrunes;
+            continue;
+        }
 
         const BVHNode& node = bvh.nodes[task.node];
 
         // Leaf node: test primitives
         if (node.primCount) {
+            ++scratch.metrics.leafNodesVisited;
             for (uint32_t k = 0; k < node.primCount; ++k) {
                 const PrimRef& pref = bvh.prims[bvh.primIdx[node.primStart + k]];
                 ConsiderSweepCapsulePrim(bvh, in, cfg, cap0, pref,
                                          task.tEnter, task.tExit,
-                                         filter, rejectInitialOverlap, best);
+                                         filter, rejectInitialOverlap, best,
+                                         &scratch.metrics);
             }
             continue;
         }
@@ -279,9 +340,15 @@ inline Hit SweepCapsuleClosestHit_Fast(
             float cL = task.tExit;
             if (cL > best.t) cL = best.t;
 
-            if (!AabbAabb_SweepInterval(cap0, in.delta, bvh.nodes[child].bounds, cE, cL))
+            ++scratch.metrics.nodeAabbTests;
+            if (!AabbAabb_SweepInterval(cap0, in.delta, bvh.nodes[child].bounds, cE, cL)) {
+                ++scratch.metrics.nodeAabbRejects;
                 return false;
-            if (cE >= best.t) return false;
+            }
+            if (cE >= best.t) {
+                ++scratch.metrics.nodeTimePrunes;
+                return false;
+            }
 
             out = { child, cE, cL };
             return true;
@@ -305,9 +372,14 @@ inline Hit SweepCapsuleClosestHit_Fast(
     }
 
     if (scratch.overflowed)
-        return SweepCapsuleClosestHit_LinearFallback(
-            bvh, in, cfg, filter, rejectInitialOverlap);
+    {
+        Hit fallback = SweepCapsuleClosestHit_LinearFallback(
+            bvh, in, cfg, filter, rejectInitialOverlap, &scratch.metrics);
+        FinishSweepQueryMetrics(scratch.metrics, fallback);
+        return fallback;
+    }
 
+    FinishSweepQueryMetrics(scratch.metrics, best);
     return best;
 }
 
@@ -346,8 +418,12 @@ inline void InsertOverlapContactTopK(
     OverlapContact* outContacts,
     uint32_t maxContacts,
     uint32_t& contactCount,
-    const OverlapContact& contact)
+    const OverlapContact& contact,
+    QueryMetrics* metrics = nullptr)
 {
+    if (metrics)
+        ++metrics->contactsGenerated;
+
     if (contactCount < maxContacts) {
         outContacts[contactCount++] = contact;
         return;
@@ -359,8 +435,11 @@ inline void InsertOverlapContactTopK(
             shallowest = i;
     }
 
-    if (contact.depth > outContacts[shallowest].depth)
+    if (contact.depth > outContacts[shallowest].depth) {
+        if (metrics)
+            ++metrics->contactsEvicted;
         outContacts[shallowest] = contact;
+    }
 }
 
 // Per-primitive overlap dispatch
@@ -388,8 +467,12 @@ inline bool OverlapCapsulePrim(
 inline uint32_t OverlapCapsuleContacts_LinearFallback(
     const StaticBVH& bvh,
     const Vec3& segA, const Vec3& segB, float radius,
-    OverlapContact* outContacts, uint32_t maxContacts)
+    OverlapContact* outContacts, uint32_t maxContacts,
+    QueryMetrics* metrics = nullptr)
 {
+    if (metrics)
+        metrics->fallbackUsed = true;
+
     if (maxContacts == 0) return 0;
     if (maxContacts > kMaxOverlapContacts) maxContacts = kMaxOverlapContacts;
     if (IsEmptyBVH(bvh)) return 0;
@@ -399,16 +482,27 @@ inline uint32_t OverlapCapsuleContacts_LinearFallback(
 
     for (uint32_t i = 0; i < static_cast<uint32_t>(bvh.prims.size()); ++i) {
         const PrimRef& pref = bvh.prims[i];
-        if (!TestAabbAabb(capBounds, pref.bounds))
+        if (metrics)
+            ++metrics->primitiveAabbTests;
+        if (!TestAabbAabb(capBounds, pref.bounds)) {
+            if (metrics)
+                ++metrics->primitiveAabbRejects;
             continue;
+        }
 
         OverlapContact contact;
+        if (metrics)
+            ++metrics->narrowphaseCalls;
         if (!OverlapCapsulePrim(bvh, segA, segB, radius, pref, contact))
             continue;
 
+        if (metrics) {
+            ++metrics->rawHits;
+            ++metrics->acceptedHits;
+        }
         contact.type = pref.type;
         contact.index = pref.index;
-        InsertOverlapContactTopK(outContacts, maxContacts, contactCount, contact);
+        InsertOverlapContactTopK(outContacts, maxContacts, contactCount, contact, metrics);
     }
 
     std::sort(outContacts, outContacts + contactCount, OverlapContactBetter);
@@ -421,52 +515,79 @@ inline uint32_t OverlapCapsuleContacts_Fast(
     OverlapContact* outContacts, uint32_t maxContacts,
     QueryScratch& scratch)
 {
-    if (maxContacts == 0) return 0;
+    ResetQueryScratch(scratch, QueryKind::OverlapCapsuleContacts, QueryBackend::BinaryBVH);
+    if (maxContacts == 0) {
+        FinishOverlapQueryMetrics(scratch.metrics, 0);
+        return 0;
+    }
     if (maxContacts > kMaxOverlapContacts) maxContacts = kMaxOverlapContacts;
 
-    ResetQueryScratch(scratch);
     if (IsEmptyBVH(bvh)) return 0;
 
     AABB capBounds = CapsuleAabbStatic(segA, segB, radius);
     uint32_t contactCount = 0;
 
-    if (!TestAabbAabb(capBounds, bvh.nodes[bvh.root].bounds))
+    ++scratch.metrics.nodeAabbTests;
+    if (!TestAabbAabb(capBounds, bvh.nodes[bvh.root].bounds)) {
+        ++scratch.metrics.nodeAabbRejects;
         return 0;
+    }
 
     PushQueryTask(scratch, { bvh.root, 0.0f, 1.0f });
 
     while (scratch.sp) {
         NodeTask task = scratch.stack[--scratch.sp];
+        ++scratch.metrics.nodesPopped;
         const BVHNode& node = bvh.nodes[task.node];
 
         if (node.primCount) {
+            ++scratch.metrics.leafNodesVisited;
             for (uint32_t k = 0; k < node.primCount; ++k) {
                 const PrimRef& pref = bvh.prims[bvh.primIdx[node.primStart + k]];
-                if (!TestAabbAabb(capBounds, pref.bounds))
+                ++scratch.metrics.primitiveAabbTests;
+                if (!TestAabbAabb(capBounds, pref.bounds)) {
+                    ++scratch.metrics.primitiveAabbRejects;
                     continue;
+                }
 
                 OverlapContact contact;
+                ++scratch.metrics.narrowphaseCalls;
                 if (!OverlapCapsulePrim(bvh, segA, segB, radius, pref, contact))
                     continue;
 
+                ++scratch.metrics.rawHits;
+                ++scratch.metrics.acceptedHits;
                 contact.type = pref.type;
                 contact.index = pref.index;
-                InsertOverlapContactTopK(outContacts, maxContacts, contactCount, contact);
+                InsertOverlapContactTopK(outContacts, maxContacts, contactCount, contact,
+                                         &scratch.metrics);
             }
             continue;
         }
 
+        ++scratch.metrics.nodeAabbTests;
         if (TestAabbAabb(capBounds, bvh.nodes[node.right].bounds))
             PushQueryTask(scratch, { node.right, 0.0f, 1.0f });
+        else
+            ++scratch.metrics.nodeAabbRejects;
+
+        ++scratch.metrics.nodeAabbTests;
         if (TestAabbAabb(capBounds, bvh.nodes[node.left].bounds))
             PushQueryTask(scratch, { node.left, 0.0f, 1.0f });
+        else
+            ++scratch.metrics.nodeAabbRejects;
     }
 
     if (scratch.overflowed)
-        return OverlapCapsuleContacts_LinearFallback(
-            bvh, segA, segB, radius, outContacts, maxContacts);
+    {
+        const uint32_t fallbackCount = OverlapCapsuleContacts_LinearFallback(
+            bvh, segA, segB, radius, outContacts, maxContacts, &scratch.metrics);
+        FinishOverlapQueryMetrics(scratch.metrics, fallbackCount);
+        return fallbackCount;
+    }
 
     std::sort(outContacts, outContacts + contactCount, OverlapContactBetter);
+    FinishOverlapQueryMetrics(scratch.metrics, contactCount);
     return contactCount;
 }
 
