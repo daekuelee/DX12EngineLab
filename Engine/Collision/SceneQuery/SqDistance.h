@@ -22,7 +22,8 @@
 //
 // REFERENCES:
 //   - Ericson, "Real-Time Collision Detection" (2005), Chapter 5
-//   - ex.cpp lines 312-470 (golden SSOT)
+//   - docs/agent-context/scenequery-refactor.md
+//   - docs/reference/physx/contracts/distance-closest-point.md
 // =========================================================================
 
 #include "SqTypes.h"

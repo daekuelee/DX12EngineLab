@@ -31,8 +31,9 @@
 //   - [PR3.4] Box triangulation: 12 tris cover all 6 faces (2 tris each)
 //
 // REFERENCES:
-//   - ex.cpp lines 578-1137 (golden SSOT)
-//   - PhysX capsule-triangle sweep (GJK-free prism decomposition)
+//   - docs/agent-context/scenequery-refactor.md
+//   - docs/reference/physx/contracts/capsule-triangle-sweep.md
+//   - docs/reference/physx/contracts/sweep-toi-hit-normal.md
 // =========================================================================
 
 #include "SqDistance.h"

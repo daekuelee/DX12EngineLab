@@ -14,15 +14,15 @@
 //
 // CONTRACT:
 //   - Standalone: includes only SqTypes.h.
-//   - Adapted from bpt:: namespace (ex2.cpp) into sq:: namespace.
-//   - No behavioral changes from reference.
+//   - Raw primitive predicates only; no SceneQuery/KCC policy.
 //
 // PROOF POINTS:
 //   - [PR3.3] TestSphereAABB: sphere centered on AABB face returns true
 //   - [PR3.3] TestTriangleAABB: separating axis correctly rejects non-overlapping pairs
 //
 // REFERENCES:
-//   - ex2.cpp lines 25-328 (golden SSOT, bpt_helpers.h)
+//   - docs/agent-context/scenequery-refactor.md
+//   - docs/reference/physx/contracts/intersection-raw.md
 //   - Ericson, RTCD Chapters 4-5
 // =========================================================================
 
