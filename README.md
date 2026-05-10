@@ -10,12 +10,10 @@ engineering threads:
 2. building enough collision / SceneQuery infrastructure to reason about capsule
    character movement bugs instead of treating them as black-box physics.
 
-**Demo capture:** [Watch the 60s 720p MP4](assets/media/demo-full.mp4)
+[![DX12EngineLab demo](assets/media/demo-main.gif)](assets/media/demo-full.mp4)
 
-> Public README target: add `assets/media/demo-main.png` or
-> `assets/media/demo-main.gif` above this line before the final GitHub link is
-> shared. The current MP4 is the full capture; a thumbnail/GIF will make the
-> first screen read more like an engine demo and less like a document.
+**Demo capture:** inline 14s loop from the engine demo.  
+Full capture: [60s 720p MP4](assets/media/demo-full.mp4)
 
 ```mermaid
 flowchart LR
@@ -128,15 +126,9 @@ Important KCC contracts currently documented in source:
 - larger KCC work is intentionally deferred until a concrete repro returns:
   `docs/audits/kcc/13-post-initial-mtd-remaining-work.md`
 
-Safe portfolio wording:
-
-> Built and instrumented an experimental capsule KCC / SceneQuery subsystem and
-> fixed visible wall-climb/upward-pop cases by separating sweep hits, initial
-> overlap recovery, and pose-only correction semantics.
-
-Unsafe wording:
-
-> Production-grade character controller.
+The current collision claim is intentionally scoped: this is an experimental
+capsule KCC / SceneQuery subsystem used to debug wall-climb/upward-pop behavior
+and clarify movement contracts. It is not presented as production physics.
 
 ### 4. Sweep, initial overlap, and MTD-like recovery
 
@@ -244,33 +236,23 @@ What has been implemented or instrumented:
 - documented claim boundary for SIMD/SoA work:
   `docs/audits/scenequery/12-bvh4-simd-soa-traversal-hardening.md`
 
-Allowed claim:
-
-> Hardened a BVH4 packet child-test prototype so scalar and packet traversal
-> share collector semantics while exposing packet-lane metrics.
-
-Disallowed claim:
-
-> Implemented PhysX BV4 or proved SIMD speedup.
+The BVH4 work is framed as a measured prototype boundary: scalar and packet
+child-test paths share collector semantics, and packet-lane metrics are exposed
+for verification. It is not a claim of PhysX BV4 parity or proven speedup.
 
 ## Demo Evidence
 
 Current curated media:
 
+- `assets/media/demo-main.gif`: 720x405, 14-second inline README loop showing
+  edge contact, character movement, HUD diagnostics, and SceneQuery/KCC debug
+  visualization.
+- `assets/media/demo-main.png`: 1280x720 still fallback for portfolio/PDF links.
 - `assets/media/demo-full.mp4`: 1280x720, 16:9, about 63 seconds.
 
-Recommended public media before sharing the final GitHub link:
+Optional extra media before sharing the final GitHub link:
 
-- `assets/media/demo-main.png`: first-frame or composed 16:9 thumbnail.
-- `assets/media/demo-main.gif`: 8-15 second loop showing 10,000 cubes, HUD,
-  draw-mode toggle, and character movement.
 - `assets/media/hud-uploadarena.png`: close-up HUD proof of UploadArena metrics.
-
-Suggested final layout once the thumbnail exists:
-
-```md
-[![DX12EngineLab demo](assets/media/demo-main.png)](assets/media/demo-full.mp4)
-```
 
 ## Controls
 
@@ -358,7 +340,7 @@ Open `DX12EngineLab.sln`, select `x64 / Debug`, and run with F5.
 
 Short term:
 
-- Add `demo-main.png` and `demo-main.gif` for the first README viewport.
+- Add one HUD close-up if UploadArena / frame metrics need stronger visual proof.
 - Keep README claims tied to source paths and current demo artifacts.
 - Keep collision claims honest: experimental KCC, not production physics.
 
