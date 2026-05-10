@@ -12,7 +12,8 @@
 // PIPELINE (per tick, sequential, deterministic):
 //   PreStep            -> snapshot $x_{old}$, save prev-tick flags
 //   IntegrateVertical  -> mode-aware gravity + jump -> $v_y$, $\Delta y$
-//   Recover            -> overlap push-out from previous tick (Bullet: recoverFromPenetration)
+//   Recover            -> actual-radius hard penetration cleanup
+//   InitialOverlapRecover -> startPenetrating inflated-radius pose fixup
 //   [capture x_sweep]  -> §3A baseline (post-recovery, pre-sweep)
 //   SimulateWalking    -> walking lateral move + support maintenance
 //   SimulateFalling    -> one diagonal air sweep + landing/air slide response
@@ -38,6 +39,8 @@
 //   docs/audits/kcc/02-walking-falling-reactive-stepup-semantics.md
 //   docs/audits/kcc/03-time-budget-movement-loop-semantics.md
 //   docs/audits/kcc/12-falling-airmove-v1-semantics.md
+// Invariant: Falling landing uses entry motion eligibility. A raw walkable
+//            hit during a just-started jump or upward air move is not a floor.
 //
 // EVIDENCE:
 //   CctDebug fields are filled every tick. Callers can inspect section 3A
@@ -62,6 +65,7 @@ namespace {
     constexpr float kPi      = 3.14159265358979f;
     constexpr float kMinDist = 1e-6f; // below this, a displacement is effectively zero
     constexpr float kStepMoveApproachEps = 1e-4f;
+    constexpr uint32_t kInitialOverlapRecoverMaxIters = 4;
 
     struct StepMoveHitView {
         CctStepMoveQueryKind kind = CctStepMoveQueryKind::ClearPath;
@@ -315,6 +319,7 @@ void KinematicCharacterControllerLegacy::PreStep()
     m_state.wasOnGround = m_state.onGround;
     m_state.wasJumping = (m_state.verticalVelocity > 0.0f && !m_state.onGround);
     m_currentStepOffset = 0.0f;
+    m_jumpStartedThisTick = false;
 }
 
 // =========================================================================
@@ -348,6 +353,7 @@ void KinematicCharacterControllerLegacy::IntegrateVertical(const CctInput& input
 
         SetModeFalling();
         m_state.verticalVelocity = m_config.jumpSpeed;
+        m_jumpStartedThisTick = true;
     }
 
     m_state.verticalVelocity -= m_config.gravity * dt;
@@ -478,20 +484,7 @@ void KinematicCharacterControllerLegacy::MoveWalkingLateral(const sq::Vec3& walk
             classifyStepMoveRawHit(raw, remaining, remainLen);
         attachFirstRaw(first, first);
 
-        if (!first.raw.hit || !first.raw.startPenetrating) {
-            return first;
-        }
-
-        // Current SceneQuery is closest-only. When the first raw fact is an
-        // explicit initial overlap, ask for the closest non-initial movement
-        // hit and classify it through the same Walking lateral-move contract.
-        sq::Hit nonInitial =
-            SweepClosest(from, remaining, approachFilter, true);
-        StepMoveHitView promoted =
-            classifyStepMoveRawHit(nonInitial, remaining, remainLen);
-        promoted.resweepUsed = true;
-        attachFirstRaw(promoted, first);
-        return promoted;
+        return first;
     };
 
     for (; iters < m_config.maxForwardIters && fraction > 0.01f; ++iters) {
@@ -522,8 +515,15 @@ void KinematicCharacterControllerLegacy::MoveWalkingLateral(const sq::Vec3& walk
             break;
         }
 
-        if (hitView.kind == CctStepMoveQueryKind::NeedsRecovery ||
-            hitView.kind == CctStepMoveQueryKind::UnsupportedForStepMove) {
+        if (hitView.kind == CctStepMoveQueryKind::NeedsRecovery) {
+            if (RecoverInitialOverlapForSweep()) {
+                continue;
+            }
+            m_debug.stuck = true;
+            break;
+        }
+
+        if (hitView.kind == CctStepMoveQueryKind::UnsupportedForStepMove) {
             m_debug.stuck = true;
             break;
         }
@@ -597,9 +597,26 @@ void KinematicCharacterControllerLegacy::MoveFallingAir(
         }
     };
 
+    auto makeAirBlockerFilter = [this](const sq::Vec3& remaining) {
+        sq::SweepFilter filter;
+        filter.refDir = sq::NormalizeSafe(remaining * -1.0f, m_config.up);
+        filter.minDot = kStepMoveApproachEps;
+        filter.active = true;
+        filter.filterInitialOverlap = true;
+        return filter;
+    };
+
+    const float entryVerticalVelocity = m_state.verticalVelocity;
     const sq::Vec3 verticalMove = m_config.up * m_state.verticalOffset;
     const sq::Vec3 airDelta = walkMove + verticalMove;
     const float airLen = sq::Len(airDelta);
+    const float originalMoveUp = sq::Dot(airDelta, m_config.up);
+    const bool landingMotionEligible =
+        !m_jumpStartedThisTick &&
+        entryVerticalVelocity <= 0.0f &&
+        originalMoveUp < -kMinDist;
+    const float nearZeroLandingT =
+        (std::max)(m_config.walkableNearZeroEps, m_config.sweep.tieEpsT);
     m_debug.stepDownDropDist =
         (m_state.verticalOffset < 0.0f) ? -m_state.verticalOffset : 0.0f;
 
@@ -626,17 +643,15 @@ void KinematicCharacterControllerLegacy::MoveFallingAir(
 
         sq::Hit hit = SweepClosest(m_currentPosition, remaining);
         if (hit.hit && hit.startPenetrating) {
-            sq::Hit nonInitial = SweepClosest(m_currentPosition, remaining,
-                                              sq::SweepFilter{}, true);
-            if (!nonInitial.hit) {
-                recordAirResult(CctFloorSemantic::FallingContinue,
-                                CctFloorSource::InitialOverlapSweep,
-                                CctFloorRejectReason::StartPenetrating,
-                                hit, false);
-                m_debug.stuck = true;
-                break;
+            if (RecoverInitialOverlapForSweep()) {
+                continue;
             }
-            hit = nonInitial;
+            recordAirResult(CctFloorSemantic::FallingContinue,
+                            CctFloorSource::InitialOverlapSweep,
+                            CctFloorRejectReason::StartPenetrating,
+                            hit, false);
+            m_debug.stuck = true;
+            break;
         }
 
         if (!hit.hit) {
@@ -645,19 +660,36 @@ void KinematicCharacterControllerLegacy::MoveFallingAir(
         }
         sawHit = true;
 
+        if (!landingMotionEligible && IsWalkable(hit.normal) &&
+            hit.t <= nearZeroLandingT) {
+            recordAirResult(CctFloorSemantic::FallingContinue,
+                            CctFloorSource::PrimarySweep,
+                            CctFloorRejectReason::NearSkinAmbiguousFallingHit,
+                            hit, false);
+
+            sq::Hit airBlocker = SweepClosest(
+                m_currentPosition,
+                remaining,
+                makeAirBlockerFilter(remaining),
+                true);
+            if (!airBlocker.hit) {
+                m_currentPosition = m_targetPosition;
+                break;
+            }
+            hit = airBlocker;
+        }
+
         const float safeT = (std::max)(
             0.0f, hit.t - m_config.sweep.skin / (std::max)(remainLen, kMinDist));
         m_currentPosition = m_currentPosition + remaining * safeT;
 
         const float moveUp = sq::Dot(remaining, m_config.up);
         const float normalUp = sq::Dot(hit.normal, m_config.up);
-        const bool descending =
-            (moveUp < -kMinDist) || (m_state.verticalVelocity <= 0.0f);
         const bool ascending =
             (moveUp > kMinDist) || (m_state.verticalVelocity > 0.0f);
         const bool walkable = IsWalkable(hit.normal);
 
-        if (descending && walkable) {
+        if (landingMotionEligible && walkable) {
             recordAirResult(CctFloorSemantic::FallingLand,
                             CctFloorSource::PrimarySweep,
                             CctFloorRejectReason::None,
@@ -668,6 +700,11 @@ void KinematicCharacterControllerLegacy::MoveFallingAir(
         }
 
         CctFloorRejectReason reject = CctFloorRejectReason::NotWalkable;
+        if (walkable && !landingMotionEligible) {
+            reject = hit.t <= nearZeroLandingT
+                ? CctFloorRejectReason::NearSkinAmbiguousFallingHit
+                : CctFloorRejectReason::WrongSemanticSource;
+        }
         if (ascending && normalUp < -kStepMoveApproachEps) {
             m_state.verticalVelocity = 0.0f;
             m_state.verticalOffset = 0.0f;
@@ -952,12 +989,86 @@ void KinematicCharacterControllerLegacy::UpdateGroundForWalking(float dt)
 }
 
 // =========================================================================
+// Initial-overlap recovery
+// =========================================================================
+// PRODUCES: m_currentPosition (pose-only correction for startPenetrating sweeps)
+// CONSUMES: m_currentPosition, inflated capsule geometry
+//
+// SSOT: docs/audits/kcc/12-falling-airmove-v1-semantics.md
+// REF: PhysX CCT C.mDistance==0 recovery applies mtd*depth with contactOffset.
+// Invariant: this path is event-scoped. It is called only after a movement
+// sweep reports startPenetrating, never as an always-on floor/support cleanup.
+
+bool KinematicCharacterControllerLegacy::RecoverInitialOverlapForSweep()
+{
+    const float inflatedRadius = m_geom.radius + m_config.contactOffset;
+    const float pullback =
+        (std::max)(1e-4f, m_config.contactOffset * 0.05f);
+    const float maxPush =
+        (std::max)(m_config.contactOffset * 2.0f, m_config.maxPenDepth);
+
+    bool moved = false;
+    uint32_t pushedIters = 0;
+    float deepestSeen = 0.0f;
+
+    for (uint32_t iter = 0; iter < kInitialOverlapRecoverMaxIters; ++iter) {
+        sq::Vec3 segA = m_currentPosition + m_config.up * m_geom.radius;
+        sq::Vec3 segB = m_currentPosition + m_config.up *
+            (m_geom.radius + 2.0f * m_geom.halfHeight);
+
+        sq::OverlapContact contacts[32];
+        uint32_t count = m_world->OverlapCapsuleContacts(
+            segA, segB, inflatedRadius, Q_Solid, contacts, 32);
+        if (count == 0) {
+            break;
+        }
+
+        deepestSeen = (std::max)(deepestSeen, contacts[0].depth);
+
+        sq::Vec3 pushSum{0, 0, 0};
+        for (uint32_t i = 0; i < count; ++i) {
+            const float correctionDepth = contacts[i].depth + pullback;
+            if (correctionDepth > 0.0f) {
+                pushSum = pushSum + contacts[i].normal * correctionDepth;
+            }
+        }
+
+        if (sq::LenSq(pushSum) < kMinDist * kMinDist) {
+            pushSum = contacts[0].normal * (contacts[0].depth + pullback);
+        }
+
+        const float pushLen = sq::Len(pushSum);
+        if (pushLen <= kMinDist) {
+            break;
+        }
+
+        sq::Vec3 push = pushSum;
+        if (pushLen > maxPush) {
+            push = push * (maxPush / pushLen);
+        }
+
+        m_currentPosition = m_currentPosition + push;
+        m_debug.initialRecoverPushMag += sq::Len(push);
+        pushedIters++;
+        moved = true;
+    }
+
+    m_debug.initialRecoverIters += pushedIters;
+    m_debug.initialRecoverDeepestDepth =
+        (std::max)(m_debug.initialRecoverDeepestDepth, deepestSeen);
+    if (!moved) {
+        m_debug.initialRecoverFailures++;
+    }
+    return moved;
+}
+
+// =========================================================================
 // Recover
 // =========================================================================
-// PRODUCES: m_currentPosition (pushed out of overlaps)
+// PRODUCES: m_currentPosition (pushed out of hard actual-radius overlaps)
 // CONSUMES: m_currentPosition, capsule geometry
 //
-// ALGORITHM (Bullet single-pass architecture):
+// ALGORITHM (legacy Bullet-style hard penetration cleanup):
 //   overlaps = OverlapCapsuleContacts(capsuleSegA, capsuleSegB, radius)
 //   if none: return false
 //   sum normals for all overlaps with depth > slop, fallback to deepest if sum collapses,
@@ -969,6 +1080,7 @@ void KinematicCharacterControllerLegacy::UpdateGroundForWalking(float dt)
 //   $dx_{corr} = x_{sweep} - x_{old}$ NEVER feeds into velocity.
 //   m_xSweep is captured AFTER recovery completes.
 // HAZARD: must not modify verticalVelocity or onGround.
+// HAZARD: this function is not for sweep startPenetrating skin-band fixup.
 // EVIDENCE: CctDebug.recoverIters, CctDebug.recoverPushMag
 
 bool KinematicCharacterControllerLegacy::Recover()

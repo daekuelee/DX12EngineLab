@@ -550,6 +550,9 @@ namespace Engine
                     << " onGroundFinal=" << (d.afterWriteback.onGround ? 1 : 0)
                     << " stepUpOffset=" << d.stepUpOffset
                     << " recoverPush=" << d.recoverPushMag
+                    << " initialRecoverPush=" << d.initialRecoverPushMag
+                    << " initialRecoverIters=" << d.initialRecoverIters
+                    << " initialRecoverFail=" << d.initialRecoverFailures
                     << " postRecoverPush=" << d.postRecoverMag
                     << " stepMoveFirstT=" << d.stepMoveFirstTOI
                     << " stepMoveFirstN=(" << d.stepMoveFirstNormal.x << ','

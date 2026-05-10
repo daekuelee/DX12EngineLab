@@ -48,14 +48,15 @@ struct CctConfig {
     // SSOT epsilon: all contact/overlap thresholds derive from this single knob.
     //   sweep.skin  = contactOffset          (narrowphase margin)
     //   addedMargin = contactOffset          (legacy skin margin; not StepMove recovery)
-    //   maxPenDepth = contactOffset * 0.25   (Recover slop)
-    // Invariant: maxPenDepth < contactOffset (anything sweep detects, Recover resolves).
+    //   maxPenDepth = contactOffset * 0.25   (hard Recover slop)
+    // Invariant: maxPenDepth < contactOffset. Sweep initial overlap uses a
+    // separate inflated-radius recovery path; hard Recover stays actual-radius.
     float contactOffset = 0.02f;
 
     float addedMargin   = 0.02f;      // derived from contactOffset
     float maxPenDepth   = 0.005f;     // derived from contactOffset
     int   maxForwardIters = 10;       // StepForwardAndStrafe iteration limit
-    int   maxRecoverIters = 8;        // Deepest-only: 1 contact per iter, budget for 3-cube corners
+    int   maxRecoverIters = 8;        // actual-radius hard penetration cleanup budget
     uint32_t maxZeroHitPushes = 8;    // StepMove near-zero retry budget
     float recoverAlpha    = 0.2f;     // Bullet: 0.2 (GS projection fraction per contact)
     float walkableNearZeroEps = 1e-4f; // StepDown near-zero TOI threshold
@@ -166,6 +167,10 @@ struct CctDebug {
     uint32_t recoverIters    = 0;      // RecoverFromPenetration iterations used
     float    recoverPushMag  = 0.0f;  // total push-out magnitude applied
     float    recoverDeepestDepth = 0.0f;  // depth of deepest contact in last Recover iter
+    uint32_t initialRecoverIters = 0;      // startPenetrating recovery iterations
+    uint32_t initialRecoverFailures = 0;   // startPenetrating recovery attempts that made no progress
+    float    initialRecoverPushMag = 0.0f; // pose-only push from initial-overlap recovery
+    float    initialRecoverDeepestDepth = 0.0f; // deepest inflated contact depth seen
 
     // Per-phase position snapshots.
     sq::Vec3 posAfterRecover{};

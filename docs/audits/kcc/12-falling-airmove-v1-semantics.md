@@ -45,9 +45,15 @@ reactive step-up, perch/edge, and MTD-like recovery work.
 
 - `airDelta = walkMove + up * verticalOffset`.
 - One diagonal air sweep loop.
-- Landing when descending into a walkable hit.
+- Landing only when the entry air move is descending into a walkable hit.
 - Ceiling response when ascending into a downward-facing hit.
 - Air slide for non-walkable hits.
+
+Landing eligibility is fixed from the start of `MoveFallingAir`, before any
+air-slide iteration mutates the remaining target. A just-started jump or upward
+entry move must not accept `FallingLand` from a raw walkable `t=0`/near-zero
+support hit. Those hits are ambiguous skin/support facts until a later
+`FindFloorForLanding`/`IsValidLandingSpot` pass can prove floor support.
 
 `SimulateFalling` must not call:
 
@@ -61,8 +67,39 @@ reactive step-up, perch/edge, and MTD-like recovery work.
 - No ledge-off continuation within the same tick.
 - No reactive stair transaction.
 - No perch/edge/floor-distance quality policy.
-- No MTD-like recovery replacement.
+- No full MTD/recovery replacement. F1 now allows a narrow
+  initial-overlap recovery path only when a movement sweep reports
+  `startPenetrating`.
 - No SceneQuery multi-hit or filtered collector refactor.
+
+## Initial Overlap Recovery Contract
+
+`startPenetrating` is not a movement hit, floor hit, wall slide hit, or landing
+proof. It is an invalid initial pose fact for the current sweep.
+
+When a Walking lateral sweep or Falling air sweep returns `startPenetrating`:
+
+1. Run `RecoverInitialOverlapForSweep`.
+2. Query contacts using `radius + contactOffset`, matching the inflated sweep
+   geometry.
+3. Apply an all-contact, depth-preserving pose correction:
+   `sum(normal * (depth + pullback))`, clamped to a small maximum step.
+4. Do not modify velocity, `onGround`, `moveMode`, or floor acceptance.
+5. Retry the same movement sweep from the corrected pose.
+
+The normal pre/post `Recover` phase remains actual-radius hard penetration
+cleanup. It must not be changed to always use `radius + contactOffset`, because
+that would reinterpret normal Walking floor support as penetration and can
+create floating/jitter.
+
+Reference boundary:
+
+- PhysX CCT handles `C.mDistance == 0` by computing an MTD using
+  `contactOffset` and committing the recovered center before continuing the CCT
+  pass.
+- Unreal `SafeMoveUpdatedComponent` resolves `bStartPenetrating` with
+  `Hit.Normal * PenetrationDepth` style adjustment and retries the original
+  movement.
 
 ## Expected Trace Meaning
 
@@ -101,4 +138,5 @@ The next semantic sessions are:
 1. Time-budget loop: consume hit fraction and continue after mode transition.
 2. Reactive `TryStepUpOverBlock`: Walking-only transaction after lateral blocker.
 3. Floor quality/perch/edge: reject fake edge floors and support-only contacts.
-4. MTD-like recovery: separate pose recovery from movement/landing policy.
+4. Full MTD/recovery: extend beyond initial-overlap fixup if seam/corner cases
+   still need per-contact sequential recovery.

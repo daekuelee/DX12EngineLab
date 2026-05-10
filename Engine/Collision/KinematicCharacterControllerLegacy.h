@@ -14,9 +14,10 @@
 // WHY EACH PHASE EXISTS:
 //   PreStep            — snapshot x_old for velocity writeback; save previous-tick flags
 //   IntegrateVertical  — mode-aware gravity/jump; Walking keeps verticalVelocity at 0
-//   Recover            — overlap push-out from previous tick (Bullet: recoverFromPenetration)
+//   Recover            — actual-radius hard penetration cleanup
 //   SimulateWalking    — walking lateral movement + ground support maintenance
 //   SimulateFalling    — one diagonal air sweep + landing/air slide response
+//   InitialOverlapRecover — startPenetrating sweep fixup, pose-only
 //   Writeback          — compute v_next from intent displacement (§3A)
 //
 // VELOCITY SEMANTICS (§3A, non-negotiable):
@@ -32,7 +33,8 @@
 //   | IntegrateVertical| Gravity/jump integration        | Produce verticalVelocity + offset |
 //   | SimulateWalking  | Walking movement policy         | Lateral move + support validation |
 //   | SimulateFalling  | Falling movement policy         | Air sweep + landing / air slide |
-//   | Recover          | Penetration recovery loop       | Overlap MTD push-out, pose-only |
+//   | Recover          | Hard penetration cleanup        | Actual-radius pose cleanup |
+//   | InitialOverlapRecover | PhysX C.mDistance==0 recovery | Inflated-radius pose fixup |
 //   | Writeback        | (our addition, not in reference) | §3A velocity from intent only |
 // =========================================================================
 
@@ -72,6 +74,7 @@ private:
     void MoveFallingAir(const sq::Vec3& walkMove, float dt);
     void UpdateGroundForWalking(float dt);
     bool Recover();
+    bool RecoverInitialOverlapForSweep();
     void Writeback(float dt);
 
     // ---- Helpers ----
@@ -107,6 +110,7 @@ private:
     sq::Vec3 m_xFinalPre{};          // post-sweep, pre-cleanup position (§3A)
     sq::Vec3 m_originalDirection{};   // normalized walkMove (anti-oscillation check)
     float    m_currentStepOffset = 0.0f;
+    bool     m_jumpStartedThisTick = false; // Falling landing gate input
 
     // ---- Persistent members ----
 
