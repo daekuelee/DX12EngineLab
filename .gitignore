@@ -371,3 +371,30 @@ FodyWeavers.xsd
 # /captures/*.wpix
 # /captures/*.pix3
 .claude/settings.local.json
+
+# Local AI / planning / private reference material
+.agents
+.agents/
+.codex
+.codex/
+.ref/
+PhysXFork/
+UnrealFork/
+portfolio/
+pdf/
+prompts/
+logs/
+*.patch
+plan*.txt
+gpt.txt
+context.txt
+report.txt
+dummy*
+ex*.cpp
+imgui.ini
+captures/debug/*.txt
+image copy.png
+how --stat
+
+# Raw screen-recorder exports; keep curated copies under assets/media/
+20*.mp4
