@@ -9,6 +9,7 @@
 - `RigidTransform` means `Vec3 position` plus unit quaternion rotation, with no scale or shear.
 - `AffineTransform` means linear transform plus translation, and may include non-uniform scale or shear.
 - `Projective` matrices belong at camera, clip, projection, or renderer boundaries, not in raw collision facts.
+- Quaternion orientation equality is not byte/component equality: `q` and `-q` encode the same 3D orientation.
 
 ## Current Code Mapping
 
@@ -17,6 +18,7 @@
 - `WorldState::BuildPawnRenderTransform()` builds the render-facing pawn pose from `PawnState` position plus `ControlViewState::yaw`.
 - Character rendering currently accepts `RigidTransform` and keeps a float/yaw compatibility overload (`Renderer/DX12/CharacterRenderer.h:48`).
 - Scene data currently stores instance positions as separate floats, with transform listed only as future work (`Scene/SceneTypes.h:148`).
+- Unreal transform integration reference is recorded in `docs/reference/unreal/contracts/transform-component-pose.md`.
 
 These are the current source of truth. A future transform component must migrate call sites intentionally rather than hiding this ownership split behind a helper.
 
@@ -28,14 +30,23 @@ These are the current source of truth. A future transform component must migrate
 - Renderer code may convert engine transforms into `DirectX::XMMATRIX` or `DirectX::XMFLOAT4X4` at renderer boundaries.
 - SIMD backend types may accelerate transform math later, but must not change public scalar storage contracts.
 - Projective camera/projection math must stay separated from rigid body and collision transforms.
+- `RigidTransform` has no scale. Unreal `FTransform` includes scale, so any future scale support must enter through a separate affine/component policy instead of expanding this rigid pose contract silently.
 
 ## Quaternion Policy
 
 - Store future rigid orientation as a unit quaternion.
+- Use `QuatNear` only for component-wise storage comparison.
+- Use `SameOrientation` for rotation equivalence when quaternion sign may differ.
 - Keep normalization policy explicit at API boundaries.
 - Do not silently normalize on every operation unless the API contract says so.
 - Use yaw/pitch convenience only as a view/control policy layer, not as the canonical 3D rigid orientation.
 - For KCC, keep `up` and movement policy explicit. Do not infer gameplay grounding or walkability from a generic transform.
+
+## Composition Policy
+
+- `Compose(parent, child)` means apply child-local pose first, then parent/world pose.
+- Do not add `RigidTransform::operator*` until the codebase has a broader transform-component convention. Named composition is preferred because Unreal-style transform multiplication order is easy to misread when compared with matrix order.
+- World-space setters in a future component layer must state whether they store world pose directly or convert it back to relative pose through a parent inverse.
 
 ## Projective Geometry Policy
 
@@ -66,6 +77,6 @@ These are the current source of truth. A future transform component must migrate
 
 - Static layout checks for any public `Quat` or `RigidTransform` storage type.
 - Deterministic checks for identity, composition, inverse, point transform, vector transform, and normal transform.
-- Quaternion checks for unit normalization, conjugate/inverse, rotation of basis vectors, and composition order.
+- Quaternion checks for unit normalization, conjugate/inverse, `q`/`-q` same-orientation behavior, rotation of basis vectors, and composition order.
 - Renderer boundary checks should preserve matrix parity with the previous yaw-plus-translation path when renderer matrix code changes.
 - Collision/KCC tests only when transforms affect query inputs, with coverage for hit normal direction, initial overlap, and deterministic hit selection.

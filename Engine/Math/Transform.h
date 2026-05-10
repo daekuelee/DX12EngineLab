@@ -2,6 +2,7 @@
 // =========================================================================
 // SSOT: docs/contracts/math/transform-contract.md
 // REF: PhysX PxTransform/PxQuat public boundary: scalar pose = quat + position.
+// REF: docs/reference/unreal/contracts/transform-component-pose.md
 //
 // POLICY:
 //   - Public/storage types stay scalar and trivially copyable.
@@ -108,6 +109,26 @@ inline Quat NormalizeQuatSafe(const Quat& q, Quat fallback = IdentityQuat()) {
     return IsFinite(out) ? out : fallback;
 }
 
+inline bool QuatNear(const Quat& a, const Quat& b, float tolerance = kQuatUnitTolerance) {
+    return IsFinite(a) && IsFinite(b) &&
+           Abs(a.x - b.x) <= tolerance &&
+           Abs(a.y - b.y) <= tolerance &&
+           Abs(a.z - b.z) <= tolerance &&
+           Abs(a.w - b.w) <= tolerance;
+}
+
+inline bool SameOrientation(const Quat& a, const Quat& b, float tolerance = kQuatUnitTolerance) {
+    if (!IsFinite(a) || !IsFinite(b) ||
+        !(QuatMagnitudeSq(a) > kQuatNormalizeEpsSq) ||
+        !(QuatMagnitudeSq(b) > kQuatNormalizeEpsSq)) {
+        return false;
+    }
+
+    const Quat an = NormalizeQuatSafe(a);
+    const Quat bn = NormalizeQuatSafe(b);
+    return Abs(Abs(QuatDot(an, bn)) - 1.0f) <= tolerance;
+}
+
 inline RigidTransform NormalizeRigidTransformSafe(
     const RigidTransform& t,
     RigidTransform fallback = IdentityRigidTransform())
@@ -187,6 +208,8 @@ inline RigidTransform Inverse(const RigidTransform& t) {
     return {Rotate(qInv, -t.position), qInv};
 }
 
+// Parent-child composition: apply child-local first, then parent/world.
+// RigidTransform deliberately has no operator* to avoid hiding this order.
 inline RigidTransform Compose(const RigidTransform& parent, const RigidTransform& child) {
     assert(IsSane(parent) && "Compose requires a sane parent transform");
     assert(IsSane(child) && "Compose requires a sane child transform");

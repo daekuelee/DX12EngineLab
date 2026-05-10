@@ -53,13 +53,36 @@ bool RunTransformContractChecks() {
     assert(Engine::Math::IsUnit(yaw90));
     assert(NearVec(Engine::Math::Rotate(yaw90, {0.0f, 0.0f, 1.0f}),
                    {1.0f, 0.0f, 0.0f}));
+    assert(Engine::Math::QuatNear(yaw90, yaw90));
+
+    const Quat negYaw90{-yaw90.x, -yaw90.y, -yaw90.z, -yaw90.w};
+    assert(!Engine::Math::QuatNear(yaw90, negYaw90));
+    assert(Engine::Math::SameOrientation(yaw90, negYaw90));
+    assert(NearVec(Engine::Math::Rotate(negYaw90, {0.0f, 0.0f, 1.0f}),
+                   {1.0f, 0.0f, 0.0f}));
+    assert(!Engine::Math::SameOrientation(yaw90, {0.0f, 0.0f, 0.0f, 0.0f}));
 
     const RigidTransform parent{{10.0f, 0.0f, 0.0f}, yaw90};
     const RigidTransform child{{0.0f, 0.0f, 2.0f}, Engine::Math::IdentityQuat()};
     const RigidTransform composed = Engine::Math::Compose(parent, child);
     assert(NearVec(composed.position, {12.0f, 0.0f, 0.0f}));
 
+    const Vec3 localPoint{1.0f, 0.0f, 0.0f};
+    const Vec3 composedPoint = Engine::Math::TransformPoint(composed, localPoint);
+    const Vec3 sequentialPoint = Engine::Math::TransformPoint(parent,
+        Engine::Math::TransformPoint(child, localPoint));
+    assert(NearVec(composedPoint, sequentialPoint));
+
+    assert(NearVec(Engine::Math::TransformVector(parent, {0.0f, 0.0f, 2.0f}),
+                   {2.0f, 0.0f, 0.0f}));
+    assert(NearVec(Engine::Math::TransformPoint(parent, {0.0f, 0.0f, 2.0f}),
+                   {12.0f, 0.0f, 0.0f}));
+
     const RigidTransform inv = Engine::Math::Inverse(parent);
+    const RigidTransform recoveredChild = Engine::Math::Compose(inv, composed);
+    assert(NearVec(recoveredChild.position, child.position));
+    assert(Engine::Math::SameOrientation(recoveredChild.rotation, child.rotation));
+
     const Vec3 roundTrip = Engine::Math::TransformPoint(inv,
         Engine::Math::TransformPoint(parent, {2.0f, 3.0f, 4.0f}));
     assert(NearVec(roundTrip, {2.0f, 3.0f, 4.0f}));

@@ -228,6 +228,7 @@ namespace Engine
     Math::RigidTransform WorldState::BuildPawnRenderTransform() const
     {
         // SSOT: docs/contracts/math/transform-contract.md
+        // REF: docs/reference/unreal/contracts/transform-component-pose.md
         // Invariant: pawn render pose is feet/root position plus control yaw only.
         return {
             {m_pawn.posX, m_pawn.posY, m_pawn.posZ},

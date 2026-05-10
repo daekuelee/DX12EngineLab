@@ -110,7 +110,8 @@ namespace Renderer
         XMMATRIX scale = XMMatrixScaling(part.scaleX, part.scaleY, part.scaleZ);
         XMMATRIX localTranslate = XMMatrixTranslation(part.offsetX, part.offsetY, part.offsetZ);
 
-        // Build pawn world transform from the rigid pose boundary.
+        // SSOT: docs/contracts/math/transform-contract.md
+        // Build renderer matrices from the rigid pose boundary.
         const Engine::Math::Quat q = m_pawnTransform.rotation;
         const Engine::Math::Vec3 p = m_pawnTransform.position;
         XMVECTOR pawnQuat = XMVectorSet(q.x, q.y, q.z, q.w);
