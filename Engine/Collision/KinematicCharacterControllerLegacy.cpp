@@ -599,15 +599,14 @@ void KinematicCharacterControllerLegacy::StepMove(const sq::Vec3& walkMove)
 // CONSUMES: m_currentPosition, current step offset, verticalVelocity
 //
 // ALGORITHM:
-//   dropDist = current step-up offset + falling distance for this tick.
-//   Primary sweep downward by dropDist.
-//   If walkable hit: snap with skin backoff, switch/keep Walking.
-//   If no hit and drop was small: retry with stepHeight to catch stair descent.
-//   Otherwise: apply full downward drop and switch/keep Falling.
+//   Walking: probe downward for support. If support is missing, switch to
+//            Falling without teleporting down by stepHeight.
+//   Falling: sweep by actual downward velocity for this tick. If walkable hit,
+//            land; otherwise apply the vertical drop and remain Falling.
 //
 // SSOT: docs/audits/kcc/02-walking-falling-reactive-stepup-semantics.md
-// Invariant: this rollback restores the pre-Plan2 single StepDown owner for
-// Falling landing while preserving the newer floor decision trace fields.
+// Invariant: Phase2 has no same-tick time-budget continuation. StepDown may
+// change mode and pose, but it must not run additional lateral movement.
 // EVIDENCE: CctDebug.floorSemantic, floorSource, floorRejectReason
 
 void KinematicCharacterControllerLegacy::StepDown(float dt)
@@ -726,8 +725,21 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
                                     m_config.fallSpeed * dt);
     }
 
-    float dropDist = m_currentStepOffset + downVelocityDt;
-    if (dropDist < kMinDist) return;
+    const float supportProbeDist =
+        (std::max)(m_config.contactOffset * 2.0f, m_config.sweep.skin);
+    float dropDist = walkingAtEntry
+        ? supportProbeDist
+        : (m_currentStepOffset + downVelocityDt);
+    if (dropDist < kMinDist) {
+        FloorDecision skipped;
+        skipped.semantic = walkingAtEntry
+            ? CctFloorSemantic::WalkingSnapOrLatch
+            : CctFloorSemantic::FallingContinue;
+        skipped.rejectReason = CctFloorRejectReason::WrongSemanticSource;
+        recordFloorDecision(skipped);
+        m_debug.stepDownSkipped = true;
+        return;
+    }
 
     // Walkable ground filter.
     // Only surfaces where Dot(normal, up) >= maxSlopeCos survive.
@@ -769,9 +781,13 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
         return;
     }
 
-    // Case 2: small drop fallback — re-sweep at stepHeight for stair descent.
-    if (downVelocityDt <= m_config.stepHeight) {
-        float extendedDrop = m_currentStepOffset + m_config.stepHeight;
+    // Walking support fallback: allow stepHeight snap only while maintaining
+    // existing Walking support. Falling landing uses actual vertical motion,
+    // not speculative stepHeight reach.
+    if (walkingAtEntry) {
+        float extendedDrop =
+            (std::max)(m_currentStepOffset + m_config.stepHeight,
+                       supportProbeDist);
         sq::Vec3 extDown = m_config.up * (-extendedDrop);
         float extDist = sq::Len(extDown);
 
@@ -810,11 +826,9 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
     }
 
     // Distance-based ground latch: preserve support across one-frame misses
-    // only when we were grounded and the expected drop is small.
-    if (m_state.wasOnGround && downVelocityDt <= m_config.stepHeight) {
-        const float latchDist =
-            (std::max)(m_config.contactOffset * 2.0f,
-                       m_config.sweep.skin);
+    // only during Walking support maintenance.
+    if (walkingAtEntry && m_state.wasOnGround) {
+        const float latchDist = supportProbeDist;
         const float latchDrop = (std::min)(dropDist, latchDist);
         if (latchDrop > kMinDist) {
             sq::Vec3 latchDown = m_config.up * (-latchDrop);
@@ -838,6 +852,12 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
         : CctFloorSemantic::FallingContinue;
     miss.rejectReason = CctFloorRejectReason::NoHit;
     recordFloorDecision(miss);
+
+    if (walkingAtEntry) {
+        SetModeFalling();
+        return;
+    }
+
     m_currentPosition = m_currentPosition + downDelta;
     SetModeFalling();
     m_debug.fullDrop = true;
