@@ -119,6 +119,10 @@ namespace Renderer
         static bool IsHudVerboseEnabled() { return s_hudVerbose; }
         static void ToggleHudVerbose() { s_hudVerbose = !s_hudVerbose; }
 
+        // Capsule wireframe toggle (F10 key) - debug visualization
+        static bool IsCapsuleWireframeEnabled() { return s_capsuleWireframe; }
+        static void ToggleCapsuleWireframe() { s_capsuleWireframe = !s_capsuleWireframe; }
+
     private:
         static inline DrawMode s_drawMode = DrawMode::Instanced;
         static inline ColorMode s_colorMode = ColorMode::FaceDebug;
@@ -147,5 +151,8 @@ namespace Renderer
 
         // Day3.12+: HUD verbose toggle - OFF by default (decluttered HUD)
         static inline bool s_hudVerbose = false;
+
+        // Capsule wireframe - ON by default (debug visualization)
+        static inline bool s_capsuleWireframe = true;
     };
 }

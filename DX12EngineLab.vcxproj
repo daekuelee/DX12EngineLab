@@ -138,6 +138,18 @@
     <ClInclude Include="Engine\Collision\CollisionTypes.h" />
     <ClInclude Include="Engine\Collision\CollisionSceneView.h" />
     <ClInclude Include="Engine\Collision\CapsuleMovement.h" />
+    <ClInclude Include="Engine\Collision\CollisionWorld.h" />
+    <ClInclude Include="Engine\Collision\CctTypes.h" />
+    <ClInclude Include="Engine\Collision\KinematicCharacterController.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqMath.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqTypes.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqDistance.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqIntersect.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqPrimitiveTests.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqNarrowphase.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqBVH.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqBroadphase.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqQuery.h" />
     <ClInclude Include="Engine\InputSampler.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="Input\HotkeyRouter.h" />
@@ -162,6 +174,7 @@
     <ClInclude Include="Renderer\DX12\ImGuiLayer.h" />
     <ClInclude Include="Renderer\DX12\CharacterRenderer.h" />
     <ClInclude Include="Renderer\DX12\CharacterPass.h" />
+    <ClInclude Include="Renderer\DX12\CapsuleWireframe.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="Scene\SceneTypes.h" />
@@ -174,6 +187,8 @@
     <ClCompile Include="Engine\FrameClock.cpp" />
     <ClCompile Include="Engine\WorldState.cpp" />
     <ClCompile Include="Engine\Collision\CapsuleMovement.cpp" />
+    <ClCompile Include="Engine\Collision\CollisionWorld.cpp" />
+    <ClCompile Include="Engine\Collision\KinematicCharacterController.cpp" />
     <ClCompile Include="Engine\WorldTypes_compilecheck.cpp" />
     <ClCompile Include="Input\HotkeyRouter.cpp" />
     <ClCompile Include="Input\GameplayInputSystem.cpp" />
@@ -193,6 +208,7 @@
     <ClCompile Include="Renderer\DX12\UploadArena.cpp" />
     <ClCompile Include="Renderer\DX12\ImGuiLayer.cpp" />
     <ClCompile Include="Renderer\DX12\CharacterRenderer.cpp" />
+    <ClCompile Include="Renderer\DX12\CapsuleWireframe.cpp" />
     <ClCompile Include="third_party\imgui\imgui.cpp" />
     <ClCompile Include="third_party\imgui\imgui_draw.cpp" />
     <ClCompile Include="third_party\imgui\imgui_tables.cpp" />
@@ -252,6 +268,20 @@
       <ShaderModel>5.1</ShaderModel>
       <EntryPointName>PSMarker</EntryPointName>
       <ObjectFileOutput>$(OutDir)shaders\marker_ps.cso</ObjectFileOutput>
+    </FxCompile>
+    <!-- Debug line shaders (capsule wireframe) -->
+    <FxCompile Include="shaders\debug_line_vs.hlsl">
+      <ShaderType>Vertex</ShaderType>
+      <ShaderModel>5.1</ShaderModel>
+      <EntryPointName>VSDebugLine</EntryPointName>
+      <ObjectFileOutput>$(OutDir)shaders\debug_line_vs.cso</ObjectFileOutput>
+      <AdditionalIncludeDirectories>shaders</AdditionalIncludeDirectories>
+    </FxCompile>
+    <FxCompile Include="shaders\debug_line_ps.hlsl">
+      <ShaderType>Pixel</ShaderType>
+      <ShaderModel>5.1</ShaderModel>
+      <EntryPointName>PSDebugLine</EntryPointName>
+      <ObjectFileOutput>$(OutDir)shaders\debug_line_ps.cso</ObjectFileOutput>
     </FxCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

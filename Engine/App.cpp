@@ -41,6 +41,7 @@
 #include "../Input/GameplayActionSystem.h"
 #include "../Renderer/DX12/ToggleSystem.h"
 #include "../Renderer/DX12/ImGuiLayer.h"
+#include <cstdio>  // sprintf_s for diagnostic logs
 
 namespace Engine
 {
@@ -65,6 +66,9 @@ namespace Engine
         m_accumulator = 0.0f;
 
         m_initialized = true;
+
+        // Ensure ThirdPerson mode on startup (guard against stale toggle state)
+        Renderer::ToggleSystem::SetCameraMode(Renderer::CameraMode::ThirdPerson);
 
         // [DT-SSOT] Initialize frame clock
         m_frameClock.Init();
@@ -115,6 +119,19 @@ namespace Engine
         // Clamp accumulator to avoid spiral of death (max 0.25s = ~15 fixed steps)
         if (m_accumulator > 0.25f) m_accumulator = 0.25f;
 
+#if defined(_DEBUG)
+        {
+            static bool s_firstTick = true;
+            if (s_firstTick) {
+                char buf[128];
+                sprintf_s(buf, "[APP_TICK] cameraMode=%s accum=%.4f\n",
+                    Renderer::ToggleSystem::GetCameraModeName(), m_accumulator);
+                OutputDebugStringA(buf);
+                s_firstTick = false;
+            }
+        }
+#endif
+
         // Check camera mode
         if (Renderer::ToggleSystem::GetCameraMode() == Renderer::CameraMode::ThirdPerson)
         {
@@ -135,6 +152,9 @@ namespace Engine
 
             // 3. Reset per-frame flags (does NOT touch m_pawn.onGround)
             m_worldState.BeginFrame();
+            m_worldState.ApplyKccTraceUi(
+                m_renderer.GetKccTraceUiState(),
+                m_renderer.ConsumeKccTraceUiActions());
 
             // 4. Fixed-step loop with action system
             // [PROOF-JUMP-ONCE] — jump fires only when stepIndex==0
@@ -281,8 +301,4 @@ namespace Engine
         m_initialized = false;
     }
 
-    void App::ToggleStepUpGridTest()
-    {
-        m_worldState.ToggleStepUpGridTest();
-    }
 }

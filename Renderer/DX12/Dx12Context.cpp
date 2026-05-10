@@ -11,6 +11,7 @@
 #include "ResourceStateTracker.h"
 #include "PassOrchestrator.h"
 #include "CharacterPass.h"
+#include "CapsuleWireframe.h"
 #include "../../Engine/WorldState.h"  // Day3.12 Phase 4B+: Fixture transform overrides
 #include <cstdio>
 #include <DirectXMath.h>
@@ -476,6 +477,11 @@ namespace Renderer
     void Dx12Context::SetPawnTransform(float posX, float posY, float posZ, float yaw)
     {
         m_characterRenderer.SetPawnTransform(posX, posY, posZ, yaw);
+#if defined(_DEBUG)
+        m_pawnPosX = posX;
+        m_pawnPosY = posY;
+        m_pawnPosZ = posZ;
+#endif
     }
 
     Allocation Dx12Context::UpdateFrameConstants(FrameContext& ctx)
@@ -547,52 +553,7 @@ namespace Renderer
             }
         }
 
-        // Day3.12 Phase 4B+: Override fixture grid transforms to match collision AABBs
-        // Skip when StepUpGridTest is active (mutual exclusion with T1/T2/T3 fixtures)
-        bool fixtureOverrideActive = m_worldState && m_worldState->GetConfig().enableStepUpTestFixtures
-            && !m_worldState->GetConfig().enableStepUpGridTest;
-
-        // MODE_SNAPSHOT: Log renderer branch once per second
-        static int s_frameCount = 0;
-        if (m_worldState && (++s_frameCount % 60 == 1)) {
-            char snap[256];
-            sprintf_s(snap, "[RENDER_SNAP] fixtureOverride=%d fixtures=%d gridTest=%d extras=%zu\n",
-                fixtureOverrideActive ? 1 : 0,
-                m_worldState->GetConfig().enableStepUpTestFixtures ? 1 : 0,
-                m_worldState->GetConfig().enableStepUpGridTest ? 1 : 0,
-                m_worldState->GetExtras().size());
-            OutputDebugStringA(snap);
-        }
-
-        if (fixtureOverrideActive)
-        {
-            float hxz = 0.9f;  // cubeHalfXZ
-
-            // Override cube to include both cube + step height
-            auto overrideWithStep = [&](uint16_t gridIdx, float stepHeight) {
-                int gx = gridIdx % 100;
-                int gz = gridIdx / 100;
-                float cx = static_cast<float>(gx) * 2.0f - 99.0f;
-                float cz = static_cast<float>(gz) * 2.0f - 99.0f;
-
-                // Total height = cube (3.0) + step
-                float totalHeight = 3.0f + stepHeight;
-                float cy = totalHeight * 0.5f;  // Center Y
-                float sy = totalHeight * 0.5f;  // Scale Y
-
-                float* m = transforms + gridIdx * 16;
-                m[0] = hxz;  m[1] = 0.0f; m[2] = 0.0f; m[3] = 0.0f;
-                m[4] = 0.0f; m[5] = sy;   m[6] = 0.0f; m[7] = 0.0f;
-                m[8] = 0.0f; m[9] = 0.0f; m[10] = hxz; m[11] = 0.0f;
-                m[12] = cx;  m[13] = cy;  m[14] = cz;  m[15] = 1.0f;
-            };
-
-            overrideWithStep(m_worldState->GetFixtureT1Idx(), 0.3f);      // T1: step h=0.3
-            overrideWithStep(m_worldState->GetFixtureT2Idx(), 0.6f);      // T2: step h=0.6
-            overrideWithStep(m_worldState->GetFixtureT3StepIdx(), 0.5f);  // T3: step h=0.5
-        }
-
-        // Render extras in BOTH modes (fixture mode: ceiling, grid test mode: 26 stairs)
+        // Render extras (stairs)
         const auto& extras = m_worldState ? m_worldState->GetExtras()
                                           : std::vector<Engine::ExtraCollider>{};
         for (size_t i = 0; i < extras.size() && i < MaxExtraInstances; ++i)
@@ -751,6 +712,31 @@ namespace Renderer
 
             CharacterPass::Record(m_commandList.Get(), charInputs);
             drawCalls += 1;  // Character is 1 draw call (6 instances)
+
+#if defined(_DEBUG)
+            // Capsule wireframe debug visualization (after character, before ImGui)
+            if (ToggleSystem::IsCapsuleWireframeEnabled())
+            {
+                constexpr float kCapsuleRadius = 1.5f;
+                constexpr float kCapsuleHalfHeight = 1.5f;
+
+                Allocation wireAlloc = m_uploadArena.Allocate(
+                    CapsuleWireframe::MaxByteSize, 4, "CapsuleWire");
+
+                uint32_t wireVerts = CapsuleWireframe::GenerateVertices(
+                    wireAlloc.cpuPtr,
+                    m_pawnPosX, m_pawnPosY, m_pawnPosZ,
+                    kCapsuleRadius, kCapsuleHalfHeight);
+
+                D3D12_GPU_VIRTUAL_ADDRESS wireVbGpuVA =
+                    ctx.uploadAllocator.GetBuffer()->GetGPUVirtualAddress() + wireAlloc.offset;
+
+                CapsuleWireframe::RecordDraw(
+                    m_commandList.Get(), &m_shaderLibrary,
+                    frameCBAlloc.gpuVA, wireVbGpuVA, wireVerts);
+                drawCalls += 1;
+            }
+#endif
 
             // Record ImGui pass (we skipped it in orchestrator)
             m_imguiLayer.RecordCommands(m_commandList.Get());

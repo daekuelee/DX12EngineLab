@@ -18,12 +18,12 @@ namespace Engine { namespace Collision {
     };
 
     struct CapsuleGeom {
-        float radius;          // m_config.capsuleRadius (1.4)
-        float halfHeight;      // m_config.capsuleHalfHeight (1.1)
+        float radius;          // m_config.capsuleRadius (1.5)
+        float halfHeight;      // m_config.capsuleHalfHeight (1.5)
         // AABB-equivalent dims (for broadphase + legacy path)
-        float pawnHalfExtentX; // m_config.pawnHalfExtentX (1.4)
+        float pawnHalfExtentX; // m_config.pawnHalfExtentX (1.5)
         float pawnHalfExtentZ; // m_config.pawnHalfExtentZ (0.4)
-        float pawnHeight;      // m_config.pawnHeight (5.0)
+        float pawnHeight;      // m_config.pawnHeight (6.0)
     };
 
     struct FloorBounds {

@@ -22,6 +22,9 @@
     <Filter Include="Engine\Collision">
       <UniqueIdentifier>{C0LL1510-N28A-4E8B-9D3F-A7B2C8E4F619}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Engine\Collision\SceneQuery">
+      <UniqueIdentifier>{5CE0E0A1-3F2B-4D9C-8E7A-B1C4D6F8A902}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framework.h">
@@ -96,6 +99,42 @@
     <ClInclude Include="Engine\Collision\CapsuleMovement.h">
       <Filter>Engine\Collision</Filter>
     </ClInclude>
+    <ClInclude Include="Engine\Collision\CollisionWorld.h">
+      <Filter>Engine\Collision</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\CctTypes.h">
+      <Filter>Engine\Collision</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\KinematicCharacterController.h">
+      <Filter>Engine\Collision</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqMath.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqTypes.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqDistance.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqIntersect.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqPrimitiveTests.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqNarrowphase.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqBVH.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqBroadphase.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqQuery.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DX12EngineLab.cpp">
@@ -105,6 +144,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Engine\Collision\CapsuleMovement.cpp">
+      <Filter>Engine\Collision</Filter>
+    </ClCompile>
+    <ClCompile Include="Engine\Collision\CollisionWorld.cpp">
+      <Filter>Engine\Collision</Filter>
+    </ClCompile>
+    <ClCompile Include="Engine\Collision\KinematicCharacterController.cpp">
       <Filter>Engine\Collision</Filter>
     </ClCompile>
     <ClCompile Include="Renderer\DX12\Dx12Context.cpp">

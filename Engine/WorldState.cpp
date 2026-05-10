@@ -1,8 +1,10 @@
 #include "WorldState.h"
-#include "Collision/CapsuleMovement.h"
+#include "Collision/CollisionWorld.h"
 #include "../Renderer/DX12/Dx12Context.h"  // For HUDSnapshot
+#include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <algorithm>  // For std::sort, std::unique
 #include <Windows.h>  // For OutputDebugStringA
 
@@ -10,27 +12,133 @@ using namespace DirectX;
 
 namespace Engine
 {
+    namespace
+    {
+        float DeltaY(const Collision::CctPhaseSnapshot& from,
+                     const Collision::CctPhaseSnapshot& to)
+        {
+            return to.posFeet.y - from.posFeet.y;
+        }
 
-// PR2.8→2.10: SceneView adapter — bridges WorldState private spatial data to module
-class WorldStateSceneAdapter : public Collision::SceneView {
-    const WorldState& m_ws;
-public:
-    explicit WorldStateSceneAdapter(const WorldState& ws) : m_ws(ws) {}
-    std::vector<Collision::ColliderId> QueryCandidates(const AABB& box) const override {
-        auto raw = m_ws.QuerySpatialHash(box);
-        return std::vector<Collision::ColliderId>(raw.begin(), raw.end());
+        const char* KccTraceCulpritName(Renderer::KccTraceCulprit culprit)
+        {
+            switch (culprit)
+            {
+            case Renderer::KccTraceCulprit::None: return "None";
+            case Renderer::KccTraceCulprit::Recover: return "Recover";
+            case Renderer::KccTraceCulprit::StepUp: return "StepUp";
+            case Renderer::KccTraceCulprit::StepMove: return "StepMove";
+            case Renderer::KccTraceCulprit::StepDown: return "StepDown";
+            case Renderer::KccTraceCulprit::PostRecover: return "PostRecover";
+            case Renderer::KccTraceCulprit::Unknown: return "Unknown";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctMoveModeName(Collision::CctMoveMode mode)
+        {
+            switch (mode)
+            {
+            case Collision::CctMoveMode::Walking: return "Walking";
+            case Collision::CctMoveMode::Falling: return "Falling";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctStepMoveQueryKindName(
+            Collision::CctStepMoveQueryKind kind)
+        {
+            switch (kind)
+            {
+            case Collision::CctStepMoveQueryKind::NotRun: return "NotRun";
+            case Collision::CctStepMoveQueryKind::ClearPath: return "ClearPath";
+            case Collision::CctStepMoveQueryKind::PositiveLateralBlocker:
+                return "PositiveLateralBlocker";
+            case Collision::CctStepMoveQueryKind::NeedsRecovery:
+                return "NeedsRecovery";
+            case Collision::CctStepMoveQueryKind::UnsupportedForStepMove:
+                return "UnsupportedForStepMove";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctStepMoveRejectReasonName(
+            Collision::CctStepMoveRejectReason reason)
+        {
+            switch (reason)
+            {
+            case Collision::CctStepMoveRejectReason::None: return "None";
+            case Collision::CctStepMoveRejectReason::NearZero:
+                return "NearZero";
+            case Collision::CctStepMoveRejectReason::StartPenetrating:
+                return "StartPenetrating";
+            case Collision::CctStepMoveRejectReason::NoLateralNormal:
+                return "NoLateralNormal";
+            case Collision::CctStepMoveRejectReason::NotApproaching:
+                return "NotApproaching";
+            case Collision::CctStepMoveRejectReason::WalkableSupport:
+                return "WalkableSupport";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctFloorSemanticName(
+            Collision::CctFloorSemantic semantic)
+        {
+            switch (semantic)
+            {
+            case Collision::CctFloorSemantic::NotRun: return "NotRun";
+            case Collision::CctFloorSemantic::WalkingMaintainFloor:
+                return "WalkingMaintainFloor";
+            case Collision::CctFloorSemantic::WalkingSnapOrLatch:
+                return "WalkingSnapOrLatch";
+            case Collision::CctFloorSemantic::FallingLand:
+                return "FallingLand";
+            case Collision::CctFloorSemantic::FallingContinue:
+                return "FallingContinue";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctFloorSourceName(Collision::CctFloorSource source)
+        {
+            switch (source)
+            {
+            case Collision::CctFloorSource::None: return "None";
+            case Collision::CctFloorSource::PrimarySweep:
+                return "PrimarySweep";
+            case Collision::CctFloorSource::InitialOverlapSweep:
+                return "InitialOverlapSweep";
+            case Collision::CctFloorSource::OverlapSupport:
+                return "OverlapSupport";
+            case Collision::CctFloorSource::LatchSweep:
+                return "LatchSweep";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctFloorRejectReasonName(
+            Collision::CctFloorRejectReason reason)
+        {
+            switch (reason)
+            {
+            case Collision::CctFloorRejectReason::None: return "None";
+            case Collision::CctFloorRejectReason::NoHit: return "NoHit";
+            case Collision::CctFloorRejectReason::NotWalkable:
+                return "NotWalkable";
+            case Collision::CctFloorRejectReason::StartPenetrating:
+                return "StartPenetrating";
+            case Collision::CctFloorRejectReason::NearSkinAmbiguousFallingHit:
+                return "NearSkinAmbiguousFallingHit";
+            case Collision::CctFloorRejectReason::WrongSemanticSource:
+                return "WrongSemanticSource";
+            default: return "Unknown";
+            }
+        }
+
     }
-    AABB GetColliderAABB(Collision::ColliderId id) const override {
-#if defined(_DEBUG)
-        assert(id != Collision::kInvalidCollider && id != Collision::kFloorCollider
-               && "Sentinel ColliderId must not reach GetColliderAABB");
-#endif
-        return m_ws.GetCubeAABB(static_cast<uint16_t>(id));
-    }
-    Collision::ColliderProps GetColliderProps(Collision::ColliderId) const override {
-        return { true, true, true }; // PR3.x hook, unused now
-    }
-};
+
+
     void WorldState::Initialize()
     {
         // Reset pawn to spawn position
@@ -59,37 +167,33 @@ public:
         // Part 2: Build spatial grid for cube collision
         BuildSpatialGrid();
 
-        // Day3.12: Mutual exclusion - StepUpGridTest overrides T1/T2/T3 fixtures
-        if (m_config.enableStepUpGridTest)
+        // Phase A: Build CollisionWorld (BVH from cube AABBs)
+        BuildCollisionWorld();
+
+        // Construct KCC (sole movement authority)
         {
-            BuildStepUpGridTest();
-            m_stepGridWasEverEnabled = true;
+            Collision::CctCapsule geom;
+            geom.radius     = m_config.capsuleRadius;
+            geom.halfHeight = m_config.capsuleHalfHeight;
+
+            Collision::CctConfig cctCfg;
+            cctCfg.gravity       = m_config.gravity;
+            cctCfg.jumpSpeed     = m_config.jumpVelocity;
+            cctCfg.stepHeight    = m_config.maxStepHeight;
+            cctCfg.fallSpeed     = 55.0f;
+            cctCfg.contactOffset = 0.02f;  // SSOT: all epsilons derived in KCC ctor
+
+            m_cct = std::make_unique<Collision::KinematicCharacterController>(
+                &m_collisionWorld, geom, cctCfg);
+
+            // Sync initial position to pawn spawn
+            Collision::CctState initState;
+            initState.posFeet = {m_pawn.posX, m_pawn.posY, m_pawn.posZ};
+            m_cct->setState(initState);
         }
-        else if (m_config.enableStepUpTestFixtures)
-        {
-            // Compute grid indices from world coords: idx = gz*100 + gx, where gx=(x+99)/2
-            auto worldToIdx = [](float wx, float wz) -> uint16_t {
-                int gx = static_cast<int>((wx + 99.0f) / 2.0f);
-                int gz = static_cast<int>((wz + 99.0f) / 2.0f);
-                return static_cast<uint16_t>(gz * 100 + gx);
-            };
 
-            m_fixtureT1Idx = worldToIdx(5.0f, 9.0f);      // 5452
-            m_fixtureT2Idx = worldToIdx(9.0f, 9.0f);      // 5454
-            m_fixtureT3StepIdx = worldToIdx(15.0f, 9.0f); // 5457
-
-            // Build extras (ceiling only)
-            BuildExtraFixtures();
-
-            // Log fixture info (collision Y = cubeMaxY + stepHeight)
-            char buf[256];
-            sprintf_s(buf, "[FIXTURE] T1_STEP gridIdx=%u world=(5,0,9) AABB Y=[0,3.3]\n", m_fixtureT1Idx);
-            OutputDebugStringA(buf);
-            sprintf_s(buf, "[FIXTURE] T2_WALL gridIdx=%u world=(9,0,9) AABB Y=[0,3.6]\n", m_fixtureT2Idx);
-            OutputDebugStringA(buf);
-            sprintf_s(buf, "[FIXTURE] T3_STEP gridIdx=%u world=(15,0,9) AABB Y=[0,3.5]\n", m_fixtureT3StepIdx);
-            OutputDebugStringA(buf);
-        }
+        // Build stairs (always present in the world)
+        BuildStepUpGridTest();
 
         // Day3.4: Collision geometry derivation proof log
         OutputDebugStringA("[CollisionInit] CubeLocalHalf=1.0\n");
@@ -126,27 +230,6 @@ public:
         // Reset collision stats for this tick
         m_collisionStats = CollisionStats{};
 
-        // --- Pre-solver depenetration (PR2.8: module call) ---
-        {
-            WorldStateSceneAdapter sceneView(*this);
-            Collision::CapsuleGeom geom = {
-                m_config.capsuleRadius, m_config.capsuleHalfHeight,
-                m_config.pawnHalfExtentX, m_config.pawnHalfExtentZ, m_config.pawnHeight
-            };
-            auto depen = Collision::DepenetrateInPlace(
-                sceneView, geom, m_pawn.posX, m_pawn.posY, m_pawn.posZ, m_pawn.onGround);
-            m_pawn.posX = depen.posX;
-            m_pawn.posY = depen.posY;
-            m_pawn.posZ = depen.posZ;
-            m_pawn.onGround = depen.onGround;
-            m_collisionStats.depenApplied = depen.depenApplied;
-            m_collisionStats.depenTotalMag = depen.depenTotalMag;
-            m_collisionStats.depenClampTriggered = depen.depenClampTriggered;
-            m_collisionStats.depenMaxSingleMag = depen.depenMaxSingleMag;
-            m_collisionStats.depenOverlapCount = depen.depenOverlapCount;
-            m_collisionStats.depenIterations = depen.depenIterations;
-        }
-
         // 1. Apply yaw rotation [LOOK-UNIFIED] pre-computed delta from Action layer
         m_view.yaw += input.yawDelta;
 
@@ -157,7 +240,7 @@ public:
 
         // 3. Compute movement basis from sim yaw [SIM-PURE]
         // CONTRACT: TickFixed must NEVER read m_renderCam or any presentation state.
-        // Movement direction is derived purely from m_view.yaw (sim-owned, written at L342).
+        // Movement direction is derived purely from m_view.yaw (sim-owned).
         float camFwdX = sinf(m_view.yaw);
         float camFwdZ = cosf(m_view.yaw);
 
@@ -195,231 +278,433 @@ public:
         float speedMultiplier = 1.0f + (m_config.sprintMultiplier - 1.0f) * m_sprintAlpha;
         float currentSpeed = m_config.walkSpeed * speedMultiplier;
 
-        // Horizontal velocity from input (camera-relative)
-        m_pawn.velX = (camFwdX * input.moveZ + camRightX * input.moveX) * currentSpeed;
-        m_pawn.velZ = (camFwdZ * input.moveZ + camRightZ * input.moveX) * currentSpeed;
+        // 6. Build CctInput (lateral walk displacement for this tick)
+        float walkVelX = (camFwdX * input.moveZ + camRightX * input.moveX) * currentSpeed;
+        float walkVelZ = (camFwdZ * input.moveZ + camRightZ * input.moveX) * currentSpeed;
 
-        // 6. Apply gravity if not on ground
-        if (!m_pawn.onGround)
+        Collision::CctInput cctInput;
+        cctInput.walkMove = {walkVelX * fixedDt, 0.0f, walkVelZ * fixedDt};
+        cctInput.jump = input.jump;
+
+
+        // 7. Tick KCC (sole movement authority)
+        assert(m_cct && "KCC must be constructed before TickFixed");
+        m_cct->Tick(cctInput, fixedDt);
+        RecordKccTraceTick(m_cct->getDebug());
+
+        // 8. Mirror CctState → m_pawn
+        const auto& cs = m_cct->getState();
+        m_pawn.posX = cs.posFeet.x;  m_pawn.posY = cs.posFeet.y;  m_pawn.posZ = cs.posFeet.z;
+        m_pawn.velX = cs.vel.x;      m_pawn.velY = cs.vel.y;      m_pawn.velZ = cs.vel.z;
+        m_pawn.onGround = cs.onGround;
+
+        m_jumpQueued = false;  // TODO: derive from CctState once HUD is updated
+
+        // 9. TriggerPass (KillZ + future trigger volumes)
+        TriggerPass();
+
+#if defined(_DEBUG)
+        // [KCC_AUTH] Throttled evidence log every 600 ticks (10s @ 60Hz)
         {
-            m_pawn.velY -= m_config.gravity * fixedDt;
-        }
-        else
-        {
-            // On ground, reset vertical velocity (unless jumping)
-            if (m_pawn.velY < 0.0f)
+            static uint32_t s_authTicks = 0;
+            if (++s_authTicks % 600 == 0)
             {
-                m_pawn.velY = 0.0f;
+                const auto& dbg = m_cct->getDebug();
+                char buf[256];
+                sprintf_s(buf,
+                    "[KCC_AUTH] tick=%u pos=(%.2f,%.2f,%.2f) vel=(%.2f,%.2f,%.2f) gnd=%d recoverPush=%.4f zHP=%u\n",
+                    s_authTicks,
+                    m_pawn.posX, m_pawn.posY, m_pawn.posZ,
+                    m_pawn.velX, m_pawn.velY, m_pawn.velZ,
+                    m_pawn.onGround ? 1 : 0,
+                    dbg.recoverPushMag,
+                    dbg.zeroHitPushes);
+                OutputDebugStringA(buf);
             }
         }
 
-        // 7. Jump: only if on ground, input.jump is true, and not already consumed this frame
-        if (m_pawn.onGround && input.jump && !m_jumpConsumedThisFrame)
+#if defined(CCT_DEBUG_TICK) && CCT_DEBUG_TICK
+        // E5: Per-tick summary log — one line per tick
         {
-            m_pawn.velY = m_config.jumpVelocity;
-            m_pawn.onGround = false;
-            m_jumpQueued = true;  // Evidence flag
-            m_jumpConsumedThisFrame = true;
-            m_justJumpedThisTick = true;  // Day3.5: Prevent support query from clearing onGround
+            const auto& dbg = m_cct->getDebug();
+            const auto& cs2 = m_cct->getState();
+            char buf[512];
+            sprintf_s(buf,
+                "[KCC_TICK] pos=(%.2f,%.2f,%.2f) gnd=%d vy=%.2f "
+                "REC(i=%u p=%.4f) SU=%.2f SM(i=%u z=%u stuck=%d) "
+                "SD(hit=%d walk=%d drop=%.3f) dx=(%.4f,%.4f)\n",
+                cs2.posFeet.x, cs2.posFeet.y, cs2.posFeet.z,
+                cs2.onGround ? 1 : 0, cs2.verticalVelocity,
+                dbg.recoverIters, dbg.recoverPushMag,
+                dbg.stepUpOffset,
+                dbg.forwardIters, dbg.zeroHitPushes, dbg.stuck ? 1 : 0,
+                dbg.stepDownHit ? 1 : 0, dbg.stepDownWalkable ? 1 : 0,
+                dbg.stepDownDropDist,
+                dbg.dxIntentMag, dbg.dxCorrMag);
+            OutputDebugStringA(buf);
+        }
+#endif  // CCT_DEBUG_TICK
+#endif
+    }
+
+    void WorldState::ApplyKccTraceUi(const Renderer::KccTraceUiState& state,
+                                     const Renderer::KccTraceUiActions& actions)
+    {
+        const bool wasEnabled = m_kccTraceUi.enabled;
+        m_kccTraceUi = state;
+        if (m_kccTraceUi.upwardPopEps < 0.001f) {
+            m_kccTraceUi.upwardPopEps = 0.001f;
         }
 
-        // --- Main collision solver (PR2.8: module call) ---
-        {
-            WorldStateSceneAdapter sceneView(*this);
-            Collision::CapsuleMoveRequest req = {};
-            req.posX = m_pawn.posX;  req.posY = m_pawn.posY;  req.posZ = m_pawn.posZ;
-            req.velX = m_pawn.velX;  req.velY = m_pawn.velY;  req.velZ = m_pawn.velZ;
-            req.onGround = m_pawn.onGround;
-            req.justJumped = m_justJumpedThisTick;
-            req.fixedDt = fixedDt;
-            req.geom = { m_config.capsuleRadius, m_config.capsuleHalfHeight,
-                         m_config.pawnHalfExtentX, m_config.pawnHalfExtentZ, m_config.pawnHeight };
-            req.enableYSweep = m_config.enableYSweep;
-            req.enableStepUp = m_config.enableStepUp;
-            req.maxStepHeight = m_config.maxStepHeight;
-            req.sweepSkinY = m_config.sweepSkinY;
-            req.floor = { m_config.floorY, m_config.floorMinX, m_config.floorMaxX,
-                          m_config.floorMinZ, m_config.floorMaxZ };
-            req.cubeHalfXZ = m_config.cubeHalfXZ;
-            req.cubeMinY = m_config.cubeMinY;
-            req.cubeMaxY = m_config.cubeMaxY;
+        if (actions.clearRequested) {
+            ClearKccTrace();
+        }
 
-            auto result = Collision::MoveCapsuleKinematic(sceneView, req, m_collisionStats);
+        if (!m_kccTraceUi.enabled) {
+            m_kccTraceStatus = Renderer::KccTraceStatus::Off;
+        } else if (!wasEnabled || m_kccTraceStatus == Renderer::KccTraceStatus::Off) {
+            m_kccTraceStatus = Renderer::KccTraceStatus::Recording;
+        }
+
+        if (actions.freezeRequested) {
+            FreezeKccTrace();
+        }
+
+        if (actions.saveRequested) {
+            m_kccTraceLastSaveOk = SaveKccTrace();
+        }
+    }
+
+    void WorldState::ClearKccTrace()
+    {
+        m_kccTraceWrite = 0;
+        m_kccTraceCount = 0;
+        m_kccTraceTick = 0;
+        m_kccTraceTriggerTick = 0;
+        m_kccTracePostRollRemaining = 0;
+        m_kccTraceLastCulprit = Renderer::KccTraceCulprit::None;
+        m_kccTraceLastSaveOk = false;
+        m_kccTraceLastSavePath.clear();
+        m_kccTraceStatus = m_kccTraceUi.enabled
+            ? Renderer::KccTraceStatus::Recording
+            : Renderer::KccTraceStatus::Off;
+    }
+
+    void WorldState::FreezeKccTrace()
+    {
+        m_kccTraceStatus = (m_kccTraceCount > 0)
+            ? Renderer::KccTraceStatus::Frozen
+            : (m_kccTraceUi.enabled ? Renderer::KccTraceStatus::Recording
+                                    : Renderer::KccTraceStatus::Off);
+        m_kccTracePostRollRemaining = 0;
+    }
+
+    Renderer::KccTraceCulprit WorldState::ClassifyKccTraceCulprit(
+        const Collision::CctDebug& debug) const
+    {
+        const float eps = m_kccTraceUi.upwardPopEps;
+        if (debug.afterIntegrateVertical.verticalVelocity > 0.0f) {
+            return Renderer::KccTraceCulprit::None;
+        }
+
+        const float totalRise = debug.afterPostRecover.posFeet.y - debug.beforeTick.posFeet.y;
+        if (totalRise <= eps) {
+            return Renderer::KccTraceCulprit::None;
+        }
+
+        if (DeltaY(debug.afterIntegrateVertical, debug.afterPreRecover) > eps) {
+            return Renderer::KccTraceCulprit::Recover;
+        }
+        if (DeltaY(debug.afterPreRecover, debug.afterStepUp) > eps) {
+            return Renderer::KccTraceCulprit::StepUp;
+        }
+        if (DeltaY(debug.afterStepUp, debug.afterStepMove) > eps) {
+            return Renderer::KccTraceCulprit::StepMove;
+        }
+        if (DeltaY(debug.afterStepMove, debug.afterStepDown) > eps) {
+            return Renderer::KccTraceCulprit::StepDown;
+        }
+        if (DeltaY(debug.afterStepDown, debug.afterPostRecover) > eps) {
+            return Renderer::KccTraceCulprit::PostRecover;
+        }
+        return Renderer::KccTraceCulprit::Unknown;
+    }
+
+    void WorldState::RecordKccTraceTick(const Collision::CctDebug& debug)
+    {
+        if (!m_kccTraceUi.enabled) {
+            return;
+        }
+        if (m_kccTraceStatus == Renderer::KccTraceStatus::Frozen) {
+            return;
+        }
+
+        if (m_kccTraceStatus == Renderer::KccTraceStatus::Off) {
+            m_kccTraceStatus = Renderer::KccTraceStatus::Recording;
+        }
+
+        const uint32_t tick = ++m_kccTraceTick;
+        const Renderer::KccTraceCulprit culprit = ClassifyKccTraceCulprit(debug);
+
+        KccTraceRecord& record = m_kccTraceRecords[m_kccTraceWrite];
+        record.tick = tick;
+        record.debug = debug;
+        record.culprit = culprit;
+
+        m_kccTraceWrite = (m_kccTraceWrite + 1) % KCC_TRACE_CAPACITY;
+        if (m_kccTraceCount < KCC_TRACE_CAPACITY) {
+            m_kccTraceCount++;
+        }
+
+        if (m_kccTraceUi.autoTrigger &&
+            culprit != Renderer::KccTraceCulprit::None &&
+            m_kccTraceStatus != Renderer::KccTraceStatus::Triggered) {
+            m_kccTraceStatus = Renderer::KccTraceStatus::Triggered;
+            m_kccTraceLastCulprit = culprit;
+            m_kccTraceTriggerTick = tick;
+            m_kccTracePostRollRemaining = KCC_TRACE_POST_ROLL_TICKS;
+            return;
+        }
+
+        if (m_kccTraceStatus == Renderer::KccTraceStatus::Triggered) {
+            if (m_kccTracePostRollRemaining > 0) {
+                m_kccTracePostRollRemaining--;
+            }
+            if (m_kccTracePostRollRemaining == 0) {
+                FreezeKccTrace();
+            }
+        } else {
+            m_kccTraceLastCulprit = culprit;
+        }
+    }
+
+    bool WorldState::SaveKccTrace()
+    {
+        if (m_kccTraceCount == 0) {
+            m_kccTraceLastSavePath.clear();
+            return false;
+        }
+
+        CreateDirectoryA("captures", nullptr);
+        CreateDirectoryA("captures/debug", nullptr);
+
+        SYSTEMTIME now{};
+        GetLocalTime(&now);
+
+        char stampedPath[128];
+        sprintf_s(stampedPath,
+                  "captures/debug/kcc_trace_%04u%02u%02u_%02u%02u%02u.txt",
+                  now.wYear, now.wMonth, now.wDay,
+                  now.wHour, now.wMinute, now.wSecond);
+
+        auto writeTraceFile = [&](const char* path) -> bool {
+            std::ofstream out(path, std::ios::out | std::ios::trunc);
+            if (!out) {
+                return false;
+            }
+
+            auto writeVec3 = [&out](const char* name, const Collision::sq::Vec3& v) {
+                out << ' ' << name << "=(" << v.x << ',' << v.y << ',' << v.z << ')';
+            };
+
+            out << "status=" << static_cast<uint32_t>(m_kccTraceStatus)
+                << " triggerTick=" << m_kccTraceTriggerTick
+                << " culprit=" << KccTraceCulpritName(m_kccTraceLastCulprit)
+                << " upwardPopEps=" << m_kccTraceUi.upwardPopEps
+                << " storedTicks=" << m_kccTraceCount
+                << '\n';
+
+            const uint32_t start = (m_kccTraceCount == KCC_TRACE_CAPACITY)
+                ? m_kccTraceWrite
+                : 0;
+
+            for (uint32_t i = 0; i < m_kccTraceCount; ++i) {
+                const KccTraceRecord& record =
+                    m_kccTraceRecords[(start + i) % KCC_TRACE_CAPACITY];
+                const auto& d = record.debug;
+                out << "tick=" << record.tick
+                    << " culprit=" << KccTraceCulpritName(record.culprit)
+                    << " yBegin=" << d.beforeTick.posFeet.y
+                    << " yIntegrate=" << d.afterIntegrateVertical.posFeet.y
+                    << " yPreRecover=" << d.afterPreRecover.posFeet.y
+                    << " yStepUp=" << d.afterStepUp.posFeet.y
+                    << " yStepMove=" << d.afterStepMove.posFeet.y
+                    << " yStepDown=" << d.afterStepDown.posFeet.y
+                    << " yPostRecover=" << d.afterPostRecover.posFeet.y
+                    << " yFinal=" << d.afterWriteback.posFeet.y;
+                writeVec3("posBegin", d.beforeTick.posFeet);
+                writeVec3("posStepMove", d.afterStepMove.posFeet);
+                writeVec3("posFinal", d.afterWriteback.posFeet);
+                writeVec3("walkMove", d.inputWalkMove);
+                writeVec3("dxIntent", d.dxIntent);
+                writeVec3("dxCorr", d.dxCorr);
+                out << " vyBegin=" << d.beforeTick.verticalVelocity
+                    << " vyFinal=" << d.afterWriteback.verticalVelocity
+                    << " modeBegin=" << CctMoveModeName(d.beforeTick.moveMode)
+                    << " modeIntegrate=" << CctMoveModeName(d.afterIntegrateVertical.moveMode)
+                    << " modeStepUp=" << CctMoveModeName(d.afterStepUp.moveMode)
+                    << " modeStepMove=" << CctMoveModeName(d.afterStepMove.moveMode)
+                    << " modeStepDown=" << CctMoveModeName(d.afterStepDown.moveMode)
+                    << " modeFinal=" << CctMoveModeName(d.afterWriteback.moveMode)
+                    << " onGroundBegin=" << (d.beforeTick.onGround ? 1 : 0)
+                    << " onGroundFinal=" << (d.afterWriteback.onGround ? 1 : 0)
+                    << " stepUpOffset=" << d.stepUpOffset
+                    << " recoverPush=" << d.recoverPushMag
+                    << " initialRecoverPush=" << d.initialRecoverPushMag
+                    << " initialRecoverIters=" << d.initialRecoverIters
+                    << " initialRecoverFail=" << d.initialRecoverFailures
+                    << " postRecoverPush=" << d.postRecoverMag
+                    << " stepMoveFirstT=" << d.stepMoveFirstTOI
+                    << " stepMoveFirstN=(" << d.stepMoveFirstNormal.x << ','
+                                          << d.stepMoveFirstNormal.y << ','
+                                          << d.stepMoveFirstNormal.z << ')'
+                    << " stepMoveFirstIndex=" << d.stepMoveFirstIndex
+                    << " stepMoveFirstApproachDot=" << d.stepMoveFirstApproachDot
+                    << " stepMoveFirstStartPen="
+                    << (d.stepMoveFirstStartPenetrating ? 1 : 0)
+                    << " stepMoveFirstPenDepth="
+                    << d.stepMoveFirstPenetrationDepth
+                    << " stepMoveLastKind="
+                    << CctStepMoveQueryKindName(d.stepMoveLastKind)
+                    << " stepMoveLastReason="
+                    << CctStepMoveRejectReasonName(
+                           d.stepMoveLastRejectReason)
+                    << " stepMoveLastResweep="
+                    << (d.stepMoveLastResweepUsed ? 1 : 0)
+                    << " stepMoveLastT=" << d.stepMoveLastTOI
+                    << " stepMoveLastN=(" << d.stepMoveLastNormal.x << ','
+                                         << d.stepMoveLastNormal.y << ','
+                                         << d.stepMoveLastNormal.z << ')'
+                    << " stepMoveLastLatN=("
+                    << d.stepMoveLastLateralNormal.x << ','
+                    << d.stepMoveLastLateralNormal.y << ','
+                    << d.stepMoveLastLateralNormal.z << ')'
+                    << " stepMoveLastIndex=" << d.stepMoveLastIndex
+                    << " stepMoveLastApproachDot="
+                    << d.stepMoveLastApproachDot
+                    << " stepMoveLastStartPen="
+                    << (d.stepMoveLastStartPenetrating ? 1 : 0)
+                    << " stepMoveLastPenDepth="
+                    << d.stepMoveLastPenetrationDepth
+                    << " stepMoveLastNearZero="
+                    << (d.stepMoveLastNearZero ? 1 : 0)
+                    << " stepMoveLastWalkable="
+                    << (d.stepMoveLastWalkable ? 1 : 0)
+                    << " stepMoveLastHasLat="
+                    << (d.stepMoveLastHasLateralNormal ? 1 : 0)
+                    << " stepMoveClear=" << d.stepMoveClearPathCount
+                    << " stepMoveBlock="
+                    << d.stepMovePositiveBlockerCount
+                    << " stepMoveNeedRecover="
+                    << d.stepMoveNeedsRecoveryCount
+                    << " stepMoveUnsupported="
+                    << d.stepMoveUnsupportedCount
+                    << " zeroHitPushes=" << d.zeroHitPushes
+                    << " forwardIters=" << d.forwardIters
+                    << " stuck=" << (d.stuck ? 1 : 0)
+                    << " dxIntentMag=" << d.dxIntentMag
+                    << " dxCorrMag=" << d.dxCorrMag
+                    << " stepDownHitT=" << d.stepDownHitTOI
+                    << " stepDownN=(" << d.stepDownHitNormal.x << ','
+                                      << d.stepDownHitNormal.y << ','
+                                      << d.stepDownHitNormal.z << ')'
+                    << " stepDownWalkable=" << (d.stepDownWalkable ? 1 : 0)
+                    << " floorSemantic="
+                    << CctFloorSemanticName(d.floorSemantic)
+                    << " floorSource="
+                    << CctFloorSourceName(d.floorSource)
+                    << " floorAccepted=" << (d.floorAccepted ? 1 : 0)
+                    << " floorReject="
+                    << CctFloorRejectReasonName(d.floorRejectReason)
+                    << '\n';
+            }
+            return true;
+        };
+
+        const bool stampedOk = writeTraceFile(stampedPath);
+        const bool lastOk = writeTraceFile("captures/debug/kcc_trace_last.txt");
+        if (stampedOk || lastOk) {
+            m_kccTraceLastSavePath = stampedOk
+                ? stampedPath
+                : "captures/debug/kcc_trace_last.txt";
+        }
+        return stampedOk || lastOk;
+    }
+
+    void WorldState::FillKccTraceHud(Renderer::KccTraceHudState& out) const
+    {
+        out.status = m_kccTraceUi.enabled ? m_kccTraceStatus : Renderer::KccTraceStatus::Off;
+        out.lastCulprit = m_kccTraceLastCulprit;
+        out.storedTicks = m_kccTraceCount;
+        out.triggerTick = m_kccTraceTriggerTick;
+        out.lastSaveOk = m_kccTraceLastSaveOk;
+        out.lastSavePath = m_kccTraceLastSavePath.empty() ? nullptr : m_kccTraceLastSavePath.c_str();
+
+        if (m_kccTraceCount > 0) {
+            const uint32_t lastIndex =
+                (m_kccTraceWrite + KCC_TRACE_CAPACITY - 1) % KCC_TRACE_CAPACITY;
+            const auto& d = m_kccTraceRecords[lastIndex].debug;
+            out.yBegin = d.beforeTick.posFeet.y;
+            out.yFinal = d.afterWriteback.posFeet.y;
+        } else {
+            out.yBegin = 0.0f;
+            out.yFinal = 0.0f;
+        }
+    }
+
+    void WorldState::TriggerPass()
+    {
+        // --- KillZ: scalar world rule ---
+        // When extra trigger volumes are added, replace this with an infinite-plane
+        // trigger collider in BuildCollisionWorld and process via the overlap loop below.
+        if (m_pawn.posY < m_config.killZ) {
+            m_respawnCount++;
+            m_lastRespawnReason = "KillZ";
+#if defined(_DEBUG)
+            char buf[128];
+            sprintf_s(buf, "[KILLZ] #%u pos=(%.2f,%.2f,%.2f)\n",
+                m_respawnCount, m_pawn.posX, m_pawn.posY, m_pawn.posZ);
+            OutputDebugStringA(buf);
+#endif
+            RespawnResetControllerState();
+            // Re-mirror after respawn
+            const auto& rs = m_cct->getState();
+            m_pawn.posX = rs.posFeet.x; m_pawn.posY = rs.posFeet.y; m_pawn.posZ = rs.posFeet.z;
+            m_pawn.velX = rs.vel.x;     m_pawn.velY = rs.vel.y;     m_pawn.velZ = rs.vel.z;
+            m_pawn.onGround = rs.onGround;
+            return;  // respawned — skip trigger overlap this tick
+        }
+
+        // --- Trigger volume overlap (future: teleport, checkpoint, etc.) ---
+        // Capsule segment from KCC state (MakeSweepInput convention):
+        //   segA = posFeet + up * radius       (bottom sphere center)
+        //   segB = posFeet + up * (radius + 2*halfHeight)  (top sphere center)
+        const auto& cs = m_cct->getState();
+        float r  = m_config.capsuleRadius;
+        float hh = m_config.capsuleHalfHeight;
+        Collision::sq::Vec3 segA = {cs.posFeet.x, cs.posFeet.y + r,         cs.posFeet.z};
+        Collision::sq::Vec3 segB = {cs.posFeet.x, cs.posFeet.y + r + 2*hh,  cs.posFeet.z};
+
+        uint32_t hitIds[8];
+        uint32_t hitCount = m_collisionWorld.OverlapCapsule(
+            segA, segB, r, Collision::Q_Trigger, hitIds, 8);
+
+        // hitIds already ascending (m_triggerIds is ascending, scan preserves order)
+        for (uint32_t i = 0; i < hitCount; ++i)
+        {
+            const auto& desc = m_collisionWorld.getColliderDesc(hitIds[i]);
 
 #if defined(_DEBUG)
-            if (m_config.enableYSweep)
             {
-                // PR2.9: Compare MoveCapsuleKinematic vs WithAxisY (legacy path)
-                CollisionStats legacyStats = {};
-                auto legacyResult = Collision::SolveCapsuleMovement_WithAxisY(
-                    sceneView, req, legacyStats);
-
-                constexpr float POS_EPS = 1e-4f;
-                constexpr float VEL_EPS = 0.01f;
-
-                float posDiff = fabsf(result.posX - legacyResult.posX)
-                              + fabsf(result.posY - legacyResult.posY)
-                              + fabsf(result.posZ - legacyResult.posZ);
-                float velDiff = fabsf(result.velX - legacyResult.velX)
-                              + fabsf(result.velY - legacyResult.velY)
-                              + fabsf(result.velZ - legacyResult.velZ);
-                bool groundDiff = (result.onGround != legacyResult.onGround);
-
-                if (posDiff > POS_EPS || velDiff > VEL_EPS || groundDiff)
-                {
-                    char buf[320];
-                    sprintf_s(buf,
-                        "[LEGACY_COMPARE_DIFF] pos=(%.4f,%.4f,%.4f)vs(%.4f,%.4f,%.4f) "
-                        "vel=(%.3f,%.3f,%.3f)vs(%.3f,%.3f,%.3f) gnd=%d/%d\n",
-                        result.posX, result.posY, result.posZ,
-                        legacyResult.posX, legacyResult.posY, legacyResult.posZ,
-                        result.velX, result.velY, result.velZ,
-                        legacyResult.velX, legacyResult.velY, legacyResult.velZ,
-                        result.onGround?1:0, legacyResult.onGround?1:0);
-                    OutputDebugStringA(buf);
-                }
-
-                // Throttled summary every 600 ticks (10s @ 60Hz)
-                static uint32_t s_compareCount = 0;
-                static float s_maxPosDiff = 0.0f, s_maxVelDiff = 0.0f;
-                static uint32_t s_diffCount = 0;
-                s_compareCount++;
-                if (posDiff > s_maxPosDiff) s_maxPosDiff = posDiff;
-                if (velDiff > s_maxVelDiff) s_maxVelDiff = velDiff;
-                if (posDiff > POS_EPS || velDiff > VEL_EPS || groundDiff) s_diffCount++;
-                if (s_compareCount % 600 == 0)
-                {
-                    char buf[200];
-                    sprintf_s(buf, "[LEGACY_COMPARE] maxPos=%.6f maxVel=%.4f diffs=%u total=%u\n",
-                        s_maxPosDiff, s_maxVelDiff, s_diffCount, s_compareCount);
-                    OutputDebugStringA(buf);
-                    s_maxPosDiff = 0.0f; s_maxVelDiff = 0.0f; s_diffCount = 0;
-                }
+                char buf[128];
+                sprintf_s(buf, "[TRIGGER_HIT] idx=%u tag=%u\n", hitIds[i], desc.userTag);
+                OutputDebugStringA(buf);
             }
 #endif
 
-            m_pawn.posX = result.posX;
-            m_pawn.posY = result.posY;
-            m_pawn.posZ = result.posZ;
-            m_pawn.velX = result.velX;
-            m_pawn.velY = result.velY;
-            m_pawn.velZ = result.velZ;
-            m_pawn.onGround = result.onGround;
-            m_didFloorClampThisTick = m_collisionStats.snappedThisTick;
+            // Future: interpret desc.userTag for teleport, checkpoint, etc.
+            (void)desc;
         }
-
-        m_justJumpedThisTick = false;  // Reset for next tick
-
-        // Legacy floor collision (now logging-only)
-        ResolveFloorCollision();
-
-        // 10. KillZ check (respawn if below threshold)
-        CheckKillZ();
-
-        // Day3.12 StepUpGridTest: Log on state change only
-        if (m_config.enableStepUpGridTest)
-        {
-            static bool s_prevTry = false;
-            static bool s_prevOk = false;
-            static uint8_t s_prevMask = 0;
-
-            bool changed = (m_collisionStats.stepTry != s_prevTry) ||
-                           (m_collisionStats.stepSuccess != s_prevOk) ||
-                           (m_collisionStats.stepFailMask != s_prevMask);
-
-            if (changed)
-            {
-                char buf[256];
-                sprintf_s(buf, "[STEP_GRID] pos=(%.2f,%.2f,%.2f) gnd=%d hit=%d try=%d ok=%d mask=0x%02X h=%.3f\n",
-                    m_pawn.posX, m_pawn.posY, m_pawn.posZ,
-                    m_pawn.onGround ? 1 : 0,
-                    m_collisionStats.sweepHit ? 1 : 0,
-                    m_collisionStats.stepTry ? 1 : 0,
-                    m_collisionStats.stepSuccess ? 1 : 0,
-                    m_collisionStats.stepFailMask,
-                    m_collisionStats.stepHeightUsed);
-                OutputDebugStringA(buf);
-
-                s_prevTry = m_collisionStats.stepTry;
-                s_prevOk = m_collisionStats.stepSuccess;
-                s_prevMask = m_collisionStats.stepFailMask;
-            }
-        }
-    }
-
-    void WorldState::ResolveFloorCollision()
-    {
-        // Day3.5: This function is now logging-only. Support/snap logic moved to QuerySupport.
-        float pawnBottomY = m_pawn.posY;
-
-        bool inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
-                              m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
-
-        // [FLOOR-C] Log when OUT of bounds
-        if (!inFloorBounds) {
-            char buf[256];
-            sprintf_s(buf, "[FLOOR-C] OUT_OF_BOUNDS! posX=%.2f posZ=%.2f boundsX=[%.1f,%.1f] boundsZ=[%.1f,%.1f]\n",
-                m_pawn.posX, m_pawn.posZ,
-                m_config.floorMinX, m_config.floorMaxX,
-                m_config.floorMinZ, m_config.floorMaxZ);
-            OutputDebugStringA(buf);
-        }
-    }
-
-    void WorldState::CheckKillZ()
-    {
-        if (m_pawn.posY < m_config.killZ)
-        {
-            m_respawnCount++;
-            m_lastRespawnReason = "KillZ";
-
-            char buf[256];
-            sprintf_s(buf, "[KILLZ] #%u at pos=(%.2f,%.2f,%.2f)\n",
-                m_respawnCount, m_pawn.posX, m_pawn.posY, m_pawn.posZ);
-            OutputDebugStringA(buf);
-
-            RespawnResetControllerState();
-        }
-    }
-
-    void WorldState::ToggleStepUpGridTest()
-    {
-        bool newValue = !m_config.enableStepUpGridTest;
-
-        // Clear existing extras from spatial grid before switching modes
-        ClearExtrasFromSpatialGrid();
-
-        if (newValue)
-        {
-            // Toggle ON: Build stair grid test
-            m_config.enableStepUpGridTest = true;
-            BuildStepUpGridTest();
-            m_stepGridWasEverEnabled = true;
-            OutputDebugStringA("[STEP_GRID] Toggle => 1 (stairs built)\n");
-        }
-        else
-        {
-            // Toggle OFF: Rebuild fixtures mode (T1/T2/T3 + ceiling)
-            m_config.enableStepUpGridTest = false;
-            if (m_config.enableStepUpTestFixtures)
-            {
-                BuildExtraFixtures();
-                OutputDebugStringA("[STEP_GRID] Toggle => 0 (fixtures rebuilt)\n");
-            }
-            else
-            {
-                OutputDebugStringA("[STEP_GRID] Toggle => 0 (no fixtures)\n");
-            }
-        }
-
-        // MODE_SNAPSHOT: Log exact state after toggle
-        char snap[256];
-        sprintf_s(snap, "[MODE_SNAPSHOT] fixtures=%d gridTest=%d stepUp=%d extrasCount=%zu\n",
-            m_config.enableStepUpTestFixtures ? 1 : 0,
-            m_config.enableStepUpGridTest ? 1 : 0,
-            m_config.enableStepUp ? 1 : 0,
-            m_extras.size());
-        OutputDebugStringA(snap);
     }
 
     void WorldState::RespawnResetControllerState()
@@ -430,6 +715,14 @@ public:
         m_pawn.velX = m_pawn.velY = m_pawn.velZ = 0.0f;
         m_pawn.onGround = false;
         m_collisionStats = CollisionStats{};
+
+        // Sync KCC primary state on respawn
+        if (m_cct)
+        {
+            Collision::CctState respawn;
+            respawn.posFeet = {m_config.spawnX, m_config.spawnY, m_config.spawnZ};
+            m_cct->setState(respawn);
+        }
 
         char buf[128];
         sprintf_s(buf, "[RESPAWN] ctrl=Capsule stats_cleared=1 pos=(%.1f,%.1f,%.1f)\n",
@@ -465,6 +758,130 @@ public:
         OutputDebugStringA("[Collision] Built spatial hash: 10000 cubes in 100x100 grid\n");
     }
 
+    // Phase A: Build CollisionWorld from cube AABBs + floor triangles.
+    // Cubes are Solid AABB. Floor is 2 Solid Tri covering the floor plane.
+    void WorldState::BuildCollisionWorld()
+    {
+        namespace coll = Collision;
+
+        const uint32_t cubeCount = GRID_SIZE * GRID_SIZE;
+        std::vector<coll::ColliderDesc> descs;
+        descs.reserve(cubeCount + 2);  // cubes + 2 floor tris
+
+        // Cubes
+        for (uint32_t i = 0; i < cubeCount; ++i) {
+            coll::ColliderDesc d;
+            AABB engineAABB = GetCubeAABB(static_cast<uint16_t>(i));
+            d.bounds = {
+                engineAABB.minX, engineAABB.minY, engineAABB.minZ,
+                engineAABB.maxX, engineAABB.maxY, engineAABB.maxZ
+            };
+            d.shape   = coll::ColliderShape::AABB;
+            d.kind    = coll::ColliderKind::Solid;
+            d.mask    = coll::Q_Solid;
+            d.userTag = i;
+            descs.push_back(d);
+        }
+
+        // Floor: two triangles at Y=floorY covering floor bounds.
+        // Winding: CCW from above → normal = (0,1,0).
+        {
+            const float fx0 = m_config.floorMinX, fx1 = m_config.floorMaxX;
+            const float fz0 = m_config.floorMinZ, fz1 = m_config.floorMaxZ;
+            const float fy  = m_config.floorY;
+
+            coll::ColliderDesc floorA;
+            floorA.shape    = coll::ColliderShape::Tri;
+            floorA.kind     = coll::ColliderKind::Solid;
+            floorA.mask     = coll::Q_Solid;
+            floorA.userTag  = 0xFFFFFFFE;
+            floorA.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz1}, {fx1,fy,fz0}};
+            floorA.bounds   = Collision::sq::TriAABB(floorA.triVerts);
+            descs.push_back(floorA);
+
+            coll::ColliderDesc floorB;
+            floorB.shape    = coll::ColliderShape::Tri;
+            floorB.kind     = coll::ColliderKind::Solid;
+            floorB.mask     = coll::Q_Solid;
+            floorB.userTag  = 0xFFFFFFFE;
+            floorB.triVerts = {{fx0,fy,fz0}, {fx0,fy,fz1}, {fx1,fy,fz1}};
+            floorB.bounds   = Collision::sq::TriAABB(floorB.triVerts);
+            descs.push_back(floorB);
+        }
+
+        m_collisionWorld.BuildStatic(descs);
+    }
+
+    // Rebuild CollisionWorld with cubes + floor tris + all current extras as Solid AABBs.
+    // Called after BuildStepUpGridTest() to ensure stairs are in the BVH.
+    void WorldState::RebuildCollisionWorldWithExtras()
+    {
+        namespace coll = Collision;
+
+        const uint32_t cubeCount = GRID_SIZE * GRID_SIZE;
+        std::vector<coll::ColliderDesc> descs;
+        descs.reserve(cubeCount + 2 + m_extras.size());
+
+        // Cubes
+        for (uint32_t i = 0; i < cubeCount; ++i) {
+            coll::ColliderDesc d;
+            AABB engineAABB = GetCubeAABB(static_cast<uint16_t>(i));
+            d.bounds = {
+                engineAABB.minX, engineAABB.minY, engineAABB.minZ,
+                engineAABB.maxX, engineAABB.maxY, engineAABB.maxZ
+            };
+            d.shape   = coll::ColliderShape::AABB;
+            d.kind    = coll::ColliderKind::Solid;
+            d.mask    = coll::Q_Solid;
+            d.userTag = i;
+            descs.push_back(d);
+        }
+
+        // Floor triangles
+        {
+            const float fx0 = m_config.floorMinX, fx1 = m_config.floorMaxX;
+            const float fz0 = m_config.floorMinZ, fz1 = m_config.floorMaxZ;
+            const float fy  = m_config.floorY;
+
+            coll::ColliderDesc floorA;
+            floorA.shape    = coll::ColliderShape::Tri;
+            floorA.kind     = coll::ColliderKind::Solid;
+            floorA.mask     = coll::Q_Solid;
+            floorA.userTag  = 0xFFFFFFFE;
+            floorA.triVerts = {{fx0,fy,fz0}, {fx1,fy,fz1}, {fx1,fy,fz0}};
+            floorA.bounds   = Collision::sq::TriAABB(floorA.triVerts);
+            descs.push_back(floorA);
+
+            coll::ColliderDesc floorB;
+            floorB.shape    = coll::ColliderShape::Tri;
+            floorB.kind     = coll::ColliderKind::Solid;
+            floorB.mask     = coll::Q_Solid;
+            floorB.userTag  = 0xFFFFFFFE;
+            floorB.triVerts = {{fx0,fy,fz0}, {fx0,fy,fz1}, {fx1,fy,fz1}};
+            floorB.bounds   = Collision::sq::TriAABB(floorB.triVerts);
+            descs.push_back(floorB);
+        }
+
+        // Extras (stairs, etc.) as Solid AABBs
+        for (size_t i = 0; i < m_extras.size(); ++i) {
+            coll::ColliderDesc d;
+            const AABB& ea = m_extras[i].aabb;
+            d.bounds = { ea.minX, ea.minY, ea.minZ, ea.maxX, ea.maxY, ea.maxZ };
+            d.shape   = coll::ColliderShape::AABB;
+            d.kind    = coll::ColliderKind::Solid;
+            d.mask    = coll::Q_Solid;
+            d.userTag = static_cast<uint32_t>(EXTRA_BASE + i);
+            descs.push_back(d);
+        }
+
+        m_collisionWorld.BuildStatic(descs);
+
+        char buf[128];
+        sprintf_s(buf, "[COLLWORLD_REBUILD] total=%u extras=%zu\n",
+            static_cast<uint32_t>(descs.size()), m_extras.size());
+        OutputDebugStringA(buf);
+    }
+
     int WorldState::WorldToCellX(float x) const
     {
         // Cell size = 2.0 (cube spacing), grid origin = (-100, -100)
@@ -492,30 +909,6 @@ public:
         for (int gz = minCZ; gz <= maxCZ; ++gz)
             for (int gx = minCX; gx <= maxCX; ++gx)
                 m_spatialGrid[gz][gx].push_back(id);
-    }
-
-    void WorldState::ClearExtrasFromSpatialGrid()
-    {
-        // Remove all IDs >= EXTRA_BASE from spatial grid
-        for (int gz = 0; gz < GRID_SIZE; ++gz)
-        {
-            for (int gx = 0; gx < GRID_SIZE; ++gx)
-            {
-                auto& cell = m_spatialGrid[gz][gx];
-                cell.erase(
-                    std::remove_if(cell.begin(), cell.end(),
-                        [](uint16_t id) { return id >= EXTRA_BASE; }),
-                    cell.end());
-            }
-        }
-        m_extras.clear();
-        OutputDebugStringA("[SPATIAL] Cleared all extras from grid\n");
-    }
-
-    void WorldState::BuildExtraFixtures()
-    {
-        m_extras.clear();
-        // No extra fixtures in fixture mode (T1/T2/T3 are grid cubes, not extras)
     }
 
     void WorldState::BuildStepUpGridTest()
@@ -579,6 +972,9 @@ public:
 
         sprintf_s(buf, "[STEP_GRID] Total extras=%zu\n", m_extras.size());
         OutputDebugStringA(buf);
+
+        // Rebuild BVH to include extras (stairs)
+        RebuildCollisionWorldWithExtras();
     }
 
     AABB WorldState::GetCubeAABB(uint16_t cubeIdx) const
@@ -603,32 +999,6 @@ public:
         aabb.maxX = cx + m_config.cubeHalfXZ;
         aabb.minZ = cz - m_config.cubeHalfXZ;
         aabb.maxZ = cz + m_config.cubeHalfXZ;
-
-        // Day3.12 Phase 4B+: Fixture height overrides (indices computed at init)
-        // Collision Y must match render: CUBE_TOP (3.0) + stepHeight
-        if (m_config.enableStepUpTestFixtures)
-        {
-            const float CUBE_TOP = m_config.cubeMaxY;  // 3.0
-
-            if (cubeIdx == m_fixtureT1Idx)
-            {
-                aabb.minY = 0.0f;
-                aabb.maxY = CUBE_TOP + 0.3f;  // 3.3 - matches render
-                return aabb;
-            }
-            if (cubeIdx == m_fixtureT2Idx)
-            {
-                aabb.minY = 0.0f;
-                aabb.maxY = CUBE_TOP + 0.6f;  // 3.6 - matches render
-                return aabb;
-            }
-            if (cubeIdx == m_fixtureT3StepIdx)
-            {
-                aabb.minY = 0.0f;
-                aabb.maxY = CUBE_TOP + 0.5f;  // 3.5 - matches render
-                return aabb;
-            }
-        }
 
         aabb.minY = m_config.cubeMinY;
         aabb.maxY = m_config.cubeMaxY;
@@ -811,7 +1181,7 @@ public:
         // Floor diagnostics
         snap.inFloorBounds = (m_pawn.posX >= m_config.floorMinX && m_pawn.posX <= m_config.floorMaxX &&
                               m_pawn.posZ >= m_config.floorMinZ && m_pawn.posZ <= m_config.floorMaxZ);
-        snap.didFloorClamp = m_didFloorClampThisTick;
+        snap.didFloorClamp = false;
         snap.floorMinX = m_config.floorMinX;
         snap.floorMaxX = m_config.floorMaxX;
         snap.floorMinZ = m_config.floorMinZ;
@@ -905,9 +1275,7 @@ public:
         snap.stepHeightUsed = m_collisionStats.stepHeightUsed;
         snap.stepCubeIdx = m_collisionStats.stepCubeIdx;
 
-        // Day3.12+: Step grid test toggle state
-        snap.stepGridTestEnabled = m_config.enableStepUpGridTest;
-        snap.stepGridWasEverEnabled = m_stepGridWasEverEnabled;
+        FillKccTraceHud(snap.kccTrace);
 
         return snap;
     }

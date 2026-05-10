@@ -39,6 +39,7 @@ namespace Renderer
         ID3D12PipelineState* GetCubesOpaquePSO() const { return m_cubesOpaquePso; }  // Task B
         ID3D12PipelineState* GetFloorPSO() const { return m_floorPso; }
         ID3D12PipelineState* GetMarkerPSO() const { return m_markerPso; }
+        ID3D12PipelineState* GetDebugLinePSO() const { return m_debugLinePso; }
         ID3D12RootSignature* GetMarkerRootSignature() const { return m_markerRootSignature.Get(); }
 
         // Log PSO cache statistics
@@ -60,6 +61,7 @@ namespace Renderer
         ID3D12PipelineState* m_cubesOpaquePso = nullptr;  // Task B: Explicit opaque for sanity test
         ID3D12PipelineState* m_floorPso = nullptr;
         ID3D12PipelineState* m_markerPso = nullptr;
+        ID3D12PipelineState* m_debugLinePso = nullptr;
 
         // Shader bytecode blobs (needed for PSO cache key hashing)
         Microsoft::WRL::ComPtr<ID3DBlob> m_vsBlob;
@@ -68,6 +70,8 @@ namespace Renderer
         Microsoft::WRL::ComPtr<ID3DBlob> m_floorPsBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> m_markerVsBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> m_markerPsBlob;
+        Microsoft::WRL::ComPtr<ID3DBlob> m_debugLineVsBlob;
+        Microsoft::WRL::ComPtr<ID3DBlob> m_debugLinePsBlob;
 
         Microsoft::WRL::ComPtr<ID3D12RootSignature> m_markerRootSignature;
     };
