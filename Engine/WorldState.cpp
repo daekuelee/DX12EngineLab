@@ -225,6 +225,17 @@ namespace Engine
         m_presentationPitchOffset = 0.0f;
     }
 
+    Math::RigidTransform WorldState::BuildPawnRenderTransform() const
+    {
+        // SSOT: docs/contracts/math/transform-contract.md
+        // REF: docs/reference/unreal/contracts/transform-component-pose.md
+        // Invariant: pawn render pose is feet/root position plus control yaw only.
+        return {
+            {m_pawn.posX, m_pawn.posY, m_pawn.posZ},
+            Math::QuatFromYawY(m_view.yaw)
+        };
+    }
+
     void WorldState::TickFixed(const InputState& input, float fixedDt)
     {
         // Reset collision stats for this tick

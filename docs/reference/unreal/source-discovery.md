@@ -25,7 +25,27 @@ Character movement:
 - `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h`
 - `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Components/CharacterMovementComponent.cpp`
 
+Transform / component pose:
+
+- `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Classes/Components/SceneComponent.h`
+- `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Components/SceneComponent.cpp`
+- `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Classes/GameFramework/MovementComponent.h`
+- `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Collision/WorldCollision.cpp`
+
 ## Discovery Entries
+
+### 2026-05-10 - Transform component pose contract mining
+
+- Engine: Unreal
+- Version/root: `.ref/UnrealEngine/.ref/UnrealEngine`
+- Search terms: `FTransform`, `FQuat`, `CalcNewComponentToWorld_GeneralCase`, `UpdateComponentToWorldWithParent`, `SetWorldTransform`, `SetWorldLocationAndRotation`, `AddLocalTransform`, `AddWorldTransform`, `ComponentToTest`
+- Located files:
+  - `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Classes/Components/SceneComponent.h`
+  - `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Components/SceneComponent.cpp`
+  - `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Classes/GameFramework/MovementComponent.h`
+  - `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Collision/WorldCollision.cpp`
+- Missing files: none for this audit scope
+- Notes: raw-source-backed contract card written to `docs/reference/unreal/contracts/transform-component-pose.md`. This discovery entry is transform integration context only; it does not audit EngineLab production code.
 
 ### 2026-05-10 - CharacterMovement walking / floor / step contract mining
 

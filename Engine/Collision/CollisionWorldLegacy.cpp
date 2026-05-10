@@ -8,6 +8,8 @@ namespace Engine { namespace Collision {
 
 void CollisionWorldLegacy::BuildStatic(const ColliderDesc* colliders, uint32_t count)
 {
+    ResetSceneQueryFrameMetrics();
+
     m_descs.assign(colliders, colliders + count);
 
     // Partition: solid AABBs + solid Tris for BVH, trigger indices for linear scan
@@ -60,6 +62,7 @@ sq::Hit CollisionWorldLegacy::SweepCapsuleClosest(
     // BVH contains only Solid colliders. Triggers excluded at BuildStatic.
     sq::Hit hit = sq::SweepCapsuleClosestHit_Fast(m_bvh, in, cfg, m_scratch,
                                                   filter, rejectInitialOverlap);
+    sq::AccumulateQueryMetrics(m_sceneQueryFrameMetrics, m_scratch.metrics);
     if (hit.hit) {
         // Remap BVH-local index → m_descs index by primitive type
         if (hit.type == sq::PrimType::Tri)
@@ -104,6 +107,7 @@ uint32_t CollisionWorldLegacy::OverlapCapsuleContacts(
     // BVH contains only Solid colliders. Triggers excluded at BuildStatic.
     uint32_t count = sq::OverlapCapsuleContacts_Fast(
         m_bvh, segA, segB, radius, outContacts, maxContacts, m_scratch);
+    sq::AccumulateQueryMetrics(m_sceneQueryFrameMetrics, m_scratch.metrics);
     // Remap: BVH prim index → m_descs index by primitive type
     for (uint32_t i = 0; i < count; ++i) {
         if (outContacts[i].type == sq::PrimType::Tri)
@@ -112,6 +116,21 @@ uint32_t CollisionWorldLegacy::OverlapCapsuleContacts(
             outContacts[i].index = m_solidRemap[outContacts[i].index];
     }
     return count;
+}
+
+void CollisionWorldLegacy::ResetSceneQueryFrameMetrics() const
+{
+    sq::ResetSceneQueryFrameMetrics(m_sceneQueryFrameMetrics);
+}
+
+const sq::SceneQueryFrameMetrics& CollisionWorldLegacy::GetSceneQueryFrameMetrics() const
+{
+    return m_sceneQueryFrameMetrics;
+}
+
+const sq::QueryMetrics& CollisionWorldLegacy::GetLastSceneQueryMetrics() const
+{
+    return m_sceneQueryFrameMetrics.lastQuery;
 }
 
 }} // namespace Engine::Collision

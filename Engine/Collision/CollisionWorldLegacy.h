@@ -103,6 +103,9 @@ public:
     uint32_t getColliderCount() const { return static_cast<uint32_t>(m_descs.size()); }
     const ColliderDesc& getColliderDesc(uint32_t idx) const { return m_descs[idx]; }
     uint32_t getTriggerCount() const { return static_cast<uint32_t>(m_triggerIds.size()); }
+    void ResetSceneQueryFrameMetrics() const;
+    const sq::SceneQueryFrameMetrics& GetSceneQueryFrameMetrics() const;
+    const sq::QueryMetrics& GetLastSceneQueryMetrics() const;
 
 private:
     std::vector<ColliderDesc>  m_descs;         // collider registry (ordered)
@@ -113,6 +116,7 @@ private:
     std::vector<uint32_t>      m_triggerIds;   // m_descs indices where kind==Trigger, ascending
     sq::StaticBVH              m_bvh;
     mutable sq::QueryScratch  m_scratch;   // single-threaded query scratch
+    mutable sq::SceneQueryFrameMetrics m_sceneQueryFrameMetrics;
 };
 
 }} // namespace Engine::Collision

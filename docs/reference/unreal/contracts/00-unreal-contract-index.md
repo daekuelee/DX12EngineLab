@@ -5,7 +5,7 @@ Updated: 2026-05-10
 ## Purpose
 
 This directory is the reusable storage location for Unreal raw-source-backed
-movement-policy contracts used by DX12EngineLab KCC work.
+movement-policy and transform-integration contracts used by DX12EngineLab work.
 
 Do not put EngineLab audit conclusions in this directory.
 Do not copy Unreal code.
@@ -49,6 +49,9 @@ Known raw source anchors:
 - `StepUp`: `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Components/CharacterMovementComponent.cpp:7450`
 - `SafeMoveUpdatedComponent`: `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Components/MovementComponent.cpp:558`
 - `ResolvePenetrationImpl`: `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Components/MovementComponent.cpp:624`
+- `CalcNewComponentToWorld_GeneralCase`: `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Components/SceneComponent.cpp:715`
+- `SetWorldTransform`: `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Components/SceneComponent.cpp:1981`
+- `SetWorldLocationAndRotation(FQuat)`: `.ref/UnrealEngine/.ref/UnrealEngine/Engine/Source/Runtime/Engine/Private/Components/SceneComponent.cpp:2026`
 
 These anchors are discovery entries, not accepted behavior contracts yet.
 
@@ -82,6 +85,13 @@ Mine these files before claiming Unreal parity in KCC audits or source comments:
   - `ResolvePenetrationImpl`
   - start penetration
   - movement retry after depenetration
+- `transform-component-pose.md`
+  - `CalcNewComponentToWorld_GeneralCase`
+  - `UpdateComponentToWorldWithParent`
+  - `SetWorldTransform`
+  - `SetWorldLocationAndRotation`
+  - `MovementComponent` `FQuat` overloads
+  - collision transform space conversion
 
 ## Contract Card Template
 

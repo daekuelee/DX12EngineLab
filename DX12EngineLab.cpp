@@ -9,6 +9,8 @@
 #include "Input/HotkeyRouter.h"
 #include "Input/GameplayInputSystem.h"
 #include "Input/GameplayActionSystem.h"
+#include "Engine/Math/Vec3SimdSelfTest.h"
+#include "Engine/Collision/SceneQuery/SqBackendHarness.h"
 #include "Scene/SceneContract.h"
 #include <cstdio>
 
@@ -189,6 +191,12 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
    // Run Scene contract self-test (Debug-only)
    Scene::RunContractSelfTest();
+
+   // Run math SIMD parity self-test (Debug-only)
+   Engine::Math::RunVec3SimdSelfTest();
+
+   // Run SceneQuery backend harness smoke self-test (Debug-only)
+   Engine::Collision::sq::RunSceneQueryBackendSelfTest();
 
    ShowWindow(hWnd, nCmdShow);
    UpdateWindow(hWnd);

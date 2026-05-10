@@ -476,11 +476,20 @@ namespace Renderer
 
     void Dx12Context::SetPawnTransform(float posX, float posY, float posZ, float yaw)
     {
-        m_characterRenderer.SetPawnTransform(posX, posY, posZ, yaw);
+        Engine::Math::RigidTransform transform{
+            {posX, posY, posZ},
+            Engine::Math::QuatFromYawY(yaw)
+        };
+        SetPawnTransform(transform);
+    }
+
+    void Dx12Context::SetPawnTransform(const Engine::Math::RigidTransform& transform)
+    {
+        m_characterRenderer.SetPawnTransform(transform);
 #if defined(_DEBUG)
-        m_pawnPosX = posX;
-        m_pawnPosY = posY;
-        m_pawnPosZ = posZ;
+        m_pawnPosX = transform.position.x;
+        m_pawnPosY = transform.position.y;
+        m_pawnPosZ = transform.position.z;
 #endif
     }
 

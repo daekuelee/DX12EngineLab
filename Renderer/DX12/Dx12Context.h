@@ -17,8 +17,9 @@
 #include "UploadArena.h"
 #include "CharacterRenderer.h"
 
-// Forward declare Engine::WorldState
+// Forward declare Engine types
 namespace Engine { class WorldState; }
+namespace Engine { namespace Math { struct RigidTransform; } }
 
 namespace Renderer
 {
@@ -183,6 +184,7 @@ namespace Renderer
 
         // Set pawn transform for character rendering (Day3)
         void SetPawnTransform(float posX, float posY, float posZ, float yaw);
+        void SetPawnTransform(const Engine::Math::RigidTransform& transform);
 
         // MT1: Generated transform count for validation
         uint32_t GetGeneratedTransformCount() const { return m_generatedTransformCount; }

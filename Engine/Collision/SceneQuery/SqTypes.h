@@ -22,7 +22,9 @@
 //   - [PR3.1] AABB layout matches Engine::AABB (verified at integration seam)
 //
 // REFERENCES:
-//   - ex.cpp lines 51-136 (golden SSOT)
+//   - docs/agent-context/scenequery-refactor.md
+//   - docs/reference/physx/contracts/sweep-toi-hit-normal.md
+//   - docs/reference/physx/contracts/initial-overlap-mtd.md
 // =========================================================================
 
 #include "SqMath.h"

@@ -24,7 +24,8 @@
 //   - [PR3.5] CapsuleAabbAtT: bounds contain both sphere endpoints at time t
 //
 // REFERENCES:
-//   - ex.cpp lines 264-306 (golden SSOT)
+//   - docs/agent-context/scenequery-refactor.md
+//   - docs/reference/physx/contracts/scenequery-pipeline.md
 //   - Ericson, RTCD Section 5.5.8
 // =========================================================================
 

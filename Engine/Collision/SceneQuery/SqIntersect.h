@@ -22,7 +22,8 @@
 //   - [PR3.2] Segment tangent to sphere: valid hit at tangent point
 //
 // REFERENCES:
-//   - ex.cpp lines 476-573 (golden SSOT)
+//   - docs/agent-context/scenequery-refactor.md
+//   - docs/reference/physx/contracts/intersection-raw.md
 //   - Ericson, RTCD Chapter 5 (segment-sphere, segment-cylinder)
 // =========================================================================
 

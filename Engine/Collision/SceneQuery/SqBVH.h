@@ -18,6 +18,8 @@
 //   - Standalone: includes only SqTypes.h + <algorithm>.
 //   - Build is deterministic: identical input -> identical BVH topology.
 //   - StaticBVH owns node/primIdx vectors. Geometry pointers are borrowed (C++17).
+//   - Empty BVH has a degenerate root but query code must treat prims.empty()
+//     as no candidates, not as an internal node.
 //
 // PROOF POINTS:
 //   - [PR3.5] BuildStaticBVH with 0 prims: root node exists, primCount=0
@@ -25,7 +27,9 @@
 //   - [PR3.5] stable_sort preserves relative order of equal-key primitives
 //
 // REFERENCES:
-//   - ex.cpp lines 141-258 (golden SSOT)
+//   - docs/agent-context/scenequery-refactor.md
+//   - docs/reference/physx/contracts/scenequery-pipeline.md
+//   - docs/reference/physx/contracts/mesh-sweeps-ordering.md
 //   - Ericson, RTCD Chapter 6 (BVH construction)
 // =========================================================================
 
@@ -55,6 +59,11 @@ struct StaticBVH {
     const OBB*      obbs      = nullptr;  uint32_t obbCount  = 0;
     const Triangle* tris      = nullptr;  uint32_t triCount  = 0;
 };
+
+inline bool IsEmptyBVH(const StaticBVH& bvh)
+{
+    return bvh.nodes.empty() || bvh.prims.empty();
+}
 
 // ---- Build parameters ---------------------------------------------------
 
