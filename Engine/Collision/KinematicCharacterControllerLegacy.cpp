@@ -470,6 +470,12 @@ void KinematicCharacterControllerLegacy::StepMove(const sq::Vec3& walkMove)
                 return view;
             }
 
+            if (view.rawWalkable) {
+                view.kind = CctStepMoveQueryKind::ClearPath;
+                view.rejectReason = CctStepMoveRejectReason::WalkableSupport;
+                return view;
+            }
+
             view.hasLateralNormal =
                 BuildLateralStepMoveResponseNormal(raw.normal, m_config.up,
                                                    view.lateralNormal);
@@ -605,6 +611,8 @@ void KinematicCharacterControllerLegacy::StepMove(const sq::Vec3& walkMove)
 //            land; otherwise apply the vertical drop and remain Falling.
 //
 // SSOT: docs/audits/kcc/02-walking-falling-reactive-stepup-semantics.md
+// SSOT: docs/audits/kcc/09-stepdown-split-local-audit.md
+// REF: docs/reference/unreal/contracts/floor-find-perch-edge.md
 // Invariant: Phase2 has no same-tick time-budget continuation. StepDown may
 // change mode and pose, but it must not run additional lateral movement.
 // EVIDENCE: CctDebug.floorSemantic, floorSource, floorRejectReason
@@ -664,18 +672,10 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
         return decision;
     };
 
-    const bool walkingAtEntry = IsWalking();
-    const CctFloorSemantic primarySemantic = walkingAtEntry
-        ? CctFloorSemantic::WalkingMaintainFloor
-        : CctFloorSemantic::FallingLand;
-    const CctFloorSemantic snapSemantic = walkingAtEntry
-        ? CctFloorSemantic::WalkingSnapOrLatch
-        : CctFloorSemantic::FallingLand;
-
     auto makeSupportDecision =
-        [this, snapSemantic](const sq::Vec3& normal, float depth) {
+        [this](const sq::Vec3& normal, float depth) {
         FloorDecision decision;
-        decision.semantic = snapSemantic;
+        decision.semantic = CctFloorSemantic::WalkingSnapOrLatch;
         decision.source = CctFloorSource::OverlapSupport;
         decision.hit.hit = true;
         decision.hit.t = 0.0f;
@@ -705,6 +705,8 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
         return true;
     };
 
+    const bool walkingAtEntry = IsWalking();
+
     // Ascending never consumes a downward support sweep.
     if (m_state.verticalVelocity > 0.0f) {
         FloorDecision skipped;
@@ -727,19 +729,6 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
 
     const float supportProbeDist =
         (std::max)(m_config.contactOffset * 2.0f, m_config.sweep.skin);
-    float dropDist = walkingAtEntry
-        ? supportProbeDist
-        : (m_currentStepOffset + downVelocityDt);
-    if (dropDist < kMinDist) {
-        FloorDecision skipped;
-        skipped.semantic = walkingAtEntry
-            ? CctFloorSemantic::WalkingSnapOrLatch
-            : CctFloorSemantic::FallingContinue;
-        skipped.rejectReason = CctFloorRejectReason::WrongSemanticSource;
-        recordFloorDecision(skipped);
-        m_debug.stepDownSkipped = true;
-        return;
-    }
 
     // Walkable ground filter.
     // Only surfaces where Dot(normal, up) >= maxSlopeCos survive.
@@ -754,37 +743,58 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
     sq::SweepFilter groundFilterInit = groundFilter;
     groundFilterInit.filterInitialOverlap = true;
 
-    sq::Vec3 downDelta = m_config.up * (-dropDist);
-    float dist = sq::Len(downDelta);
+    auto makeSkipDecision = [](CctFloorSemantic semantic) {
+        FloorDecision skipped;
+        skipped.semantic = semantic;
+        skipped.rejectReason = CctFloorRejectReason::WrongSemanticSource;
+        return skipped;
+    };
 
-    m_debug.stepDownDropDist = dropDist;
+    auto makeMissDecision =
+        [](CctFloorSemantic semantic,
+           const FloorDecision& rejected) {
+        FloorDecision miss = rejected;
+        miss.semantic = semantic;
+        miss.accepted = false;
+        if (miss.rejectReason == CctFloorRejectReason::None) {
+            miss.rejectReason = CctFloorRejectReason::NoHit;
+        }
+        return miss;
+    };
 
-    sq::Hit maintainHit =
-        SweepClosest(m_currentPosition, downDelta, groundFilter, true);
-    FloorDecision maintain = evaluateSweepFloor(
-        primarySemantic,
-        CctFloorSource::PrimarySweep,
-        maintainHit, downDelta, dist);
-    if (applyAcceptedFloor(maintain)) {
-        return;
-    }
+    auto findGroundWalking = [&]() {
+        const float dropDist = supportProbeDist;
+        if (dropDist < kMinDist) {
+            return makeSkipDecision(CctFloorSemantic::WalkingSnapOrLatch);
+        }
 
-    // If primary misses due to initial-overlap starvation, retry once with
-    // initial overlaps visible.
-    sq::Hit snapHit =
-        SweepClosest(m_currentPosition, downDelta, groundFilterInit, false);
-    FloorDecision snap = evaluateSweepFloor(
-        snapSemantic,
-        CctFloorSource::InitialOverlapSweep,
-        snapHit, downDelta, dist);
-    if (applyAcceptedFloor(snap)) {
-        return;
-    }
+        sq::Vec3 downDelta = m_config.up * (-dropDist);
+        float dist = sq::Len(downDelta);
+        m_debug.stepDownDropDist = dropDist;
 
-    // Walking support fallback: allow stepHeight snap only while maintaining
-    // existing Walking support. Falling landing uses actual vertical motion,
-    // not speculative stepHeight reach.
-    if (walkingAtEntry) {
+        sq::Hit maintainHit =
+            SweepClosest(m_currentPosition, downDelta, groundFilter, true);
+        FloorDecision maintain = evaluateSweepFloor(
+            CctFloorSemantic::WalkingMaintainFloor,
+            CctFloorSource::PrimarySweep,
+            maintainHit, downDelta, dist);
+        if (maintain.accepted) {
+            return maintain;
+        }
+
+        // Walking snap may retry initial overlaps as compatibility support.
+        sq::Hit snapHit =
+            SweepClosest(m_currentPosition, downDelta, groundFilterInit, false);
+        FloorDecision snap = evaluateSweepFloor(
+            CctFloorSemantic::WalkingSnapOrLatch,
+            CctFloorSource::InitialOverlapSweep,
+            snapHit, downDelta, dist);
+        if (snap.accepted) {
+            return snap;
+        }
+
+        // Walking support fallback: allow stepHeight snap only while maintaining
+        // existing Walking support.
         float extendedDrop =
             (std::max)(m_currentStepOffset + m_config.stepHeight,
                        supportProbeDist);
@@ -794,73 +804,104 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
         sq::Hit extHit =
             SweepClosest(m_currentPosition, extDown, groundFilter, true);
         FloorDecision extended = evaluateSweepFloor(
-            snapSemantic,
+            CctFloorSemantic::WalkingSnapOrLatch,
             CctFloorSource::PrimarySweep,
             extHit, extDown, extDist);
-        if (applyAcceptedFloor(extended)) {
-            return;
+        if (extended.accepted) {
+            return extended;
         }
 
         sq::Hit extHitNoReject =
             SweepClosest(m_currentPosition, extDown, groundFilterInit, false);
         FloorDecision extendedSnap = evaluateSweepFloor(
-            snapSemantic,
+            CctFloorSemantic::WalkingSnapOrLatch,
             CctFloorSource::InitialOverlapSweep,
             extHitNoReject, extDown, extDist);
-        if (applyAcceptedFloor(extendedSnap)) {
-            return;
+        if (extendedSnap.accepted) {
+            return extendedSnap;
         }
-    }
 
-    // Overlap support fallback. This restores the pre-Plan2 behavior where
-    // StepDown can recover support from existing walkable overlap contacts.
-    {
+        // Walking-only overlap support compatibility fallback.
         float supportDepth = 0.0f;
         sq::Vec3 supportNormal{};
         if (HasWalkableSupport(supportDepth, supportNormal)) {
             FloorDecision support =
                 makeSupportDecision(supportNormal, supportDepth);
-            applyAcceptedFloor(support);
-            return;
-        }
-    }
-
-    // Distance-based ground latch: preserve support across one-frame misses
-    // only during Walking support maintenance.
-    if (walkingAtEntry && m_state.wasOnGround) {
-        const float latchDist = supportProbeDist;
-        const float latchDrop = (std::min)(dropDist, latchDist);
-        if (latchDrop > kMinDist) {
-            sq::Vec3 latchDown = m_config.up * (-latchDrop);
-            float latchLen = sq::Len(latchDown);
-            sq::Hit latchHit =
-                SweepClosest(m_currentPosition, latchDown,
-                             groundFilterInit, false);
-            FloorDecision latch = evaluateSweepFloor(
-                CctFloorSemantic::WalkingSnapOrLatch,
-                CctFloorSource::LatchSweep,
-                latchHit, latchDown, latchLen);
-            if (applyAcceptedFloor(latch)) {
-                return;
+            if (support.accepted) {
+                return support;
             }
         }
-    }
 
-    FloorDecision miss;
-    miss.semantic = walkingAtEntry
-        ? CctFloorSemantic::WalkingSnapOrLatch
-        : CctFloorSemantic::FallingContinue;
-    miss.rejectReason = CctFloorRejectReason::NoHit;
-    recordFloorDecision(miss);
+        // Distance-based ground latch: preserve support across one-frame misses
+        // only during Walking support maintenance.
+        if (m_state.wasOnGround) {
+            const float latchDist = supportProbeDist;
+            const float latchDrop = (std::min)(dropDist, latchDist);
+            if (latchDrop > kMinDist) {
+                sq::Vec3 latchDown = m_config.up * (-latchDrop);
+                float latchLen = sq::Len(latchDown);
+                sq::Hit latchHit =
+                    SweepClosest(m_currentPosition, latchDown,
+                                 groundFilterInit, false);
+                FloorDecision latch = evaluateSweepFloor(
+                    CctFloorSemantic::WalkingSnapOrLatch,
+                    CctFloorSource::LatchSweep,
+                    latchHit, latchDown, latchLen);
+                if (latch.accepted) {
+                    return latch;
+                }
+            }
+        }
+
+        FloorDecision noHit;
+        noHit.rejectReason = CctFloorRejectReason::NoHit;
+        return makeMissDecision(CctFloorSemantic::WalkingSnapOrLatch, noHit);
+    };
+
+    auto findFloorForLanding = [&]() {
+        const float dropDist = m_currentStepOffset + downVelocityDt;
+        if (dropDist < kMinDist) {
+            return makeSkipDecision(CctFloorSemantic::FallingContinue);
+        }
+
+        sq::Vec3 downDelta = m_config.up * (-dropDist);
+        float dist = sq::Len(downDelta);
+        m_debug.stepDownDropDist = dropDist;
+
+        sq::Hit landingHit =
+            SweepClosest(m_currentPosition, downDelta, groundFilter, true);
+        FloorDecision landing = evaluateSweepFloor(
+            CctFloorSemantic::FallingLand,
+            CctFloorSource::PrimarySweep,
+            landingHit, downDelta, dist);
+        if (landing.accepted) {
+            return landing;
+        }
+
+        // V1 landing accepts only a primary downward sweep. Initial overlaps,
+        // overlap support, and walking latch are not valid landing proof yet.
+        return makeMissDecision(CctFloorSemantic::FallingContinue, landing);
+    };
 
     if (walkingAtEntry) {
+        FloorDecision ground = findGroundWalking();
+        if (applyAcceptedFloor(ground)) {
+            return;
+        }
         SetModeFalling();
         return;
     }
 
-    m_currentPosition = m_currentPosition + downDelta;
+    FloorDecision landing = findFloorForLanding();
+    if (applyAcceptedFloor(landing)) {
+        return;
+    }
+
+    m_currentPosition = m_currentPosition + landing.delta;
     SetModeFalling();
-    m_debug.fullDrop = true;
+    if (landing.dist >= kMinDist) {
+        m_debug.fullDrop = true;
+    }
 }
 
 // =========================================================================

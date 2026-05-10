@@ -115,6 +115,7 @@ enum class CctStepMoveRejectReason : uint8_t {
     StartPenetrating,
     NoLateralNormal,
     NotApproaching,
+    WalkableSupport,
 };
 
 enum class CctFloorSemantic : uint8_t {

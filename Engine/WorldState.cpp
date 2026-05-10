@@ -76,6 +76,8 @@ namespace Engine
                 return "NoLateralNormal";
             case Collision::CctStepMoveRejectReason::NotApproaching:
                 return "NotApproaching";
+            case Collision::CctStepMoveRejectReason::WalkableSupport:
+                return "WalkableSupport";
             default: return "Unknown";
             }
         }
