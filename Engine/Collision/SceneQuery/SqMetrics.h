@@ -21,6 +21,7 @@ enum class QueryKind : uint8_t {
 enum class QueryBackend : uint8_t {
     BinaryBVH = 0,
     BVH4,
+    BVH4Simd,
     LinearFallback
 };
 
@@ -31,6 +32,8 @@ struct QueryMetrics {
     uint32_t nodesPopped = 0;
     uint32_t nodeAabbTests = 0;
     uint32_t nodeAabbRejects = 0;
+    uint32_t nodeAabbPackets = 0;
+    uint32_t nodeAabbPacketLanes = 0;
     uint32_t nodeTimePrunes = 0;
     uint32_t leafNodesVisited = 0;
     uint32_t primitiveAabbTests = 0;
@@ -71,6 +74,8 @@ struct SceneQueryFrameMetrics {
     uint64_t nodesPopped = 0;
     uint64_t nodeAabbTests = 0;
     uint64_t nodeAabbRejects = 0;
+    uint64_t nodeAabbPackets = 0;
+    uint64_t nodeAabbPacketLanes = 0;
     uint64_t nodeTimePrunes = 0;
     uint64_t leafNodesVisited = 0;
     uint64_t primitiveAabbTests = 0;
@@ -115,6 +120,8 @@ inline void AccumulateQueryMetrics(SceneQueryFrameMetrics& frame,
     frame.nodesPopped += query.nodesPopped;
     frame.nodeAabbTests += query.nodeAabbTests;
     frame.nodeAabbRejects += query.nodeAabbRejects;
+    frame.nodeAabbPackets += query.nodeAabbPackets;
+    frame.nodeAabbPacketLanes += query.nodeAabbPacketLanes;
     frame.nodeTimePrunes += query.nodeTimePrunes;
     frame.leafNodesVisited += query.leafNodesVisited;
     frame.primitiveAabbTests += query.primitiveAabbTests;

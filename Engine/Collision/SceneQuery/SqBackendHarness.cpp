@@ -42,6 +42,7 @@ const char* BackendName(SceneQueryBackendId backend)
         case SceneQueryBackendId::LinearFallback: return "LinearFallback";
         case SceneQueryBackendId::BinaryBVH: return "BinaryBVH";
         case SceneQueryBackendId::ScalarBVH4: return "ScalarBVH4";
+        case SceneQueryBackendId::SimdBVH4: return "SimdBVH4";
         default: return "Unknown";
     }
 }
@@ -121,6 +122,19 @@ bool SameContacts(const OverlapRun& a, const OverlapRun& b)
     return true;
 }
 
+void ExpectBVH4PacketMetricContract(const HarnessWorld& world,
+                                    const QueryMetrics& scalar,
+                                    const QueryMetrics& packet)
+{
+    if (world.aabbs.empty())
+        return;
+
+    assert(scalar.nodeAabbPackets == 0);
+    assert(scalar.nodeAabbPacketLanes == 0);
+    assert(packet.nodeAabbPackets > 0);
+    assert(packet.nodeAabbPacketLanes >= packet.nodeAabbPackets);
+}
+
 void FinalizeDirectLinearSweepMetrics(QueryMetrics& metrics, const Hit& hit)
 {
     metrics.backend = QueryBackend::LinearFallback;
@@ -162,6 +176,12 @@ SweepRun RunSweep(SceneQueryBackendId backend,
             run.metrics = scratch.metrics;
             break;
         }
+        case SceneQueryBackendId::SimdBVH4: {
+            QueryScratch scratch{};
+            run.hit = SweepCapsuleClosestHit_BVH4SimdChildTest(world.bvh4, input, cfg, scratch, filter, false);
+            run.metrics = scratch.metrics;
+            break;
+        }
     }
     return run;
 }
@@ -198,6 +218,14 @@ OverlapRun RunOverlap(SceneQueryBackendId backend,
             run.metrics = scratch.metrics;
             break;
         }
+        case SceneQueryBackendId::SimdBVH4: {
+            QueryScratch scratch{};
+            run.count = OverlapCapsuleContacts_BVH4SimdChildTest(
+                world.bvh4, segA, segB, radius, run.contacts, kMaxHarnessContacts,
+                scratch);
+            run.metrics = scratch.metrics;
+            break;
+        }
     }
     return run;
 }
@@ -212,8 +240,12 @@ void ExpectSweepEquivalent(const HarnessWorld& world,
                                      world, input, cfg);
     const SweepRun bvh4 = RunSweep(SceneQueryBackendId::ScalarBVH4,
                                    world, input, cfg);
+    const SweepRun bvh4Simd = RunSweep(SceneQueryBackendId::SimdBVH4,
+                                       world, input, cfg);
     assert(SameHit(linear.hit, binary.hit));
     assert(SameHit(linear.hit, bvh4.hit));
+    assert(SameHit(linear.hit, bvh4Simd.hit));
+    ExpectBVH4PacketMetricContract(world, bvh4.metrics, bvh4Simd.metrics);
 }
 
 void ExpectOverlapEquivalent(const HarnessWorld& world,
@@ -227,8 +259,65 @@ void ExpectOverlapEquivalent(const HarnessWorld& world,
                                          world, segA, segB, radius);
     const OverlapRun bvh4 = RunOverlap(SceneQueryBackendId::ScalarBVH4,
                                        world, segA, segB, radius);
+    const OverlapRun bvh4Simd = RunOverlap(SceneQueryBackendId::SimdBVH4,
+                                           world, segA, segB, radius);
     assert(SameContacts(linear, binary));
     assert(SameContacts(linear, bvh4));
+    assert(SameContacts(linear, bvh4Simd));
+    ExpectBVH4PacketMetricContract(world, bvh4.metrics, bvh4Simd.metrics);
+}
+
+void ExpectEqualTimeSweepTieBreak(const SweepConfig& cfg)
+{
+    HarnessWorld world = BuildWorld({
+        Box(1.5f, -1.0f, -1.0f, 2.0f, 1.0f, 1.0f),
+        Box(1.5f, -1.0f, -1.0f, 2.0f, 1.0f, 1.0f)
+    });
+    const SweepCapsuleInput query = MakeCapsuleSweep({0.0f, 0.0f, 0.0f},
+                                                     {3.0f, 0.0f, 0.0f});
+    const SweepRun linear = RunSweep(SceneQueryBackendId::LinearFallback, world, query, cfg);
+    const SweepRun binary = RunSweep(SceneQueryBackendId::BinaryBVH, world, query, cfg);
+    const SweepRun bvh4 = RunSweep(SceneQueryBackendId::ScalarBVH4, world, query, cfg);
+    const SweepRun bvh4Simd = RunSweep(SceneQueryBackendId::SimdBVH4, world, query, cfg);
+
+    assert(SameHit(linear.hit, binary.hit));
+    assert(SameHit(linear.hit, bvh4.hit));
+    assert(SameHit(linear.hit, bvh4Simd.hit));
+    assert(linear.hit.hit && linear.hit.type == PrimType::Aabb && linear.hit.index == 0);
+    assert(binary.hit.hit && binary.hit.type == PrimType::Aabb && binary.hit.index == 0);
+    assert(bvh4.hit.hit && bvh4.hit.type == PrimType::Aabb && bvh4.hit.index == 0);
+    assert(bvh4Simd.hit.hit && bvh4Simd.hit.type == PrimType::Aabb && bvh4Simd.hit.index == 0);
+}
+
+void ExpectEqualDepthOverlapTopK()
+{
+    std::vector<AABB> boxes;
+    boxes.reserve(kMaxOverlapContacts + 4);
+    for (uint32_t i = 0; i < kMaxOverlapContacts + 4; ++i)
+        boxes.push_back(Box(-0.2f, -0.2f, -0.2f, 0.2f, 0.2f, 0.2f));
+
+    HarnessWorld world = BuildWorld(std::move(boxes));
+    const Vec3 segA{0.0f, -0.5f, 0.0f};
+    const Vec3 segB{0.0f,  0.5f, 0.0f};
+    const float radius = 0.75f;
+
+    const OverlapRun linear = RunOverlap(SceneQueryBackendId::LinearFallback,
+                                         world, segA, segB, radius);
+    const OverlapRun binary = RunOverlap(SceneQueryBackendId::BinaryBVH,
+                                         world, segA, segB, radius);
+    const OverlapRun bvh4 = RunOverlap(SceneQueryBackendId::ScalarBVH4,
+                                       world, segA, segB, radius);
+    const OverlapRun bvh4Simd = RunOverlap(SceneQueryBackendId::SimdBVH4,
+                                           world, segA, segB, radius);
+
+    assert(SameContacts(linear, binary));
+    assert(SameContacts(linear, bvh4));
+    assert(SameContacts(linear, bvh4Simd));
+    assert(linear.count == kMaxOverlapContacts);
+    for (uint32_t i = 0; i < linear.count; ++i) {
+        assert(linear.contacts[i].type == PrimType::Aabb);
+        assert(linear.contacts[i].index == i);
+    }
 }
 
 void RunSmokeFixtures()
@@ -261,29 +350,7 @@ void RunSmokeFixtures()
     }
 
     {
-        HarnessWorld world = BuildWorld({
-            Box(1.5f, -1.0f, -1.0f, 2.0f, 1.0f, 1.0f),
-            Box(1.5f, -1.0f, -1.0f, 2.0f, 1.0f, 1.0f)
-        });
-        const SweepRun linear = RunSweep(SceneQueryBackendId::LinearFallback,
-                                         world,
-                                         MakeCapsuleSweep({0.0f, 0.0f, 0.0f},
-                                                          {3.0f, 0.0f, 0.0f}),
-                                         cfg);
-        const SweepRun binary = RunSweep(SceneQueryBackendId::BinaryBVH,
-                                         world,
-                                         MakeCapsuleSweep({0.0f, 0.0f, 0.0f},
-                                                          {3.0f, 0.0f, 0.0f}),
-                                         cfg);
-        const SweepRun bvh4 = RunSweep(SceneQueryBackendId::ScalarBVH4,
-                                       world,
-                                       MakeCapsuleSweep({0.0f, 0.0f, 0.0f},
-                                                        {3.0f, 0.0f, 0.0f}),
-                                       cfg);
-        assert(SameHit(linear.hit, binary.hit));
-        assert(SameHit(linear.hit, bvh4.hit));
-        assert(binary.hit.hit && binary.hit.type == PrimType::Aabb && binary.hit.index == 0);
-        assert(bvh4.hit.hit && bvh4.hit.type == PrimType::Aabb && bvh4.hit.index == 0);
+        ExpectEqualTimeSweepTieBreak(cfg);
     }
 
     {
@@ -294,6 +361,10 @@ void RunSmokeFixtures()
         });
         ExpectOverlapEquivalent(world, {0.0f, -0.5f, 0.0f},
                                 {0.0f, 0.5f, 0.0f}, 0.75f);
+    }
+
+    {
+        ExpectEqualDepthOverlapTopK();
     }
 }
 
@@ -383,7 +454,14 @@ bool DetectOverlapTopologyRisk()
                                          {0.0f, -0.5f, 0.0f},
                                          {0.0f, 0.5f, 0.0f},
                                          1.5f);
-    return !SameContacts(linear, binary) || !SameContacts(linear, bvh4);
+    const OverlapRun bvh4Simd = RunOverlap(SceneQueryBackendId::SimdBVH4,
+                                           world,
+                                           {0.0f, -0.5f, 0.0f},
+                                           {0.0f, 0.5f, 0.0f},
+                                           1.5f);
+    return !SameContacts(linear, binary)
+        || !SameContacts(linear, bvh4)
+        || !SameContacts(linear, bvh4Simd);
 }
 
 } // namespace
@@ -420,6 +498,9 @@ SceneQueryBackendBenchmarkReport RunSceneQueryBackendBenchmark(
     report.bvh4 = RunBenchmarkBackend(SceneQueryBackendId::ScalarBVH4,
                                       world, config, report.correctnessPassed,
                                       &oracleHits, nullptr);
+    report.bvh4Simd = RunBenchmarkBackend(SceneQueryBackendId::SimdBVH4,
+                                          world, config, report.correctnessPassed,
+                                          &oracleHits, nullptr);
     report.overlapTopologyRiskObserved = DetectOverlapTopologyRisk();
     return report;
 }
@@ -435,13 +516,15 @@ void FormatSceneQueryBackendBenchmarkReport(
     const SceneQueryBackendBenchmarkRow& a = report.linear;
     const SceneQueryBackendBenchmarkRow& b = report.binary;
     const SceneQueryBackendBenchmarkRow& c = report.bvh4;
+    const SceneQueryBackendBenchmarkRow& d = report.bvh4Simd;
     std::snprintf(
         out, outSize,
         "SceneQuery backend benchmark\n"
         "correctness=%s overlapTopologyRisk=%s grid=%ux%u queries=%u\n"
-        "%s: ns/query=%.1f primitiveAabbTests=%llu narrowphaseCalls=%llu maxStack=%u fallback=%u mismatches=%u\n"
-        "%s: ns/query=%.1f primitiveAabbTests=%llu narrowphaseCalls=%llu maxStack=%u fallback=%u mismatches=%u\n"
-        "%s: ns/query=%.1f primitiveAabbTests=%llu narrowphaseCalls=%llu maxStack=%u fallback=%u mismatches=%u\n",
+        "%s: ns/query=%.1f nodeAabbTests=%llu nodePackets=%llu packetLanes=%llu primitiveAabbTests=%llu narrowphaseCalls=%llu maxStack=%u fallback=%u mismatches=%u\n"
+        "%s: ns/query=%.1f nodeAabbTests=%llu nodePackets=%llu packetLanes=%llu primitiveAabbTests=%llu narrowphaseCalls=%llu maxStack=%u fallback=%u mismatches=%u\n"
+        "%s: ns/query=%.1f nodeAabbTests=%llu nodePackets=%llu packetLanes=%llu primitiveAabbTests=%llu narrowphaseCalls=%llu maxStack=%u fallback=%u mismatches=%u\n"
+        "%s: ns/query=%.1f nodeAabbTests=%llu nodePackets=%llu packetLanes=%llu primitiveAabbTests=%llu narrowphaseCalls=%llu maxStack=%u fallback=%u mismatches=%u\n",
         report.correctnessPassed ? "pass" : "fail",
         report.overlapTopologyRiskObserved ? "yes" : "no",
         report.config.gridWidth,
@@ -449,6 +532,9 @@ void FormatSceneQueryBackendBenchmarkReport(
         report.config.queryCount,
         BackendName(a.backend),
         a.NsPerQuery(),
+        static_cast<unsigned long long>(a.metrics.nodeAabbTests),
+        static_cast<unsigned long long>(a.metrics.nodeAabbPackets),
+        static_cast<unsigned long long>(a.metrics.nodeAabbPacketLanes),
         static_cast<unsigned long long>(a.metrics.primitiveAabbTests),
         static_cast<unsigned long long>(a.metrics.narrowphaseCalls),
         a.metrics.maxStackDepth,
@@ -456,6 +542,9 @@ void FormatSceneQueryBackendBenchmarkReport(
         a.mismatches,
         BackendName(b.backend),
         b.NsPerQuery(),
+        static_cast<unsigned long long>(b.metrics.nodeAabbTests),
+        static_cast<unsigned long long>(b.metrics.nodeAabbPackets),
+        static_cast<unsigned long long>(b.metrics.nodeAabbPacketLanes),
         static_cast<unsigned long long>(b.metrics.primitiveAabbTests),
         static_cast<unsigned long long>(b.metrics.narrowphaseCalls),
         b.metrics.maxStackDepth,
@@ -463,11 +552,24 @@ void FormatSceneQueryBackendBenchmarkReport(
         b.mismatches,
         BackendName(c.backend),
         c.NsPerQuery(),
+        static_cast<unsigned long long>(c.metrics.nodeAabbTests),
+        static_cast<unsigned long long>(c.metrics.nodeAabbPackets),
+        static_cast<unsigned long long>(c.metrics.nodeAabbPacketLanes),
         static_cast<unsigned long long>(c.metrics.primitiveAabbTests),
         static_cast<unsigned long long>(c.metrics.narrowphaseCalls),
         c.metrics.maxStackDepth,
         c.metrics.fallbackCount,
-        c.mismatches);
+        c.mismatches,
+        BackendName(d.backend),
+        d.NsPerQuery(),
+        static_cast<unsigned long long>(d.metrics.nodeAabbTests),
+        static_cast<unsigned long long>(d.metrics.nodeAabbPackets),
+        static_cast<unsigned long long>(d.metrics.nodeAabbPacketLanes),
+        static_cast<unsigned long long>(d.metrics.primitiveAabbTests),
+        static_cast<unsigned long long>(d.metrics.narrowphaseCalls),
+        d.metrics.maxStackDepth,
+        d.metrics.fallbackCount,
+        d.mismatches);
 }
 
 }}} // namespace Engine::Collision::sq

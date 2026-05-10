@@ -4,13 +4,14 @@
 //
 // TERMINOLOGY:
 //   QueryScratch - caller-owned fixed-capacity memory for BVH traversal
-//   NodeTask     - BVH traversal stack entry: node index + time window
+//   NodeTask     - BVH stack entry; tEnter/tExit are meaningful for sweep
 //   BetterHit    - deterministic hit comparison (t -> type -> index -> feat)
 //
 // POLICY:
 //   - QueryScratch is caller-allocated on stack. No heap allocation during query.
 //   - BVH traversal is deterministic and prefers nearer child windows first.
 //   - Hit selection uses BetterHit cascade for stable tie-breaking.
+//   - Overlap top-K retention uses OverlapContactBetter across all backends.
 //   - Early-out: prune nodes whose tEnter >= current best t.
 //   - Stack overflow falls back to a linear scan instead of losing candidates.
 //
@@ -262,6 +263,66 @@ inline Hit SweepCapsuleClosestHit_LinearFallback(
     return best;
 }
 
+inline bool MakeClosestSweepChildTask(
+    const StaticBVH& bvh,
+    const AABB& cap0,
+    const Vec3& delta,
+    uint32_t child,
+    const NodeTask& parent,
+    float bestT,
+    NodeTask& out,
+    QueryMetrics& metrics)
+{
+    float cE = parent.tEnter;
+    float cL = parent.tExit;
+    if (cL > bestT)
+        cL = bestT;
+
+    ++metrics.nodeAabbTests;
+    if (!AabbAabb_SweepInterval(cap0, delta, bvh.nodes[child].bounds, cE, cL)) {
+        ++metrics.nodeAabbRejects;
+        return false;
+    }
+    if (cE >= bestT) {
+        ++metrics.nodeTimePrunes;
+        return false;
+    }
+
+    out = { child, cE, cL };
+    return true;
+}
+
+inline void PushClosestSweepChildPair(
+    QueryScratch& scratch,
+    const NodeTask& leftTask,
+    bool leftHit,
+    const NodeTask& rightTask,
+    bool rightHit)
+{
+    if (leftHit && rightHit) {
+        const bool leftFirst = leftTask.tEnter <= rightTask.tEnter;
+        PushQueryTask(scratch, leftFirst ? rightTask : leftTask);
+        PushQueryTask(scratch, leftFirst ? leftTask : rightTask);
+    } else if (rightHit) {
+        PushQueryTask(scratch, rightTask);
+    } else if (leftHit) {
+        PushQueryTask(scratch, leftTask);
+    }
+}
+
+inline void PushStaticOverlapChildIfHit(
+    const StaticBVH& bvh,
+    const AABB& capBounds,
+    uint32_t child,
+    QueryScratch& scratch)
+{
+    ++scratch.metrics.nodeAabbTests;
+    if (TestAabbAabb(capBounds, bvh.nodes[child].bounds))
+        PushQueryTask(scratch, { child, 0.0f, 0.0f });
+    else
+        ++scratch.metrics.nodeAabbRejects;
+}
+
 // =========================================================================
 // Main query: capsule sweep closest hit via BVH DFS
 // =========================================================================
@@ -335,40 +396,15 @@ inline Hit SweepCapsuleClosestHit_Fast(
             continue;
         }
 
-        auto makeChildTask = [&](uint32_t child, NodeTask& out) -> bool {
-            float cE = task.tEnter;
-            float cL = task.tExit;
-            if (cL > best.t) cL = best.t;
-
-            ++scratch.metrics.nodeAabbTests;
-            if (!AabbAabb_SweepInterval(cap0, in.delta, bvh.nodes[child].bounds, cE, cL)) {
-                ++scratch.metrics.nodeAabbRejects;
-                return false;
-            }
-            if (cE >= best.t) {
-                ++scratch.metrics.nodeTimePrunes;
-                return false;
-            }
-
-            out = { child, cE, cL };
-            return true;
-        };
-
         // Deterministic near-first traversal: push farther child first because
         // the stack is LIFO. Equal tEnter keeps left before right.
         NodeTask leftTask{};
         NodeTask rightTask{};
-        const bool leftHit = makeChildTask(node.left, leftTask);
-        const bool rightHit = makeChildTask(node.right, rightTask);
-        if (leftHit && rightHit) {
-            const bool leftFirst = leftTask.tEnter <= rightTask.tEnter;
-            PushQueryTask(scratch, leftFirst ? rightTask : leftTask);
-            PushQueryTask(scratch, leftFirst ? leftTask : rightTask);
-        } else if (rightHit) {
-            PushQueryTask(scratch, rightTask);
-        } else if (leftHit) {
-            PushQueryTask(scratch, leftTask);
-        }
+        const bool leftHit = MakeClosestSweepChildTask(
+            bvh, cap0, in.delta, node.left, task, best.t, leftTask, scratch.metrics);
+        const bool rightHit = MakeClosestSweepChildTask(
+            bvh, cap0, in.delta, node.right, task, best.t, rightTask, scratch.metrics);
+        PushClosestSweepChildPair(scratch, leftTask, leftHit, rightTask, rightHit);
     }
 
     if (scratch.overflowed)
@@ -399,8 +435,8 @@ inline Hit SweepCapsuleClosestHit_Fast(
 //
 // Determinism rules:
 //   - BVH traversal: stack DFS, right pushed first, left popped first
-//   - Contact sorting: total order via std::sort
-//   - Top-K eviction: strict > on depth; same-depth kept in DFS order
+//   - Contact sorting: total order via OverlapContactBetter
+//   - Top-K eviction: same ordering as final contact sort
 
 inline constexpr uint32_t kMaxOverlapContacts = 32;
 
@@ -429,16 +465,16 @@ inline void InsertOverlapContactTopK(
         return;
     }
 
-    uint32_t shallowest = 0;
+    uint32_t worst = 0;
     for (uint32_t i = 1; i < contactCount; ++i) {
-        if (outContacts[i].depth < outContacts[shallowest].depth)
-            shallowest = i;
+        if (OverlapContactBetter(outContacts[worst], outContacts[i]))
+            worst = i;
     }
 
-    if (contact.depth > outContacts[shallowest].depth) {
+    if (OverlapContactBetter(contact, outContacts[worst])) {
         if (metrics)
             ++metrics->contactsEvicted;
-        outContacts[shallowest] = contact;
+        outContacts[worst] = contact;
     }
 }
 
@@ -533,7 +569,7 @@ inline uint32_t OverlapCapsuleContacts_Fast(
         return 0;
     }
 
-    PushQueryTask(scratch, { bvh.root, 0.0f, 1.0f });
+    PushQueryTask(scratch, { bvh.root, 0.0f, 0.0f });
 
     while (scratch.sp) {
         NodeTask task = scratch.stack[--scratch.sp];
@@ -565,17 +601,8 @@ inline uint32_t OverlapCapsuleContacts_Fast(
             continue;
         }
 
-        ++scratch.metrics.nodeAabbTests;
-        if (TestAabbAabb(capBounds, bvh.nodes[node.right].bounds))
-            PushQueryTask(scratch, { node.right, 0.0f, 1.0f });
-        else
-            ++scratch.metrics.nodeAabbRejects;
-
-        ++scratch.metrics.nodeAabbTests;
-        if (TestAabbAabb(capBounds, bvh.nodes[node.left].bounds))
-            PushQueryTask(scratch, { node.left, 0.0f, 1.0f });
-        else
-            ++scratch.metrics.nodeAabbRejects;
+        PushStaticOverlapChildIfHit(bvh, capBounds, node.right, scratch);
+        PushStaticOverlapChildIfHit(bvh, capBounds, node.left, scratch);
     }
 
     if (scratch.overflowed)

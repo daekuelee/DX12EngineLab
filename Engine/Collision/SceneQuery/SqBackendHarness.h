@@ -19,7 +19,8 @@ namespace Engine { namespace Collision { namespace sq {
 enum class SceneQueryBackendId : uint8_t {
     LinearFallback = 0,
     BinaryBVH = 1,
-    ScalarBVH4 = 2
+    ScalarBVH4 = 2,
+    SimdBVH4 = 3
 };
 
 struct SceneQueryBackendBenchmarkConfig {
@@ -45,6 +46,7 @@ struct SceneQueryBackendBenchmarkReport {
     SceneQueryBackendBenchmarkRow linear{};
     SceneQueryBackendBenchmarkRow binary{};
     SceneQueryBackendBenchmarkRow bvh4{};
+    SceneQueryBackendBenchmarkRow bvh4Simd{};
     bool correctnessPassed = true;
     bool overlapTopologyRiskObserved = false;
 };
