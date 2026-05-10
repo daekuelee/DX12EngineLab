@@ -25,6 +25,9 @@
     <Filter Include="Engine\Collision\SceneQuery">
       <UniqueIdentifier>{5CE0E0A1-3F2B-4D9C-8E7A-B1C4D6F8A902}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Engine\Math">
+      <UniqueIdentifier>{D3E217F8-5D77-4B85-AF1A-DB51D2F9F3B8}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framework.h">
@@ -90,6 +93,12 @@
     <ClInclude Include="Engine\InputState.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Engine\Math\MathCommon.h">
+      <Filter>Engine\Math</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Math\Vec3.h">
+      <Filter>Engine\Math</Filter>
+    </ClInclude>
     <ClInclude Include="Engine\Collision\CollisionTypes.h">
       <Filter>Engine\Collision</Filter>
     </ClInclude>
@@ -142,6 +151,9 @@
     </ClCompile>
     <ClCompile Include="Engine\App.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Engine\Math\Vec3_compilecheck.cpp">
+      <Filter>Engine\Math</Filter>
     </ClCompile>
     <ClCompile Include="Engine\Collision\CapsuleMovement.cpp">
       <Filter>Engine\Collision</Filter>
