@@ -152,6 +152,9 @@ namespace Engine
 
             // 3. Reset per-frame flags (does NOT touch m_pawn.onGround)
             m_worldState.BeginFrame();
+            m_worldState.ApplyKccTraceUi(
+                m_renderer.GetKccTraceUiState(),
+                m_renderer.ConsumeKccTraceUiActions());
 
             // 4. Fixed-step loop with action system
             // [PROOF-JUMP-ONCE] — jump fires only when stepIndex==0

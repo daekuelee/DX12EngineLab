@@ -21,6 +21,33 @@ namespace Renderer
     static uint32_t s_frameCount = 0;
     static bool s_fpsTimerInitialized = false;
 
+    const char* KccTraceStatusName(KccTraceStatus status)
+    {
+        switch (status)
+        {
+        case KccTraceStatus::Off: return "Off";
+        case KccTraceStatus::Recording: return "Recording";
+        case KccTraceStatus::Triggered: return "Triggered";
+        case KccTraceStatus::Frozen: return "Frozen";
+        default: return "Unknown";
+        }
+    }
+
+    const char* KccTraceCulpritName(KccTraceCulprit culprit)
+    {
+        switch (culprit)
+        {
+        case KccTraceCulprit::None: return "None";
+        case KccTraceCulprit::Recover: return "Recover";
+        case KccTraceCulprit::StepUp: return "StepUp";
+        case KccTraceCulprit::StepMove: return "StepMove";
+        case KccTraceCulprit::StepDown: return "StepDown";
+        case KccTraceCulprit::PostRecover: return "PostRecover";
+        case KccTraceCulprit::Unknown: return "Unknown";
+        default: return "Unknown";
+        }
+    }
+
     bool ImGuiLayer::Initialize(HWND hwnd, ID3D12Device* device, ID3D12CommandQueue* commandQueue,
                                  uint32_t numFramesInFlight, DXGI_FORMAT rtvFormat)
     {
@@ -184,6 +211,13 @@ namespace Renderer
         m_hasUploadMetrics = true;
     }
 
+    KccTraceUiActions ImGuiLayer::ConsumeKccTraceUiActions()
+    {
+        KccTraceUiActions actions = m_kccTraceUiActions;
+        m_kccTraceUiActions = KccTraceUiActions{};
+        return actions;
+    }
+
     void ImGuiLayer::SetHUDSnapshot(const HUDSnapshot& snap)
     {
         m_worldState.mapName = snap.mapName;
@@ -286,6 +320,7 @@ namespace Renderer
         m_worldState.stepFailMask = snap.stepFailMask;
         m_worldState.stepHeightUsed = snap.stepHeightUsed;
         m_worldState.stepCubeIdx = snap.stepCubeIdx;
+        m_kccTraceHudState = snap.kccTrace;
         // Day4 PR2.2: Action system diagnostics
         m_worldState.actionJumpBuffered = snap.actionJumpBuffered;
         m_worldState.actionJumpBufferTimer = snap.actionJumpBufferTimer;
@@ -345,6 +380,42 @@ namespace Renderer
             const char* ctrlMode = (m_worldState.controllerMode == 0) ? "AABB" : "Capsule";
             ImGui::Text("Ctrl: %s [F6]", ctrlMode);
             ImGui::Text("Verbose: %s [F8]", ToggleSystem::IsHudVerboseEnabled() ? "ON" : "OFF");
+            ImGui::Separator();
+            if (ImGui::CollapsingHeader("KCC Trace", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                ImGui::Checkbox("Enable##KccTrace", &m_kccTraceUiState.enabled);
+                ImGui::SameLine();
+                ImGui::Checkbox("Auto trigger upward pop##KccTrace", &m_kccTraceUiState.autoTrigger);
+                ImGui::InputFloat("Upward eps##KccTrace",
+                                  &m_kccTraceUiState.upwardPopEps,
+                                  0.001f, 0.01f, "%.4f");
+                if (m_kccTraceUiState.upwardPopEps < 0.001f)
+                    m_kccTraceUiState.upwardPopEps = 0.001f;
+
+                if (ImGui::Button("Freeze##KccTrace"))
+                    m_kccTraceUiActions.freezeRequested = true;
+                ImGui::SameLine();
+                if (ImGui::Button("Clear##KccTrace"))
+                    m_kccTraceUiActions.clearRequested = true;
+                ImGui::SameLine();
+                if (ImGui::Button("Save trace##KccTrace"))
+                    m_kccTraceUiActions.saveRequested = true;
+
+                ImGui::Text("Status: %s", KccTraceStatusName(m_kccTraceHudState.status));
+                ImGui::Text("Last culprit: %s", KccTraceCulpritName(m_kccTraceHudState.lastCulprit));
+                ImGui::Text("Ticks: %u  Trigger: %u",
+                            m_kccTraceHudState.storedTicks,
+                            m_kccTraceHudState.triggerTick);
+                ImGui::Text("Y: %.4f -> %.4f",
+                            m_kccTraceHudState.yBegin,
+                            m_kccTraceHudState.yFinal);
+                if (m_kccTraceHudState.lastSavePath)
+                {
+                    ImGui::Text("Save: %s %s",
+                                m_kccTraceHudState.lastSaveOk ? "OK" : "FAIL",
+                                m_kccTraceHudState.lastSavePath);
+                }
+            }
             if (m_worldState.controllerMode == 1)
             {
                 ImGui::Text("  r=%.2f hh=%.2f", m_worldState.capsuleRadius, m_worldState.capsuleHalfHeight);

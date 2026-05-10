@@ -3,11 +3,13 @@
 #include <DirectXMath.h>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 #include "InputState.h"
 #include "WorldTypes.h"
 #include "Collision/CollisionWorld.h"
 #include "Collision/KinematicCharacterController.h"
+#include "../Renderer/DX12/KccTraceTypes.h"
 
 // Forward declare HUDSnapshot from Renderer namespace
 namespace Renderer { struct HUDSnapshot; }
@@ -26,6 +28,8 @@ namespace Engine
         void TickFrame(float frameDt);                            // Variable dt smoothing
         DirectX::XMFLOAT4X4 BuildViewProj(float aspect) const;
         Renderer::HUDSnapshot BuildSnapshot() const;
+        void ApplyKccTraceUi(const Renderer::KccTraceUiState& state,
+                              const Renderer::KccTraceUiActions& actions);
 
         bool IsOnGround() const { return m_pawn.onGround; }
         float GetSprintAlpha() const { return m_sprintAlpha; }
@@ -127,5 +131,37 @@ namespace Engine
 
         // KCC (sole movement authority)
         std::unique_ptr<Collision::KinematicCharacterController> m_cct;
+
+        // Debug-only KCC scoped trace. This records already-produced CctDebug
+        // snapshots and never feeds back into movement behavior.
+        static constexpr uint32_t KCC_TRACE_CAPACITY = 256;
+        static constexpr uint32_t KCC_TRACE_POST_ROLL_TICKS = 10;
+
+        struct KccTraceRecord
+        {
+            uint32_t tick = 0;
+            Collision::CctDebug debug{};
+            Renderer::KccTraceCulprit culprit = Renderer::KccTraceCulprit::None;
+        };
+
+        Renderer::KccTraceUiState m_kccTraceUi{};
+        Renderer::KccTraceStatus m_kccTraceStatus = Renderer::KccTraceStatus::Off;
+        Renderer::KccTraceCulprit m_kccTraceLastCulprit = Renderer::KccTraceCulprit::None;
+        KccTraceRecord m_kccTraceRecords[KCC_TRACE_CAPACITY]{};
+        uint32_t m_kccTraceWrite = 0;
+        uint32_t m_kccTraceCount = 0;
+        uint32_t m_kccTraceTick = 0;
+        uint32_t m_kccTraceTriggerTick = 0;
+        uint32_t m_kccTracePostRollRemaining = 0;
+        std::string m_kccTraceLastSavePath;
+        bool m_kccTraceLastSaveOk = false;
+
+        void ClearKccTrace();
+        void FreezeKccTrace();
+        void RecordKccTraceTick(const Collision::CctDebug& debug);
+        Renderer::KccTraceCulprit ClassifyKccTraceCulprit(
+            const Collision::CctDebug& debug) const;
+        bool SaveKccTrace();
+        void FillKccTraceHud(Renderer::KccTraceHudState& out) const;
     };
 }

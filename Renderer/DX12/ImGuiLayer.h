@@ -5,6 +5,7 @@
 #include <dxgi.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include "KccTraceTypes.h"
 #include "UploadArena.h"
 
 namespace Renderer
@@ -35,6 +36,9 @@ namespace Renderer
         // World state snapshot for HUD display (Day3)
         void SetHUDSnapshot(const HUDSnapshot& snap);
 
+        const KccTraceUiState& GetKccTraceUiState() const { return m_kccTraceUiState; }
+        KccTraceUiActions ConsumeKccTraceUiActions();
+
     private:
         void BuildHUDContent();
 
@@ -44,6 +48,10 @@ namespace Renderer
         // Upload arena metrics (Day2)
         UploadArenaMetrics m_uploadMetrics;
         bool m_hasUploadMetrics = false;
+
+        KccTraceUiState m_kccTraceUiState;
+        KccTraceUiActions m_kccTraceUiActions;
+        KccTraceHudState m_kccTraceHudState;
 
         // World state snapshot (Day3) - stored as individual fields to avoid header dependency
         struct WorldStateFields {

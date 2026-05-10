@@ -120,6 +120,8 @@ namespace Renderer
         uint8_t stepFailMask = 0;
         float stepHeightUsed = 0.0f;
         int32_t stepCubeIdx = -1;
+        // KCC scoped trace diagnostics
+        KccTraceHudState kccTrace;
         // Day4 PR2.2: Action system diagnostics
         bool actionJumpBuffered = false;
         float actionJumpBufferTimer = 0.0f;
@@ -167,6 +169,8 @@ namespace Renderer
 
         // HUD snapshot
         void SetHUDSnapshot(const HUDSnapshot& snap);
+        const KccTraceUiState& GetKccTraceUiState() const { return m_imguiLayer.GetKccTraceUiState(); }
+        KccTraceUiActions ConsumeKccTraceUiActions() { return m_imguiLayer.ConsumeKccTraceUiActions(); }
 
         // Delta time accessor for fixed-step loop
         float GetDeltaTime() const { return m_lastDeltaTime; }

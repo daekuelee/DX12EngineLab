@@ -81,22 +81,27 @@ inline bool SweepCapsulePrim_TOI01(
     const PrimRef& pref,
     bool rejectInitialOverlap,
     const SweepFilter* filter,
-    float& outT, Vec3& outN, uint32_t& outFeat)
+    float& outT, Vec3& outN, uint32_t& outFeat,
+    bool& outStartPenetrating,
+    float& outPenetrationDepth)
 {
     switch (pref.type) {
         case PrimType::Tri:
             return SweepCapsuleTri_PhysXLike_TOI01(
                 in, bvh.tris[pref.index], cfg, outT, outN, outFeat,
+                outStartPenetrating, outPenetrationDepth,
                 rejectInitialOverlap, filter);
 
         case PrimType::Aabb:
             return SweepCapsuleAabb_PhysXLike_TOI01(
                 in, bvh.aabbs[pref.index], cfg, outT, outN, outFeat,
+                outStartPenetrating, outPenetrationDepth,
                 rejectInitialOverlap, filter);
 
         case PrimType::Obb:
             return SweepCapsuleObb_PhysXLike_TOI01(
                 in, bvh.obbs[pref.index], cfg, outT, outN, outFeat,
+                outStartPenetrating, outPenetrationDepth,
                 rejectInitialOverlap, filter);
 
         default:
@@ -165,18 +170,20 @@ inline Hit SweepCapsuleClosestHit_Fast(
                 if (pE >= best.t) continue;
 
                 float t; Vec3 n; uint32_t f;
+                bool startPenetrating = false;
+                float penetrationDepth = 0.0f;
                 if (!SweepCapsulePrim_TOI01(bvh, in, cfg, pref,
                                            rejectInitialOverlap,
                                            filter.active ? &filter : nullptr,
-                                           t, n, f))
+                                           t, n, f, startPenetrating,
+                                           penetrationDepth))
                     continue;
 
                 // Sweep filter: reject candidates by normal predicate
                 // (Bullet-equivalent: addSingleResult returning 1.0 to skip)
                 if (filter.active) {
-                    const bool isInitial = (t <= 0.0f);
-                    const bool applyFilter = !isInitial ||
-                        rejectInitialOverlap || filter.filterInitialOverlap;
+                    const bool applyFilter = !startPenetrating ||
+                        filter.filterInitialOverlap;
                     if (applyFilter && Dot(n, filter.refDir) < filter.minDot)
                         continue;
                 }
@@ -193,6 +200,8 @@ inline Hit SweepCapsuleClosestHit_Fast(
                     best.index = pref.index;
                     best.normal = n;
                     best.featureId = f;
+                    best.startPenetrating = startPenetrating;
+                    best.penetrationDepth = penetrationDepth;
                 }
             }
             continue;

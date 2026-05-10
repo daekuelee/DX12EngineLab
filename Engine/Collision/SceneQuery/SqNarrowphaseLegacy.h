@@ -38,6 +38,7 @@
 #include "SqDistance.h"
 #include "SqIntersect.h"
 #include "SqPrimitiveTests.h"  // ClosestPointPointAABB (used by OverlapCapsuleAabb)
+#include <algorithm>
 #include <limits>
 
 namespace Engine { namespace Collision { namespace sq {
@@ -60,17 +61,21 @@ inline int FeatureClassFromPacked(uint32_t packedFeature)
 }
 
 // Filter acceptance policy used by narrowphase:
+//   - rejectInitialOverlap rejects explicit startPenetrating candidates.
 //   - apply Dot(normal, refDir) >= minDot when filter is active.
+// Invariant: t==0 and startPenetrating are not synonymous. A positive movement
+// hit may have tiny TOI; only startPenetrating owns penetration semantics.
 inline bool PassNarrowfilter(const SweepFilter* filter,
                             bool rejectInitialOverlap,
-                            float t,
+                            bool startPenetrating,
                             const Vec3& n)
 {
+    if (startPenetrating && rejectInitialOverlap) return false;
     if (!filter || !filter->active) return true;
     // By default initial-overlap candidates bypass filtering when the caller
-    // allows t==0 hits. Grounding fallback paths can opt in via
+    // allows startPenetrating hits. Grounding fallback paths can opt in via
     // filterInitialOverlap=true.
-    if (!rejectInitialOverlap && t <= 0.0f && !filter->filterInitialOverlap)
+    if (startPenetrating && !filter->filterInitialOverlap)
         return true;
     return Dot(n, filter->refDir) >= filter->minDot;
 }
@@ -99,6 +104,8 @@ inline Vec3 InitialOverlapNormal(const Vec3& delta, const Vec3& fallback)
 inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
                                  const Triangle& tri, bool twoSided,
                                  float& outT, Vec3& outN, uint32_t& outF,
+                                 bool& outStartPenetrating,
+                                 float& outPenetrationDepth,
                                  const SweepFilter* filter = nullptr,
                                  bool rejectInitialOverlap = false,
                                  float tieEpsT = kNpEpsAlign)
@@ -110,6 +117,8 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
     int bestClass = 4;
     Vec3 bestN{0, 1, 0};
     uint32_t bestF = 0;
+    bool bestStartPenetrating = false;
+    float bestPenetrationDepth = 0.0f;
 
     // Degenerate triangle detection
     Vec3 nd = Cross(tri.p1 - tri.p0, tri.p2 - tri.p0);
@@ -119,11 +128,14 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
 
     Vec3 dirU = NormalizeSafe(delta, {0,1,0});
 
-    auto consider = [&](float tCand, const Vec3& nCand, uint32_t fCand) {
+    auto consider = [&](float tCand, const Vec3& nCand, uint32_t fCand,
+                        bool startPenetrating = false,
+                        float penetrationDepth = 0.0f) {
         if (tCand < 0.0f || tCand > 1.0f) return;
 
         Vec3 nn = NormalizeSafe(nCand, n);
-        if (!PassNarrowfilter(filter, rejectInitialOverlap, tCand, nn)) return;
+        if (!PassNarrowfilter(filter, rejectInitialOverlap,
+                              startPenetrating, nn)) return;
 
         float align = -Dot(nn, dirU);
         int cls = FeatureClassFromPacked(fCand);
@@ -134,16 +146,32 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
             bestF = fCand;
             bestClass = cls;
             bestAlign = align;
+            bestStartPenetrating = startPenetrating;
+            bestPenetrationDepth = penetrationDepth;
             return;
         }
 
         if (Abs(tCand - bestT) <= tieEpsT) {
+            if (bestStartPenetrating != startPenetrating) {
+                if (startPenetrating) {
+                    bestT = tCand;
+                    bestN = nn;
+                    bestF = fCand;
+                    bestClass = cls;
+                    bestAlign = align;
+                    bestStartPenetrating = startPenetrating;
+                    bestPenetrationDepth = penetrationDepth;
+                }
+                return;
+            }
             if (cls < bestClass) {
                 bestT = tCand;
                 bestN = nn;
                 bestF = fCand;
                 bestClass = cls;
                 bestAlign = align;
+                bestStartPenetrating = startPenetrating;
+                bestPenetrationDepth = penetrationDepth;
                 return;
             }
             if (align > bestAlign + kNpEpsAlign) {
@@ -151,6 +179,8 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
                 bestN = nn;
                 bestF = fCand;
                 bestAlign = align;
+                bestStartPenetrating = startPenetrating;
+                bestPenetrationDepth = penetrationDepth;
                 return;
             }
             if (Abs(align - bestAlign) <= kNpEpsAlign && fCand < bestF) {
@@ -158,6 +188,8 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
                 bestN = nn;
                 bestF = fCand;
                 bestAlign = align;
+                bestStartPenetrating = startPenetrating;
+                bestPenetrationDepth = penetrationDepth;
             }
         }
     };
@@ -165,10 +197,11 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
     // Initial overlap: true sphere-triangle distance
     Vec3 q0;
     uint32_t initFeat = 0xFFFFFFFFu;
-    if (!rejectInitialOverlap &&
-        DistPointTriangleSq(c0, tri, &q0, &initFeat) <= r*r) {
+    float initDistSq = DistPointTriangleSq(c0, tri, &q0, &initFeat);
+    if (initDistSq <= r*r) {
         Vec3 n0 = InitialOverlapNormal(delta, c0 - q0);
-        consider(0.0f, n0, initFeat);
+        float depth = r - std::sqrt((std::max)(0.0f, initDistSq));
+        consider(0.0f, n0, initFeat, true, depth);
     }
 
     // One-sided: cull whole triangle if backfacing motion
@@ -244,6 +277,8 @@ inline bool  SweepSphereTri_TOI01(const Vec3& c0, float r, const Vec3& delta,
     outT = bestT;
     outN = bestN;
     outF = bestF;
+    outStartPenetrating = bestStartPenetrating;
+    outPenetrationDepth = bestPenetrationDepth;
 
     // Normal opposed to motion.
     if (Dot(outN, delta) > 0.0f) outN = outN * -1.0f;
@@ -309,6 +344,8 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
     float& outT,
     Vec3& outN,
     uint32_t& outFeat,
+    bool& outStartPenetrating,
+    float& outPenetrationDepth,
     bool rejectInitialOverlap,
     const SweepFilter* filter = nullptr)
 {
@@ -327,12 +364,17 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
     int bestClass = 4;
     Vec3 bestN{0,1,0};
     uint32_t bestF = 0;
+    bool bestStartPenetrating = false;
+    float bestPenetrationDepth = 0.0f;
 
-    auto consider = [&](float tCand, const Vec3& nCand, uint32_t fCand) {
+    auto consider = [&](float tCand, const Vec3& nCand, uint32_t fCand,
+                        bool startPenetrating = false,
+                        float penetrationDepth = 0.0f) {
         if (tCand < 0.0f || tCand > 1.0f) return;
 
         Vec3 nn = NormalizeSafe(nCand, {0,1,0});
-        if (!PassNarrowfilter(filter, rejectInitialOverlap, tCand, nn)) return;
+        if (!PassNarrowfilter(filter, rejectInitialOverlap,
+                              startPenetrating, nn)) return;
 
         float align = -Dot(nn, dirU);
         int cls = FeatureClassFromPacked(fCand);
@@ -343,15 +385,31 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
             bestF = fCand;
             bestClass = cls;
             bestAlign = align;
+            bestStartPenetrating = startPenetrating;
+            bestPenetrationDepth = penetrationDepth;
             return;
         }
         if (Abs(tCand - bestT) <= cfg.tieEpsT) {
+            if (bestStartPenetrating != startPenetrating) {
+                if (startPenetrating) {
+                    bestT = tCand;
+                    bestN = nn;
+                    bestF = fCand;
+                    bestClass = cls;
+                    bestAlign = align;
+                    bestStartPenetrating = startPenetrating;
+                    bestPenetrationDepth = penetrationDepth;
+                }
+                return;
+            }
             if (cls < bestClass) {
                 bestT = tCand;
                 bestN = nn;
                 bestF = fCand;
                 bestClass = cls;
                 bestAlign = align;
+                bestStartPenetrating = startPenetrating;
+                bestPenetrationDepth = penetrationDepth;
                 return;
             }
             if (align > bestAlign + kNpEpsAlign) {
@@ -359,6 +417,8 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
                 bestN = nn;
                 bestF = fCand;
                 bestAlign = align;
+                bestStartPenetrating = startPenetrating;
+                bestPenetrationDepth = penetrationDepth;
                 return;
             }
             if (Abs(align - bestAlign) <= kNpEpsAlign && fCand < bestF) {
@@ -366,15 +426,18 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
                 bestN = nn;
                 bestF = fCand;
                 bestAlign = align;
+                bestStartPenetrating = startPenetrating;
+                bestPenetrationDepth = penetrationDepth;
             }
         }
     };
 
-    if (!rejectInitialOverlap &&
-        DistSegmentTriangleSq(in.segA0, in.segB0, srcTri,
-                             &qSeg, &qTri, &initFeat) <= r*r) {
+    float initDistSq = DistSegmentTriangleSq(in.segA0, in.segB0, srcTri,
+                                             &qSeg, &qTri, &initFeat);
+    if (initDistSq <= r*r) {
         Vec3 n0 = InitialOverlapNormal(in.delta, qSeg - qTri);
-        consider(0.0f, n0, initFeat);
+        float depth = r - std::sqrt((std::max)(0.0f, initDistSq));
+        consider(0.0f, n0, initFeat, true, depth);
     }
 
     // Degenerate capsule -> sphere
@@ -383,13 +446,18 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
         float t;
         Vec3 n;
         uint32_t f;
+        bool startPenetrating = false;
+        float penetrationDepth = 0.0f;
         if (SweepSphereTri_TOI01(c0, r, in.delta, srcTri, cfg.twoSidedTris,
-                                 t, n, f, filter, rejectInitialOverlap, cfg.tieEpsT))
-            consider(t, n, f);
+                                 t, n, f, startPenetrating, penetrationDepth,
+                                 filter, rejectInitialOverlap, cfg.tieEpsT))
+            consider(t, n, f, startPenetrating, penetrationDepth);
         if (!std::isfinite(bestT)) return false;
         outT = bestT;
         outN = bestN;
         outFeat = bestF;
+        outStartPenetrating = bestStartPenetrating;
+        outPenetrationDepth = bestPenetrationDepth;
         if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
         return true;
     }
@@ -402,15 +470,20 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
         float t;
         Vec3 n;
         uint32_t f;
+        bool startPenetrating = false;
+        float penetrationDepth = 0.0f;
         if (SweepSphereTri_TOI01(frontCenter, r, in.delta, srcTri, cfg.twoSidedTris,
-                                 t, n, f, filter, rejectInitialOverlap, cfg.tieEpsT))
-            consider(t, n, f);
+                                 t, n, f, startPenetrating, penetrationDepth,
+                                 filter, rejectInitialOverlap, cfg.tieEpsT))
+            consider(t, n, f, startPenetrating, penetrationDepth);
         // Robustness: if front-sphere shortcut misses, fall through to full prism sweep
         // instead of discarding this primitive.
         if (std::isfinite(bestT)) {
             outT = bestT;
             outN = bestN;
             outFeat = bestF;
+            outStartPenetrating = bestStartPenetrating;
+            outPenetrationDepth = bestPenetrationDepth;
             if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
             return true;
         }
@@ -423,16 +496,22 @@ inline bool SweepCapsuleTri_PhysXLike_TOI01(
         float t;
         Vec3 n;
         uint32_t f;
+        bool startPenetrating = false;
+        float penetrationDepth = 0.0f;
         if (!SweepSphereTri_TOI01(c0, r, in.delta, faces[i], true, t, n, f,
+                                 startPenetrating, penetrationDepth,
                                  filter, rejectInitialOverlap, cfg.tieEpsT))
             continue;
-        consider(t, n, (i << 8) | (f & 0xFFu));
+        consider(t, n, (i << 8) | (f & 0xFFu),
+                 startPenetrating, penetrationDepth);
     }
 
     if (!std::isfinite(bestT)) return false;
     outT = bestT;
     outN = bestN;
     outFeat = bestF;
+    outStartPenetrating = bestStartPenetrating;
+    outPenetrationDepth = bestPenetrationDepth;
     if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
     return true;
 }
@@ -502,6 +581,8 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
     const Triangle boxSurfaceTris[12],
     const SweepConfig& cfg,
     float& outT, Vec3& outN, uint32_t& outFeat,
+    bool& outStartPenetrating,
+    float& outPenetrationDepth,
     bool rejectInitialOverlap,
     const SweepFilter* filter = nullptr)
 {
@@ -517,32 +598,56 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
     int bestClass = 4;
     Vec3  bestN{0,1,0};
     uint32_t bestF = 0;
+    bool bestStartPenetrating = false;
+    float bestPenetrationDepth = 0.0f;
 
-    auto consider = [&](float t, const Vec3& n, uint32_t feat) {
+    auto consider = [&](float t, const Vec3& n, uint32_t feat,
+                        bool startPenetrating = false,
+                        float penetrationDepth = 0.0f) {
         if (t < 0.0f || t > 1.0f) return;
         Vec3 nn = NormalizeSafe(n, {0,1,0});
-        if (!PassNarrowfilter(filter, rejectInitialOverlap, t, nn)) return;
+        if (!PassNarrowfilter(filter, rejectInitialOverlap,
+                              startPenetrating, nn)) return;
         float align = -Dot(nn, dirU);
         int cls = FeatureClassFromPacked(feat);
 
         if (t < bestT - cfg.tieEpsT) {
-            bestT = t; bestN = nn; bestF = feat; bestClass = cls; bestAlign = align; return;
+            bestT = t; bestN = nn; bestF = feat; bestClass = cls; bestAlign = align;
+            bestStartPenetrating = startPenetrating;
+            bestPenetrationDepth = penetrationDepth;
+            return;
         }
         if (Abs(t - bestT) <= cfg.tieEpsT) {
+            if (bestStartPenetrating != startPenetrating) {
+                if (startPenetrating) {
+                    bestT = t; bestN = nn; bestF = feat; bestClass = cls; bestAlign = align;
+                    bestStartPenetrating = startPenetrating;
+                    bestPenetrationDepth = penetrationDepth;
+                }
+                return;
+            }
             if (cls < bestClass) {
-                bestT = t; bestN = nn; bestF = feat; bestClass = cls; bestAlign = align; return;
+                bestT = t; bestN = nn; bestF = feat; bestClass = cls; bestAlign = align;
+                bestStartPenetrating = startPenetrating;
+                bestPenetrationDepth = penetrationDepth;
+                return;
             }
             if (align > bestAlign + kNpEpsAlign) {
-                bestT = t; bestN = nn; bestF = feat; bestAlign = align; return;
+                bestT = t; bestN = nn; bestF = feat; bestAlign = align;
+                bestStartPenetrating = startPenetrating;
+                bestPenetrationDepth = penetrationDepth;
+                return;
             }
             if (Abs(align - bestAlign) <= kNpEpsAlign && feat < bestF) {
                 bestT = t; bestN = nn; bestF = feat; bestAlign = align;
+                bestStartPenetrating = startPenetrating;
+                bestPenetrationDepth = penetrationDepth;
             }
         }
     };
 
     // Initial overlap: capsule segment vs box surface (12 tris)
-    if (!rejectInitialOverlap) {
+    {
         float bestD2 = std::numeric_limits<float>::infinity();
         Vec3 bestSeg{}, bestTri{};
         uint32_t bestFeat = 0xFFFFFFFFu;
@@ -560,7 +665,8 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
         }
         if (bestD2 <= r*r) {
             Vec3 overlapN = InitialOverlapNormal(in.delta, bestSeg - bestTri);
-            consider(0.0f, overlapN, bestFeat);
+            float depth = r - std::sqrt((std::max)(0.0f, bestD2));
+            consider(0.0f, overlapN, bestFeat, true, depth);
         }
     }
 
@@ -569,15 +675,21 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
     if (a2 <= kEpsSq) {
         for (uint32_t i = 0; i < 12; ++i) {
             float t; Vec3 n; uint32_t f;
+            bool startPenetrating = false;
+            float penetrationDepth = 0.0f;
             if (!SweepSphereTri_TOI01(c0, r, in.delta, boxSurfaceTris[i],
-                                       true, t, n, f, filter,
+                                       true, t, n, f,
+                                       startPenetrating, penetrationDepth, filter,
                                        rejectInitialOverlap, cfg.tieEpsT))
                 continue;
-            consider(t, n, (i << 8) | (f & 0xFF));
+            consider(t, n, (i << 8) | (f & 0xFF),
+                     startPenetrating, penetrationDepth);
         }
 
         if (!std::isfinite(bestT)) return false;
         outT = bestT; outN = bestN; outFeat = bestF;
+        outStartPenetrating = bestStartPenetrating;
+        outPenetrationDepth = bestPenetrationDepth;
         if (Dot(outN, in.delta) > 0.0f) outN = outN * -1.0f;
         return true;
     }
@@ -589,12 +701,15 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
 
             for (uint32_t prismFace = 0; prismFace < faceCount; ++prismFace) {
                 float t; Vec3 n; uint32_t f;
+                bool startPenetrating = false;
+                float penetrationDepth = 0.0f;
                 if (!SweepSphereTri_TOI01(c0, r, in.delta, faces[prismFace],
-                                       true, t, n, f, filter,
+                                       true, t, n, f,
+                                       startPenetrating, penetrationDepth, filter,
                                        rejectInitialOverlap, cfg.tieEpsT))
                     continue;
                 uint32_t feat = (triId << 16) | (prismFace << 8) | (f & 0xFF);
-                consider(t, n, feat);
+                consider(t, n, feat, startPenetrating, penetrationDepth);
             }
         }
 
@@ -602,6 +717,8 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
     outT = bestT;
     outN = bestN;
     outFeat = bestF;
+    outStartPenetrating = bestStartPenetrating;
+    outPenetrationDepth = bestPenetrationDepth;
     return true;
 }
 
@@ -610,6 +727,8 @@ static inline bool SweepCapsuleBox_TrisExtruded_TOI01(
 inline bool SweepCapsuleAabb_PhysXLike_TOI01(
     const SweepCapsuleInput& in, const AABB& box, const SweepConfig& cfg,
     float& outT, Vec3& outN, uint32_t& outFeat,
+    bool& outStartPenetrating,
+    float& outPenetrationDepth,
     bool rejectInitialOverlap = false,
     const SweepFilter* filter = nullptr)
 {
@@ -617,12 +736,16 @@ inline bool SweepCapsuleAabb_PhysXLike_TOI01(
     BuildAabbPoints8(box, p);
     BuildBoxSurfaceTris12(p, tris);
     return SweepCapsuleBox_TrisExtruded_TOI01(in, tris, cfg, outT, outN, outFeat,
+                                              outStartPenetrating,
+                                              outPenetrationDepth,
                                               rejectInitialOverlap, filter);
 }
 
 inline bool SweepCapsuleObb_PhysXLike_TOI01(
     const SweepCapsuleInput& in, const OBB& box, const SweepConfig& cfg,
     float& outT, Vec3& outN, uint32_t& outFeat,
+    bool& outStartPenetrating,
+    float& outPenetrationDepth,
     bool rejectInitialOverlap = false,
     const SweepFilter* filter = nullptr)
 {
@@ -630,6 +753,8 @@ inline bool SweepCapsuleObb_PhysXLike_TOI01(
     BuildObbPoints8(box, p);
     BuildBoxSurfaceTris12(p, tris);
     return SweepCapsuleBox_TrisExtruded_TOI01(in, tris, cfg, outT, outN, outFeat,
+                                              outStartPenetrating,
+                                              outPenetrationDepth,
                                               rejectInitialOverlap, filter);
 }
 

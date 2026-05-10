@@ -117,6 +117,10 @@ struct Hit {
     uint32_t index = 0;
     Vec3     normal{0, 1, 0};
     uint32_t featureId = 0;  // packed: (prismFace<<8) | (sphereTriFeature)
+    // Invariant: skin is a movement pullback margin, not a penetration flag.
+    // startPenetrating is the explicit raw fact for initial-overlap hits.
+    bool     startPenetrating = false;
+    float    penetrationDepth = 0.0f;
 };
 
 struct OverlapContact {
