@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <algorithm>  // For std::sort, std::unique
 #include <Windows.h>  // For OutputDebugStringA
 
@@ -11,6 +12,130 @@ using namespace DirectX;
 
 namespace Engine
 {
+    namespace
+    {
+        float DeltaY(const Collision::CctPhaseSnapshot& from,
+                     const Collision::CctPhaseSnapshot& to)
+        {
+            return to.posFeet.y - from.posFeet.y;
+        }
+
+        const char* KccTraceCulpritName(Renderer::KccTraceCulprit culprit)
+        {
+            switch (culprit)
+            {
+            case Renderer::KccTraceCulprit::None: return "None";
+            case Renderer::KccTraceCulprit::Recover: return "Recover";
+            case Renderer::KccTraceCulprit::StepUp: return "StepUp";
+            case Renderer::KccTraceCulprit::StepMove: return "StepMove";
+            case Renderer::KccTraceCulprit::StepDown: return "StepDown";
+            case Renderer::KccTraceCulprit::PostRecover: return "PostRecover";
+            case Renderer::KccTraceCulprit::Unknown: return "Unknown";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctMoveModeName(Collision::CctMoveMode mode)
+        {
+            switch (mode)
+            {
+            case Collision::CctMoveMode::Walking: return "Walking";
+            case Collision::CctMoveMode::Falling: return "Falling";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctStepMoveQueryKindName(
+            Collision::CctStepMoveQueryKind kind)
+        {
+            switch (kind)
+            {
+            case Collision::CctStepMoveQueryKind::NotRun: return "NotRun";
+            case Collision::CctStepMoveQueryKind::ClearPath: return "ClearPath";
+            case Collision::CctStepMoveQueryKind::PositiveLateralBlocker:
+                return "PositiveLateralBlocker";
+            case Collision::CctStepMoveQueryKind::NeedsRecovery:
+                return "NeedsRecovery";
+            case Collision::CctStepMoveQueryKind::UnsupportedForStepMove:
+                return "UnsupportedForStepMove";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctStepMoveRejectReasonName(
+            Collision::CctStepMoveRejectReason reason)
+        {
+            switch (reason)
+            {
+            case Collision::CctStepMoveRejectReason::None: return "None";
+            case Collision::CctStepMoveRejectReason::NearZero:
+                return "NearZero";
+            case Collision::CctStepMoveRejectReason::StartPenetrating:
+                return "StartPenetrating";
+            case Collision::CctStepMoveRejectReason::NoLateralNormal:
+                return "NoLateralNormal";
+            case Collision::CctStepMoveRejectReason::NotApproaching:
+                return "NotApproaching";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctFloorSemanticName(
+            Collision::CctFloorSemantic semantic)
+        {
+            switch (semantic)
+            {
+            case Collision::CctFloorSemantic::NotRun: return "NotRun";
+            case Collision::CctFloorSemantic::WalkingMaintainFloor:
+                return "WalkingMaintainFloor";
+            case Collision::CctFloorSemantic::WalkingSnapOrLatch:
+                return "WalkingSnapOrLatch";
+            case Collision::CctFloorSemantic::FallingLand:
+                return "FallingLand";
+            case Collision::CctFloorSemantic::FallingContinue:
+                return "FallingContinue";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctFloorSourceName(Collision::CctFloorSource source)
+        {
+            switch (source)
+            {
+            case Collision::CctFloorSource::None: return "None";
+            case Collision::CctFloorSource::PrimarySweep:
+                return "PrimarySweep";
+            case Collision::CctFloorSource::InitialOverlapSweep:
+                return "InitialOverlapSweep";
+            case Collision::CctFloorSource::OverlapSupport:
+                return "OverlapSupport";
+            case Collision::CctFloorSource::LatchSweep:
+                return "LatchSweep";
+            default: return "Unknown";
+            }
+        }
+
+        const char* CctFloorRejectReasonName(
+            Collision::CctFloorRejectReason reason)
+        {
+            switch (reason)
+            {
+            case Collision::CctFloorRejectReason::None: return "None";
+            case Collision::CctFloorRejectReason::NoHit: return "NoHit";
+            case Collision::CctFloorRejectReason::NotWalkable:
+                return "NotWalkable";
+            case Collision::CctFloorRejectReason::StartPenetrating:
+                return "StartPenetrating";
+            case Collision::CctFloorRejectReason::NearSkinAmbiguousFallingHit:
+                return "NearSkinAmbiguousFallingHit";
+            case Collision::CctFloorRejectReason::WrongSemanticSource:
+                return "WrongSemanticSource";
+            default: return "Unknown";
+            }
+        }
+
+    }
+
 
     void WorldState::Initialize()
     {
@@ -163,6 +288,7 @@ namespace Engine
         // 7. Tick KCC (sole movement authority)
         assert(m_cct && "KCC must be constructed before TickFixed");
         m_cct->Tick(cctInput, fixedDt);
+        RecordKccTraceTick(m_cct->getDebug());
 
         // 8. Mirror CctState → m_pawn
         const auto& cs = m_cct->getState();
@@ -217,6 +343,308 @@ namespace Engine
         }
 #endif  // CCT_DEBUG_TICK
 #endif
+    }
+
+    void WorldState::ApplyKccTraceUi(const Renderer::KccTraceUiState& state,
+                                     const Renderer::KccTraceUiActions& actions)
+    {
+        const bool wasEnabled = m_kccTraceUi.enabled;
+        m_kccTraceUi = state;
+        if (m_kccTraceUi.upwardPopEps < 0.001f) {
+            m_kccTraceUi.upwardPopEps = 0.001f;
+        }
+
+        if (actions.clearRequested) {
+            ClearKccTrace();
+        }
+
+        if (!m_kccTraceUi.enabled) {
+            m_kccTraceStatus = Renderer::KccTraceStatus::Off;
+        } else if (!wasEnabled || m_kccTraceStatus == Renderer::KccTraceStatus::Off) {
+            m_kccTraceStatus = Renderer::KccTraceStatus::Recording;
+        }
+
+        if (actions.freezeRequested) {
+            FreezeKccTrace();
+        }
+
+        if (actions.saveRequested) {
+            m_kccTraceLastSaveOk = SaveKccTrace();
+        }
+    }
+
+    void WorldState::ClearKccTrace()
+    {
+        m_kccTraceWrite = 0;
+        m_kccTraceCount = 0;
+        m_kccTraceTick = 0;
+        m_kccTraceTriggerTick = 0;
+        m_kccTracePostRollRemaining = 0;
+        m_kccTraceLastCulprit = Renderer::KccTraceCulprit::None;
+        m_kccTraceLastSaveOk = false;
+        m_kccTraceLastSavePath.clear();
+        m_kccTraceStatus = m_kccTraceUi.enabled
+            ? Renderer::KccTraceStatus::Recording
+            : Renderer::KccTraceStatus::Off;
+    }
+
+    void WorldState::FreezeKccTrace()
+    {
+        m_kccTraceStatus = (m_kccTraceCount > 0)
+            ? Renderer::KccTraceStatus::Frozen
+            : (m_kccTraceUi.enabled ? Renderer::KccTraceStatus::Recording
+                                    : Renderer::KccTraceStatus::Off);
+        m_kccTracePostRollRemaining = 0;
+    }
+
+    Renderer::KccTraceCulprit WorldState::ClassifyKccTraceCulprit(
+        const Collision::CctDebug& debug) const
+    {
+        const float eps = m_kccTraceUi.upwardPopEps;
+        if (debug.afterIntegrateVertical.verticalVelocity > 0.0f) {
+            return Renderer::KccTraceCulprit::None;
+        }
+
+        const float totalRise = debug.afterPostRecover.posFeet.y - debug.beforeTick.posFeet.y;
+        if (totalRise <= eps) {
+            return Renderer::KccTraceCulprit::None;
+        }
+
+        if (DeltaY(debug.afterIntegrateVertical, debug.afterPreRecover) > eps) {
+            return Renderer::KccTraceCulprit::Recover;
+        }
+        if (DeltaY(debug.afterPreRecover, debug.afterStepUp) > eps) {
+            return Renderer::KccTraceCulprit::StepUp;
+        }
+        if (DeltaY(debug.afterStepUp, debug.afterStepMove) > eps) {
+            return Renderer::KccTraceCulprit::StepMove;
+        }
+        if (DeltaY(debug.afterStepMove, debug.afterStepDown) > eps) {
+            return Renderer::KccTraceCulprit::StepDown;
+        }
+        if (DeltaY(debug.afterStepDown, debug.afterPostRecover) > eps) {
+            return Renderer::KccTraceCulprit::PostRecover;
+        }
+        return Renderer::KccTraceCulprit::Unknown;
+    }
+
+    void WorldState::RecordKccTraceTick(const Collision::CctDebug& debug)
+    {
+        if (!m_kccTraceUi.enabled) {
+            return;
+        }
+        if (m_kccTraceStatus == Renderer::KccTraceStatus::Frozen) {
+            return;
+        }
+
+        if (m_kccTraceStatus == Renderer::KccTraceStatus::Off) {
+            m_kccTraceStatus = Renderer::KccTraceStatus::Recording;
+        }
+
+        const uint32_t tick = ++m_kccTraceTick;
+        const Renderer::KccTraceCulprit culprit = ClassifyKccTraceCulprit(debug);
+
+        KccTraceRecord& record = m_kccTraceRecords[m_kccTraceWrite];
+        record.tick = tick;
+        record.debug = debug;
+        record.culprit = culprit;
+
+        m_kccTraceWrite = (m_kccTraceWrite + 1) % KCC_TRACE_CAPACITY;
+        if (m_kccTraceCount < KCC_TRACE_CAPACITY) {
+            m_kccTraceCount++;
+        }
+
+        if (m_kccTraceUi.autoTrigger &&
+            culprit != Renderer::KccTraceCulprit::None &&
+            m_kccTraceStatus != Renderer::KccTraceStatus::Triggered) {
+            m_kccTraceStatus = Renderer::KccTraceStatus::Triggered;
+            m_kccTraceLastCulprit = culprit;
+            m_kccTraceTriggerTick = tick;
+            m_kccTracePostRollRemaining = KCC_TRACE_POST_ROLL_TICKS;
+            return;
+        }
+
+        if (m_kccTraceStatus == Renderer::KccTraceStatus::Triggered) {
+            if (m_kccTracePostRollRemaining > 0) {
+                m_kccTracePostRollRemaining--;
+            }
+            if (m_kccTracePostRollRemaining == 0) {
+                FreezeKccTrace();
+            }
+        } else {
+            m_kccTraceLastCulprit = culprit;
+        }
+    }
+
+    bool WorldState::SaveKccTrace()
+    {
+        if (m_kccTraceCount == 0) {
+            m_kccTraceLastSavePath.clear();
+            return false;
+        }
+
+        CreateDirectoryA("captures", nullptr);
+        CreateDirectoryA("captures/debug", nullptr);
+
+        SYSTEMTIME now{};
+        GetLocalTime(&now);
+
+        char stampedPath[128];
+        sprintf_s(stampedPath,
+                  "captures/debug/kcc_trace_%04u%02u%02u_%02u%02u%02u.txt",
+                  now.wYear, now.wMonth, now.wDay,
+                  now.wHour, now.wMinute, now.wSecond);
+
+        auto writeTraceFile = [&](const char* path) -> bool {
+            std::ofstream out(path, std::ios::out | std::ios::trunc);
+            if (!out) {
+                return false;
+            }
+
+            auto writeVec3 = [&out](const char* name, const Collision::sq::Vec3& v) {
+                out << ' ' << name << "=(" << v.x << ',' << v.y << ',' << v.z << ')';
+            };
+
+            out << "status=" << static_cast<uint32_t>(m_kccTraceStatus)
+                << " triggerTick=" << m_kccTraceTriggerTick
+                << " culprit=" << KccTraceCulpritName(m_kccTraceLastCulprit)
+                << " upwardPopEps=" << m_kccTraceUi.upwardPopEps
+                << " storedTicks=" << m_kccTraceCount
+                << '\n';
+
+            const uint32_t start = (m_kccTraceCount == KCC_TRACE_CAPACITY)
+                ? m_kccTraceWrite
+                : 0;
+
+            for (uint32_t i = 0; i < m_kccTraceCount; ++i) {
+                const KccTraceRecord& record =
+                    m_kccTraceRecords[(start + i) % KCC_TRACE_CAPACITY];
+                const auto& d = record.debug;
+                out << "tick=" << record.tick
+                    << " culprit=" << KccTraceCulpritName(record.culprit)
+                    << " yBegin=" << d.beforeTick.posFeet.y
+                    << " yIntegrate=" << d.afterIntegrateVertical.posFeet.y
+                    << " yPreRecover=" << d.afterPreRecover.posFeet.y
+                    << " yStepUp=" << d.afterStepUp.posFeet.y
+                    << " yStepMove=" << d.afterStepMove.posFeet.y
+                    << " yStepDown=" << d.afterStepDown.posFeet.y
+                    << " yPostRecover=" << d.afterPostRecover.posFeet.y
+                    << " yFinal=" << d.afterWriteback.posFeet.y;
+                writeVec3("posBegin", d.beforeTick.posFeet);
+                writeVec3("posStepMove", d.afterStepMove.posFeet);
+                writeVec3("posFinal", d.afterWriteback.posFeet);
+                writeVec3("walkMove", d.inputWalkMove);
+                writeVec3("dxIntent", d.dxIntent);
+                writeVec3("dxCorr", d.dxCorr);
+                out << " vyBegin=" << d.beforeTick.verticalVelocity
+                    << " vyFinal=" << d.afterWriteback.verticalVelocity
+                    << " modeBegin=" << CctMoveModeName(d.beforeTick.moveMode)
+                    << " modeIntegrate=" << CctMoveModeName(d.afterIntegrateVertical.moveMode)
+                    << " modeStepUp=" << CctMoveModeName(d.afterStepUp.moveMode)
+                    << " modeStepMove=" << CctMoveModeName(d.afterStepMove.moveMode)
+                    << " modeStepDown=" << CctMoveModeName(d.afterStepDown.moveMode)
+                    << " modeFinal=" << CctMoveModeName(d.afterWriteback.moveMode)
+                    << " onGroundBegin=" << (d.beforeTick.onGround ? 1 : 0)
+                    << " onGroundFinal=" << (d.afterWriteback.onGround ? 1 : 0)
+                    << " stepUpOffset=" << d.stepUpOffset
+                    << " recoverPush=" << d.recoverPushMag
+                    << " postRecoverPush=" << d.postRecoverMag
+                    << " stepMoveFirstT=" << d.stepMoveFirstTOI
+                    << " stepMoveFirstN=(" << d.stepMoveFirstNormal.x << ','
+                                          << d.stepMoveFirstNormal.y << ','
+                                          << d.stepMoveFirstNormal.z << ')'
+                    << " stepMoveFirstIndex=" << d.stepMoveFirstIndex
+                    << " stepMoveFirstApproachDot=" << d.stepMoveFirstApproachDot
+                    << " stepMoveFirstStartPen="
+                    << (d.stepMoveFirstStartPenetrating ? 1 : 0)
+                    << " stepMoveFirstPenDepth="
+                    << d.stepMoveFirstPenetrationDepth
+                    << " stepMoveLastKind="
+                    << CctStepMoveQueryKindName(d.stepMoveLastKind)
+                    << " stepMoveLastReason="
+                    << CctStepMoveRejectReasonName(
+                           d.stepMoveLastRejectReason)
+                    << " stepMoveLastResweep="
+                    << (d.stepMoveLastResweepUsed ? 1 : 0)
+                    << " stepMoveLastT=" << d.stepMoveLastTOI
+                    << " stepMoveLastN=(" << d.stepMoveLastNormal.x << ','
+                                         << d.stepMoveLastNormal.y << ','
+                                         << d.stepMoveLastNormal.z << ')'
+                    << " stepMoveLastLatN=("
+                    << d.stepMoveLastLateralNormal.x << ','
+                    << d.stepMoveLastLateralNormal.y << ','
+                    << d.stepMoveLastLateralNormal.z << ')'
+                    << " stepMoveLastIndex=" << d.stepMoveLastIndex
+                    << " stepMoveLastApproachDot="
+                    << d.stepMoveLastApproachDot
+                    << " stepMoveLastStartPen="
+                    << (d.stepMoveLastStartPenetrating ? 1 : 0)
+                    << " stepMoveLastPenDepth="
+                    << d.stepMoveLastPenetrationDepth
+                    << " stepMoveLastNearZero="
+                    << (d.stepMoveLastNearZero ? 1 : 0)
+                    << " stepMoveLastWalkable="
+                    << (d.stepMoveLastWalkable ? 1 : 0)
+                    << " stepMoveLastHasLat="
+                    << (d.stepMoveLastHasLateralNormal ? 1 : 0)
+                    << " stepMoveClear=" << d.stepMoveClearPathCount
+                    << " stepMoveBlock="
+                    << d.stepMovePositiveBlockerCount
+                    << " stepMoveNeedRecover="
+                    << d.stepMoveNeedsRecoveryCount
+                    << " stepMoveUnsupported="
+                    << d.stepMoveUnsupportedCount
+                    << " zeroHitPushes=" << d.zeroHitPushes
+                    << " forwardIters=" << d.forwardIters
+                    << " stuck=" << (d.stuck ? 1 : 0)
+                    << " dxIntentMag=" << d.dxIntentMag
+                    << " dxCorrMag=" << d.dxCorrMag
+                    << " stepDownHitT=" << d.stepDownHitTOI
+                    << " stepDownN=(" << d.stepDownHitNormal.x << ','
+                                      << d.stepDownHitNormal.y << ','
+                                      << d.stepDownHitNormal.z << ')'
+                    << " stepDownWalkable=" << (d.stepDownWalkable ? 1 : 0)
+                    << " floorSemantic="
+                    << CctFloorSemanticName(d.floorSemantic)
+                    << " floorSource="
+                    << CctFloorSourceName(d.floorSource)
+                    << " floorAccepted=" << (d.floorAccepted ? 1 : 0)
+                    << " floorReject="
+                    << CctFloorRejectReasonName(d.floorRejectReason)
+                    << '\n';
+            }
+            return true;
+        };
+
+        const bool stampedOk = writeTraceFile(stampedPath);
+        const bool lastOk = writeTraceFile("captures/debug/kcc_trace_last.txt");
+        if (stampedOk || lastOk) {
+            m_kccTraceLastSavePath = stampedOk
+                ? stampedPath
+                : "captures/debug/kcc_trace_last.txt";
+        }
+        return stampedOk || lastOk;
+    }
+
+    void WorldState::FillKccTraceHud(Renderer::KccTraceHudState& out) const
+    {
+        out.status = m_kccTraceUi.enabled ? m_kccTraceStatus : Renderer::KccTraceStatus::Off;
+        out.lastCulprit = m_kccTraceLastCulprit;
+        out.storedTicks = m_kccTraceCount;
+        out.triggerTick = m_kccTraceTriggerTick;
+        out.lastSaveOk = m_kccTraceLastSaveOk;
+        out.lastSavePath = m_kccTraceLastSavePath.empty() ? nullptr : m_kccTraceLastSavePath.c_str();
+
+        if (m_kccTraceCount > 0) {
+            const uint32_t lastIndex =
+                (m_kccTraceWrite + KCC_TRACE_CAPACITY - 1) % KCC_TRACE_CAPACITY;
+            const auto& d = m_kccTraceRecords[lastIndex].debug;
+            out.yBegin = d.beforeTick.posFeet.y;
+            out.yFinal = d.afterWriteback.posFeet.y;
+        } else {
+            out.yBegin = 0.0f;
+            out.yFinal = 0.0f;
+        }
     }
 
     void WorldState::TriggerPass()
@@ -841,6 +1269,8 @@ namespace Engine
         snap.stepFailMask = m_collisionStats.stepFailMask;
         snap.stepHeightUsed = m_collisionStats.stepHeightUsed;
         snap.stepCubeIdx = m_collisionStats.stepCubeIdx;
+
+        FillKccTraceHud(snap.kccTrace);
 
         return snap;
     }
