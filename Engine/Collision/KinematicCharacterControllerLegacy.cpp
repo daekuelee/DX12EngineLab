@@ -209,6 +209,10 @@ void KinematicCharacterControllerLegacy::setState(const CctState& s)
 // =========================================================================
 // Tick — the single public entry point per fixed step
 // =========================================================================
+//
+// SSOT: docs/audits/kcc/07-lightweight-kcc-audit-work-plan.md
+// Invariant: mode shell dispatch is not a time-budget loop. It only routes the
+// existing movement phases through Walking/Falling ownership boundaries.
 
 void KinematicCharacterControllerLegacy::Tick(const CctInput& input, float dt)
 {
@@ -234,17 +238,11 @@ void KinematicCharacterControllerLegacy::Tick(const CctInput& input, float dt)
 
     m_xSweep = m_currentPosition;
 
-    StepUp(input.walkMove);
-    m_debug.afterStepUp = MakePhaseSnapshot(m_currentPosition, m_state);
-    m_debug.posAfterStepUp = m_currentPosition;
-
-    StepMove(input.walkMove);
-    m_debug.afterStepMove = MakePhaseSnapshot(m_currentPosition, m_state);
-    m_debug.posAfterStepMove = m_currentPosition;
-
-    StepDown(dt);
-    m_debug.afterStepDown = MakePhaseSnapshot(m_currentPosition, m_state);
-    m_debug.posAfterStepDown = m_currentPosition;
+    if (IsWalking()) {
+        SimulateWalking(input, dt);
+    } else {
+        SimulateFalling(input, dt);
+    }
 
     // §3A: capture position for velocity BEFORE post-sweep cleanup
     m_xFinalPre = m_currentPosition;
@@ -264,6 +262,65 @@ void KinematicCharacterControllerLegacy::Tick(const CctInput& input, float dt)
 
     // Sweep filter diagnostics: track onGround state transitions
     m_debug.onGroundToggles = (m_state.onGround != m_state.wasOnGround) ? 1 : 0;
+}
+
+void KinematicCharacterControllerLegacy::SimulateWalking(const CctInput& input, float dt)
+{
+    ApplyVerticalLiftForJumpOrCeiling(input);
+    m_debug.afterStepUp = MakePhaseSnapshot(m_currentPosition, m_state);
+    m_debug.posAfterStepUp = m_currentPosition;
+
+    MoveWalkingLateral(input.walkMove);
+    m_debug.afterStepMove = MakePhaseSnapshot(m_currentPosition, m_state);
+    m_debug.posAfterStepMove = m_currentPosition;
+
+    UpdateGroundForWalking(dt);
+    m_debug.afterStepDown = MakePhaseSnapshot(m_currentPosition, m_state);
+    m_debug.posAfterStepDown = m_currentPosition;
+}
+
+void KinematicCharacterControllerLegacy::SimulateFalling(const CctInput& input, float dt)
+{
+    ApplyVerticalLiftForJumpOrCeiling(input);
+    m_debug.afterStepUp = MakePhaseSnapshot(m_currentPosition, m_state);
+    m_debug.posAfterStepUp = m_currentPosition;
+
+    MoveFallingLegacyBridge(input.walkMove);
+    m_debug.afterStepMove = MakePhaseSnapshot(m_currentPosition, m_state);
+    m_debug.posAfterStepMove = m_currentPosition;
+
+    FindFloorForLanding(dt);
+    m_debug.afterStepDown = MakePhaseSnapshot(m_currentPosition, m_state);
+    m_debug.posAfterStepDown = m_currentPosition;
+}
+
+void KinematicCharacterControllerLegacy::ApplyVerticalLiftForJumpOrCeiling(
+    const CctInput& input)
+{
+    StepUp(input.walkMove);
+}
+
+void KinematicCharacterControllerLegacy::MoveWalkingLateral(const sq::Vec3& walkMove)
+{
+    StepMove(walkMove);
+}
+
+void KinematicCharacterControllerLegacy::UpdateGroundForWalking(float dt)
+{
+    StepDown(dt);
+}
+
+void KinematicCharacterControllerLegacy::MoveFallingLegacyBridge(
+    const sq::Vec3& walkMove)
+{
+    // Temporary compatibility bridge: Falling still borrows the legacy lateral
+    // move until a dedicated air-move response owns wall/landing semantics.
+    StepMove(walkMove);
+}
+
+void KinematicCharacterControllerLegacy::FindFloorForLanding(float dt)
+{
+    StepDown(dt);
 }
 
 // =========================================================================

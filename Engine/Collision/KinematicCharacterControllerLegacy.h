@@ -66,6 +66,13 @@ private:
 
     void PreStep();
     void IntegrateVertical(const CctInput& input, float dt);
+    void SimulateWalking(const CctInput& input, float dt);
+    void SimulateFalling(const CctInput& input, float dt);
+    void ApplyVerticalLiftForJumpOrCeiling(const CctInput& input);
+    void MoveWalkingLateral(const sq::Vec3& walkMove);
+    void UpdateGroundForWalking(float dt);
+    void MoveFallingLegacyBridge(const sq::Vec3& walkMove);
+    void FindFloorForLanding(float dt);
     void StepUp(const sq::Vec3& walkMove);
     void StepMove(const sq::Vec3& walkMove);
     void StepDown(float dt);
