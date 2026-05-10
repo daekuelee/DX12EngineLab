@@ -1,0 +1,80 @@
+### Contract: geometry math foundation
+
+- Reference engine: PhysX
+- Reference version/root: `.ref/PhysX_4.0/physx`, `.ref/PhysX_4.0/pxshared`
+- Trust level: raw-source-verified
+- Review status: pending
+- Source:
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:45`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:53`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:156`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:164`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:175`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:276`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:291`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:312`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:45`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:105`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:111`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:117`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:148`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxQuat.h:132`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxQuat.h:142`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxQuat.h:227`
+  - `.ref/PhysX_4.0/pxshared/include/foundation/PxQuat.h:287`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxGeometry.h:70`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxBoxGeometry.h:45`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxBoxGeometry.h:92`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxSphereGeometry.h:46`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxSphereGeometry.h:76`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxCapsuleGeometry.h:55`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxCapsuleGeometry.h:93`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxTriangle.h:48`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxTriangle.h:102`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:67`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:122`
+  - `.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:180`
+  - `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:100`
+  - `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:126`
+  - `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:200`
+  - `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:221`
+  - `.ref/PhysX_4.0/physx/source/geomutils/include/GuBox.h:52`
+  - `.ref/PhysX_4.0/physx/source/geomutils/include/GuSegment.h:45`
+  - `.ref/PhysX_4.0/physx/source/geomutils/src/GuCapsule.h:47`
+  - `.ref/PhysX_4.0/physx/source/geomutils/src/GuSphere.h:42`
+  - `.ref/PhysX_4.0/physx/source/geomutils/src/distance/GuDistancePointTriangle.cpp:218`
+  - `.ref/PhysX_4.0/physx/source/geomutils/src/intersection/GuIntersectionRayBox.cpp:426`
+  - `.ref/PhysX_4.0/physx/source/geomutils/src/GuSweepTests.cpp:45`
+  - `.ref/PhysX_4.0/physx/source/geomutils/src/sweep/GuSweepTriangleUtils.cpp:70`
+- Local context:
+  - Deferred. Per task scope, EngineLab production source was not inspected.
+- Inputs:
+  - Public PhysX geometry queries pass shape data and placement separately: `PxGeometry` describes spatial object characteristics without world placement, while `PxGeometryQuery` methods take `PxGeometry` plus `PxTransform` inputs for sweep, overlap, raycast, MTD, distance, and bounds queries (`.ref/PhysX_4.0/physx/include/geometry/PxGeometry.h:70`, `.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:91`, `.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:118`, `.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:137`, `.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:176`, `.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:193`).
+  - `PxVec3` is the public 3D vector type, has public data members, and the default constructor leaves data uninitialized; explicit zero/scalar/three-scalar constructors initialize values (`.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:45`, `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:53`, `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:62`, `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:74`, `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:85`).
+  - `PxTransform` stores a quaternion and translation vector, and its point transform/inverse transform are expressed through quaternion rotate/rotateInv plus translation (`.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:45`, `.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:51`, `.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:111`, `.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:117`).
+  - Public primitive geometry validity requires finite, positive dimensions for box half extents, sphere radius, and capsule radius/halfHeight (`.ref/PhysX_4.0/physx/include/geometry/PxBoxGeometry.h:92`, `.ref/PhysX_4.0/physx/include/geometry/PxSphereGeometry.h:76`, `.ref/PhysX_4.0/physx/include/geometry/PxCapsuleGeometry.h:93`).
+- Outputs:
+  - `PxGeometryQuery::pointDistance` returns squared distance, returns `0.0` inside, returns `-1.0` for unsupported geometry types, and the closest point is only valid when the returned distance is strictly positive (`.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:180`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:236`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:258`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:283`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:300`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:308`).
+  - `PxGeometryQuery::raycast` returns a hit count and validates origin, unit direction, pose, and maximum distance before dispatching through `gRaycastMap` (`.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:122`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:200`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:206`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:211`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:213`).
+  - `PxGeometryQuery::sweep` returns a single `PxSweepHit` validity boolean and validates poses, finite direction, finite distance, and the zero-distance rule before dispatching by swept geometry type (`.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:67`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:100`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:107`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:111`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:126`).
+- Invariant:
+  - Query math is pose-explicit: public primitives do not own world placement; `PxTransform` supplies placement and must be valid, which means finite translation/quaternion and a unit quaternion (`.ref/PhysX_4.0/physx/include/geometry/PxGeometry.h:70`, `.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:148`, `.ref/PhysX_4.0/pxshared/include/foundation/PxQuat.h:132`).
+  - Unit-vector assumptions are part of the public and implementation-level query contract: public sweep/raycast docs name normalized directions, raycast enforces magnitude-squared within `1e-4`, and `PxVec3::isNormalized` uses finite magnitude tolerance (`.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:77`, `.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:126`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:211`, `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:164`).
+  - Core raw distance helpers return squared distances and closest features in internal `Ps::aos` vector form, as seen in point-triangle distance returning `V3Dot(vv, vv)` after vertex/edge/face region classification (`.ref/PhysX_4.0/physx/source/geomutils/src/distance/GuDistancePointTriangle.cpp:218`, `.ref/PhysX_4.0/physx/source/geomutils/src/distance/GuDistancePointTriangle.cpp:238`, `.ref/PhysX_4.0/physx/source/geomutils/src/distance/GuDistancePointTriangle.cpp:252`, `.ref/PhysX_4.0/physx/source/geomutils/src/distance/GuDistancePointTriangle.cpp:302`, `.ref/PhysX_4.0/physx/source/geomutils/src/distance/GuDistancePointTriangle.cpp:352`).
+  - Intersection and sweep foundation code converts public vectors/primitives into internal `Vec3V`, `BoxV`, `CapsuleV`, or `TriangleV` working data before doing narrow math (`.ref/PhysX_4.0/physx/source/geomutils/src/intersection/GuIntersectionRayBox.cpp:426`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuSweepTests.cpp:55`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuSweepTests.cpp:67`, `.ref/PhysX_4.0/physx/source/geomutils/src/sweep/GuSweepTriangleUtils.cpp:70`, `.ref/PhysX_4.0/physx/source/geomutils/src/sweep/GuSweepTriangleUtils.cpp:80`).
+- Edge cases:
+  - `PxVec3` default construction is not zero initialization; zero must be requested with the zero constructor or explicit values (`.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:53`, `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:62`, `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:85`).
+  - `PxVec3::getNormalized` returns a zero vector for zero squared magnitude, while `normalizeSafe` returns `0.0` and leaves the vector unchanged below `PX_NORMALIZATION_EPSILON` (`.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:291`, `.ref/PhysX_4.0/pxshared/include/foundation/PxVec3.h:312`).
+  - Sphere sweep is internally mapped to a capsule with `halfHeight == 0.0`; the implementation comments that this capsule would be invalid by `isValid`, but still uses a world capsule from pose point to pose point for sweep dispatch (`.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:130`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:134`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:137`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:142`).
+  - Internal `Gu::Sphere` validity allows `radius >= 0.0`, while public `PxSphereGeometry::isValid` requires `radius > 0.0`; keep these public/internal validity domains separate (`.ref/PhysX_4.0/physx/source/geomutils/src/GuSphere.h:83`, `.ref/PhysX_4.0/physx/include/geometry/PxSphereGeometry.h:76`).
+  - Internal `Ps::aos::Vec3V`/`FloatV` definition files were not located under `.ref/PhysX_4.0/physx` or `.ref/PhysX_4.0/pxshared`; raw call sites using those types were located and cited, but the type-definition layer remains `missing-source` for this checkout.
+- Rejection/filtering rules:
+  - Public query implementations reject invalid poses; sweep also rejects non-finite direction or distance and rejects zero distance when `eASSUME_NO_INITIAL_OVERLAP` is set (`.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:107`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:109`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:111`).
+  - Raycast rejects non-finite ray inputs, invalid pose, negative or non-finite max distance, and non-unit direction by magnitude-squared tolerance (`.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:206`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:208`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:209`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:211`).
+  - `pointDistance` validates pose and rejects unsupported geometry by returning `-1.0` after reporting the geometry must be sphere, capsule, box, or convex (`.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:221`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:224`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:300`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:305`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:308`).
+- Ordering/tie-break rules:
+  - This foundation card does not establish sweep-hit ordering or tie-break behavior; dispatch tables and primitive math entry points are cited here, but ordering must be mined in sweep/mesh-specific contracts (`.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:126`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:140`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:153`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:166`).
+- Why this matters:
+  - Later intersection, raw distance, and sweep audits need to compare the same data boundaries: public `PxGeometry` plus `PxTransform`, finite/unit validation, positive public primitive dimensions, squared distance conventions, and internal conversion to `Gu`/`Ps::aos` math types (`.ref/PhysX_4.0/physx/include/geometry/PxGeometry.h:70`, `.ref/PhysX_4.0/pxshared/include/foundation/PxTransform.h:148`, `.ref/PhysX_4.0/physx/include/geometry/PxGeometryQuery.h:180`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuGeometryQuery.cpp:162`, `.ref/PhysX_4.0/physx/source/geomutils/src/GuSweepTests.cpp:55`, `.ref/PhysX_4.0/physx/source/geomutils/src/intersection/GuIntersectionRayBox.cpp:426`).
+- Possible EngineLab audit question:
+  - When a later EngineLab audit is in scope, which layer owns each part of this contract: public query input validation, pose/world transform conversion, primitive validity, squared-distance semantics, and internal raw math conversions?
