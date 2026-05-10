@@ -14,9 +14,8 @@
 //   IntegrateVertical  -> mode-aware gravity + jump -> $v_y$, $\Delta y$
 //   Recover            -> overlap push-out from previous tick (Bullet: recoverFromPenetration)
 //   [capture x_sweep]  -> §3A baseline (post-recovery, pre-sweep)
-//   StepUp             -> lift by jump/step allowance
-//   StepMove           -> iterative sweep+slide (lateral only)
-//   StepDown           -> drop by step-up lift + falling distance, ground detect
+//   SimulateWalking    -> walking lateral move + support maintenance
+//   SimulateFalling    -> one diagonal air sweep + landing/air slide response
 //   Writeback          -> $v_{next} = (x_{final} - x_{sweep}) / dt$ (section 3A)
 //
 // VELOCITY SEMANTICS (section 3A, non-negotiable):
@@ -37,6 +36,8 @@
 // SSOT:
 //   docs/audits/kcc/06-stepmove-query-boundary-plan.md
 //   docs/audits/kcc/02-walking-falling-reactive-stepup-semantics.md
+//   docs/audits/kcc/03-time-budget-movement-loop-semantics.md
+//   docs/audits/kcc/12-falling-airmove-v1-semantics.md
 //
 // EVIDENCE:
 //   CctDebug fields are filled every tick. Callers can inspect section 3A
@@ -90,8 +91,9 @@ namespace {
         return snap;
     }
 
-    // StepMove consumes only lateral blocker normals. Support/ramp/recovery
-    // interpretation stays in the stages that own those policies.
+    // Walking lateral move consumes only lateral blocker normals.
+    // Support/ramp/recovery interpretation stays in the stages that own those
+    // policies.
     bool BuildLateralStepMoveResponseNormal(const sq::Vec3& rawNormal,
                                             const sq::Vec3& up,
                                             sq::Vec3& outNormal)
@@ -211,8 +213,10 @@ void KinematicCharacterControllerLegacy::setState(const CctState& s)
 // =========================================================================
 //
 // SSOT: docs/audits/kcc/07-lightweight-kcc-audit-work-plan.md
-// Invariant: mode shell dispatch is not a time-budget loop. It only routes the
-// existing movement phases through Walking/Falling ownership boundaries.
+// SSOT: docs/audits/kcc/03-time-budget-movement-loop-semantics.md
+// SSOT: docs/audits/kcc/12-falling-airmove-v1-semantics.md
+// Invariant: mode shell dispatch is not a time-budget loop. It routes one
+// complete tick through either Walking or Falling without same-tick continuation.
 
 void KinematicCharacterControllerLegacy::Tick(const CctInput& input, float dt)
 {
@@ -266,7 +270,8 @@ void KinematicCharacterControllerLegacy::Tick(const CctInput& input, float dt)
 
 void KinematicCharacterControllerLegacy::SimulateWalking(const CctInput& input, float dt)
 {
-    ApplyVerticalLiftForJumpOrCeiling(input);
+    // Legacy trace slot: Walking has no pre-lift StepUp phase. Jump switches to
+    // Falling in IntegrateVertical before this branch is selected.
     m_debug.afterStepUp = MakePhaseSnapshot(m_currentPosition, m_state);
     m_debug.posAfterStepUp = m_currentPosition;
 
@@ -281,46 +286,18 @@ void KinematicCharacterControllerLegacy::SimulateWalking(const CctInput& input, 
 
 void KinematicCharacterControllerLegacy::SimulateFalling(const CctInput& input, float dt)
 {
-    ApplyVerticalLiftForJumpOrCeiling(input);
+    // Legacy trace slot: F1 folds vertical jump/fall and air-control movement
+    // into MoveFallingAir rather than a separate StepUp phase.
     m_debug.afterStepUp = MakePhaseSnapshot(m_currentPosition, m_state);
     m_debug.posAfterStepUp = m_currentPosition;
 
-    MoveFallingLegacyBridge(input.walkMove);
+    MoveFallingAir(input.walkMove, dt);
     m_debug.afterStepMove = MakePhaseSnapshot(m_currentPosition, m_state);
     m_debug.posAfterStepMove = m_currentPosition;
 
-    FindFloorForLanding(dt);
+    // Legacy trace slot: Falling landing is decided inside MoveFallingAir in F1.
     m_debug.afterStepDown = MakePhaseSnapshot(m_currentPosition, m_state);
     m_debug.posAfterStepDown = m_currentPosition;
-}
-
-void KinematicCharacterControllerLegacy::ApplyVerticalLiftForJumpOrCeiling(
-    const CctInput& input)
-{
-    StepUp(input.walkMove);
-}
-
-void KinematicCharacterControllerLegacy::MoveWalkingLateral(const sq::Vec3& walkMove)
-{
-    StepMove(walkMove);
-}
-
-void KinematicCharacterControllerLegacy::UpdateGroundForWalking(float dt)
-{
-    StepDown(dt);
-}
-
-void KinematicCharacterControllerLegacy::MoveFallingLegacyBridge(
-    const sq::Vec3& walkMove)
-{
-    // Temporary compatibility bridge: Falling still borrows the legacy lateral
-    // move until a dedicated air-move response owns wall/landing semantics.
-    StepMove(walkMove);
-}
-
-void KinematicCharacterControllerLegacy::FindFloorForLanding(float dt)
-{
-    StepDown(dt);
 }
 
 // =========================================================================
@@ -362,8 +339,8 @@ void KinematicCharacterControllerLegacy::IntegrateVertical(const CctInput& input
 {
     if (IsWalking()) {
         if (!input.jump) {
-            // Invariant: Walking support validation is StepDown's job; gravity
-            // must not leak into a fake downward velocity that triggers StepUp.
+            // Invariant: Walking support validation owns floor loss; gravity
+            // must not leak into Walking as fake downward motion.
             m_state.verticalVelocity = 0.0f;
             m_state.verticalOffset = 0.0f;
             return;
@@ -383,84 +360,9 @@ void KinematicCharacterControllerLegacy::IntegrateVertical(const CctInput& input
 }
 
 // =========================================================================
-// StepUp
+// MoveWalkingLateral
 // =========================================================================
-// PRODUCES: m_currentPosition (upward jump motion), m_debug.stepUpOffset
-// CONSUMES: m_currentPosition, verticalOffset
-//
-// ALGORITHM:
-//   jumpLift = max(verticalOffset, 0)
-//   Sweep upward by jumpLift distance.
-//   On ceiling hit (normal dot up < 0): clip lift, zero upward velocity.
-//   On miss: full lift applied.
-//
-// SSOT: docs/audits/kcc/02-walking-falling-reactive-stepup-semantics.md
-// Invariant: this phase is not stair stepping. Stair step requires a future
-// reactive transaction after a lateral blocking hit.
-//
-// HAZARD: Ceiling normals face DOWNWARD. A ceiling hit has Dot(normal, up) < 0.
-//         Checking > 0 would misclassify floors as ceilings.
-// EVIDENCE: CctDebug.stepUpOffset
-
-void KinematicCharacterControllerLegacy::StepUp(const sq::Vec3& walkMove)
-{
-    (void)walkMove;
-
-    float lift = (m_state.verticalOffset > 0.0f) ? m_state.verticalOffset : 0.0f;
-
-    sq::Vec3 upDelta = m_config.up * lift;
-    float dist = sq::Len(upDelta);
-    float appliedLift = 0.0f;
-    if (dist < kMinDist) {
-        m_currentStepOffset = 0.0f;
-        m_debug.stepUpOffset = 0.0f;
-        return;
-    }
-
-    // Ceiling filter (Bullet: StepUp callback with -m_up, m_maxSlopeCosine).
-    // Only surfaces where Dot(normal, -up) >= maxSlopeCos survive, i.e.,
-    // normals facing downward (ceilings). Walls and floors are ignored,
-    // preventing wall side-faces at t~0 from blocking the upward lift.
-    sq::SweepFilter ceilFilter;
-    ceilFilter.refDir = m_config.up * -1.0f;   // -up (downward)
-    ceilFilter.minDot = m_maxSlopeCos;
-    ceilFilter.active = true;
-
-    sq::Hit hit = SweepClosest(m_currentPosition, upDelta, ceilFilter, true);
-
-    if (hit.hit) {
-        // Advance with skin backoff to avoid sitting at exact contact
-        float safeT = (std::max)(0.0f, hit.t - m_config.sweep.skin / dist);
-        m_currentPosition = m_currentPosition + upDelta * safeT;
-        appliedLift = dist * safeT;
-        m_currentStepOffset = 0.0f;
-
-        // All hits that survive the ceiling filter have Dot(n, up) < 0.
-        // Kill upward velocity on ceiling contact.
-        if (m_state.verticalVelocity > 0.0f)
-            m_state.verticalVelocity = 0.0f;
-
-        // If jumping and StepUp hit ceiling, kill the jump. Do not feed this
-        // into StepDown as a step compensation offset.
-        if (m_state.verticalOffset > 0.0f) {
-            m_state.verticalOffset   = 0.0f;
-            m_state.verticalVelocity = 0.0f;
-            m_currentStepOffset      = 0.0f;
-        }
-    } else {
-        // No obstruction: full upward jump motion. This is not stair offset.
-        m_currentPosition = m_currentPosition + upDelta;
-        appliedLift = lift;
-        m_currentStepOffset = 0.0f;
-    }
-
-    m_debug.stepUpOffset = appliedLift;
-}
-
-// =========================================================================
-// StepMove
-// =========================================================================
-// PRODUCES: m_currentPosition (advanced laterally)
+// PRODUCES: m_currentPosition (advanced laterally while Walking)
 // CONSUMES: m_currentPosition, walkMove
 //
 // ALGORITHM:
@@ -472,15 +374,16 @@ void KinematicCharacterControllerLegacy::StepUp(const sq::Vec3& walkMove)
 //
 // INVARIANT: each iteration either advances or breaks. Hard cap guarantees
 //            termination.
-//            StepMove is lateral movement policy: raw sweep normals must be
+//            Walking lateral movement policy: raw sweep normals must be
 //            converted into lateral movement-response normals before slide.
 //            Support, ramp, stair, and recovery normals belong to other stages.
 // SSOT: docs/audits/kcc/06-stepmove-query-boundary-plan.md
+// REF: docs/reference/unreal/contracts/character-movement-walking-floor-step.md
 // HAZARD: zero-length walkMove must early-out (no sweep on zero displacement).
 //         Skin backoff prevents t ~ 0 repeated-hit loops.
 // EVIDENCE: CctDebug.forwardIters, CctDebug.stuck
 
-void KinematicCharacterControllerLegacy::StepMove(const sq::Vec3& walkMove)
+void KinematicCharacterControllerLegacy::MoveWalkingLateral(const sq::Vec3& walkMove)
 {
     float walkLen = sq::Len(walkMove);
     if (walkLen < kMinDist) {
@@ -581,7 +484,7 @@ void KinematicCharacterControllerLegacy::StepMove(const sq::Vec3& walkMove)
 
         // Current SceneQuery is closest-only. When the first raw fact is an
         // explicit initial overlap, ask for the closest non-initial movement
-        // hit and classify it through the same StepMove contract.
+        // hit and classify it through the same Walking lateral-move contract.
         sq::Hit nonInitial =
             SweepClosest(from, remaining, approachFilter, true);
         StepMoveHitView promoted =
@@ -656,26 +559,173 @@ void KinematicCharacterControllerLegacy::StepMove(const sq::Vec3& walkMove)
 }
 
 // =========================================================================
-// StepDown
+// MoveFallingAir
+// =========================================================================
+// PRODUCES: m_currentPosition, optional Walking transition on valid landing
+// CONSUMES: m_currentPosition, walkMove, verticalOffset, verticalVelocity
+//
+// SSOT: docs/audits/kcc/07-lightweight-kcc-audit-work-plan.md
+// SSOT: docs/audits/kcc/03-time-budget-movement-loop-semantics.md
+// SSOT: docs/audits/kcc/12-falling-airmove-v1-semantics.md
+// REF: docs/reference/unreal/contracts/floor-find-perch-edge.md
+// Invariant: Falling movement is one diagonal air sweep. It must not call
+// Walking StepMove/ground-maintenance logic.
+// Invariant: F1 does not spend remaining frame time after landing.
+
+void KinematicCharacterControllerLegacy::MoveFallingAir(
+    const sq::Vec3& walkMove, float dt)
+{
+    (void)dt;
+
+    auto recordAirResult =
+        [this](CctFloorSemantic semantic,
+               CctFloorSource source,
+               CctFloorRejectReason rejectReason,
+               const sq::Hit& hit,
+               bool accepted) {
+        m_debug.floorSemantic = semantic;
+        m_debug.floorSource = source;
+        m_debug.floorRejectReason = rejectReason;
+        m_debug.floorAccepted = accepted;
+        m_debug.stepDownHitTOI = hit.hit ? hit.t : 1.0f;
+        m_debug.stepDownHitNormal =
+            hit.hit ? hit.normal : sq::Vec3{0, 1, 0};
+        m_debug.stepDownWalkable =
+            hit.hit ? IsWalkable(hit.normal) : false;
+        if (accepted) {
+            m_debug.stepDownHit = true;
+        }
+    };
+
+    const sq::Vec3 verticalMove = m_config.up * m_state.verticalOffset;
+    const sq::Vec3 airDelta = walkMove + verticalMove;
+    const float airLen = sq::Len(airDelta);
+    m_debug.stepDownDropDist =
+        (m_state.verticalOffset < 0.0f) ? -m_state.verticalOffset : 0.0f;
+
+    if (airLen < kMinDist) {
+        sq::Hit miss{};
+        recordAirResult(CctFloorSemantic::FallingContinue,
+                        CctFloorSource::None,
+                        CctFloorRejectReason::NoHit,
+                        miss, false);
+        return;
+    }
+
+    m_targetPosition = m_currentPosition + airDelta;
+    m_originalDirection = airDelta * (1.0f / airLen);
+
+    int iters = 0;
+    bool sawHit = false;
+    for (; iters < m_config.maxForwardIters; ++iters) {
+        sq::Vec3 remaining = m_targetPosition - m_currentPosition;
+        const float remainLen = sq::Len(remaining);
+        if (remainLen < kMinDist) {
+            break;
+        }
+
+        sq::Hit hit = SweepClosest(m_currentPosition, remaining);
+        if (hit.hit && hit.startPenetrating) {
+            sq::Hit nonInitial = SweepClosest(m_currentPosition, remaining,
+                                              sq::SweepFilter{}, true);
+            if (!nonInitial.hit) {
+                recordAirResult(CctFloorSemantic::FallingContinue,
+                                CctFloorSource::InitialOverlapSweep,
+                                CctFloorRejectReason::StartPenetrating,
+                                hit, false);
+                m_debug.stuck = true;
+                break;
+            }
+            hit = nonInitial;
+        }
+
+        if (!hit.hit) {
+            m_currentPosition = m_targetPosition;
+            break;
+        }
+        sawHit = true;
+
+        const float safeT = (std::max)(
+            0.0f, hit.t - m_config.sweep.skin / (std::max)(remainLen, kMinDist));
+        m_currentPosition = m_currentPosition + remaining * safeT;
+
+        const float moveUp = sq::Dot(remaining, m_config.up);
+        const float normalUp = sq::Dot(hit.normal, m_config.up);
+        const bool descending =
+            (moveUp < -kMinDist) || (m_state.verticalVelocity <= 0.0f);
+        const bool ascending =
+            (moveUp > kMinDist) || (m_state.verticalVelocity > 0.0f);
+        const bool walkable = IsWalkable(hit.normal);
+
+        if (descending && walkable) {
+            recordAirResult(CctFloorSemantic::FallingLand,
+                            CctFloorSource::PrimarySweep,
+                            CctFloorRejectReason::None,
+                            hit, true);
+            m_state.wasJumping = false;
+            SetModeWalking(hit.normal);
+            break;
+        }
+
+        CctFloorRejectReason reject = CctFloorRejectReason::NotWalkable;
+        if (ascending && normalUp < -kStepMoveApproachEps) {
+            m_state.verticalVelocity = 0.0f;
+            m_state.verticalOffset = 0.0f;
+            reject = CctFloorRejectReason::WrongSemanticSource;
+        }
+
+        recordAirResult(CctFloorSemantic::FallingContinue,
+                        CctFloorSource::PrimarySweep,
+                        reject, hit, false);
+
+        // Air slide uses the raw 3D contact normal. Walking lateral movement is
+        // the only phase that strips the up component before slide.
+        SlideAlongNormal(hit.normal);
+
+        sq::Vec3 newDir = m_targetPosition - m_currentPosition;
+        float newDirLenSq = sq::LenSq(newDir);
+        if (newDirLenSq < kMinDist * kMinDist) {
+            m_debug.stuck = true;
+            break;
+        }
+        const float invLen = 1.0f / std::sqrt(newDirLenSq);
+        if (sq::Dot(newDir * invLen, m_originalDirection) <= 0.0f) {
+            m_debug.stuck = true;
+            break;
+        }
+    }
+
+    m_debug.forwardIters = static_cast<uint32_t>(iters);
+    if (iters >= m_config.maxForwardIters) {
+        m_debug.stuck = true;
+    }
+    if (IsFalling() && m_state.verticalVelocity < 0.0f &&
+        !m_debug.stepDownHit) {
+        m_debug.fullDrop = !sawHit;
+    }
+}
+
+// =========================================================================
+// UpdateGroundForWalking
 // =========================================================================
 // PRODUCES: m_currentPosition, moveMode/onGround mirror, groundNormal
-// CONSUMES: m_currentPosition, current step offset, verticalVelocity
+// CONSUMES: m_currentPosition, current step offset
 //
 // ALGORITHM:
-//   Walking: probe downward for support. If support is missing, switch to
-//            Falling without teleporting down by stepHeight.
-//   Falling: sweep by actual downward velocity for this tick. If walkable hit,
-//            land; otherwise apply the vertical drop and remain Falling.
+//   Probe downward for Walking support. If support is missing, switch to
+//   Falling without teleporting down by stepHeight.
 //
 // SSOT: docs/audits/kcc/02-walking-falling-reactive-stepup-semantics.md
 // SSOT: docs/audits/kcc/09-stepdown-split-local-audit.md
 // REF: docs/reference/unreal/contracts/floor-find-perch-edge.md
-// Invariant: Phase2 has no same-tick time-budget continuation. StepDown may
-// change mode and pose, but it must not run additional lateral movement.
+// Invariant: Walking support maintenance may change mode and pose, but it must
+// not run additional lateral movement.
 // EVIDENCE: CctDebug.floorSemantic, floorSource, floorRejectReason
 
-void KinematicCharacterControllerLegacy::StepDown(float dt)
+void KinematicCharacterControllerLegacy::UpdateGroundForWalking(float dt)
 {
+    (void)dt;
+
     struct FloorDecision {
         CctFloorSemantic semantic = CctFloorSemantic::NotRun;
         CctFloorSource source = CctFloorSource::None;
@@ -762,28 +812,6 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
         return true;
     };
 
-    const bool walkingAtEntry = IsWalking();
-
-    // Ascending never consumes a downward support sweep.
-    if (m_state.verticalVelocity > 0.0f) {
-        FloorDecision skipped;
-        skipped.semantic = walkingAtEntry
-            ? CctFloorSemantic::WalkingSnapOrLatch
-            : CctFloorSemantic::FallingContinue;
-        skipped.rejectReason = CctFloorRejectReason::WrongSemanticSource;
-        recordFloorDecision(skipped);
-        SetModeFalling();
-        m_debug.stepDownSkipped = true;
-        return;
-    }
-
-    float downVelocityDt = 0.0f;
-    if (m_state.verticalVelocity < 0.0f) {
-        downVelocityDt = -m_state.verticalVelocity * dt;
-        downVelocityDt = (std::min)(downVelocityDt,
-                                    m_config.fallSpeed * dt);
-    }
-
     const float supportProbeDist =
         (std::max)(m_config.contactOffset * 2.0f, m_config.sweep.skin);
 
@@ -795,8 +823,9 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
     groundFilter.minDot = m_maxSlopeCos;
     groundFilter.active = true;
 
-    // StepDown fallback policy: when rejectInitialOverlap=false, keep evaluating t>0
-    // candidates but still filter t==0 normals by walkable predicate.
+    // Walking support fallback policy: when rejectInitialOverlap=false, keep
+    // evaluating t>0 candidates but still filter t==0 normals by walkable
+    // predicate.
     sq::SweepFilter groundFilterInit = groundFilter;
     groundFilterInit.filterInitialOverlap = true;
 
@@ -915,50 +944,11 @@ void KinematicCharacterControllerLegacy::StepDown(float dt)
         return makeMissDecision(CctFloorSemantic::WalkingSnapOrLatch, noHit);
     };
 
-    auto findFloorForLanding = [&]() {
-        const float dropDist = m_currentStepOffset + downVelocityDt;
-        if (dropDist < kMinDist) {
-            return makeSkipDecision(CctFloorSemantic::FallingContinue);
-        }
-
-        sq::Vec3 downDelta = m_config.up * (-dropDist);
-        float dist = sq::Len(downDelta);
-        m_debug.stepDownDropDist = dropDist;
-
-        sq::Hit landingHit =
-            SweepClosest(m_currentPosition, downDelta, groundFilter, true);
-        FloorDecision landing = evaluateSweepFloor(
-            CctFloorSemantic::FallingLand,
-            CctFloorSource::PrimarySweep,
-            landingHit, downDelta, dist);
-        if (landing.accepted) {
-            return landing;
-        }
-
-        // V1 landing accepts only a primary downward sweep. Initial overlaps,
-        // overlap support, and walking latch are not valid landing proof yet.
-        return makeMissDecision(CctFloorSemantic::FallingContinue, landing);
-    };
-
-    if (walkingAtEntry) {
-        FloorDecision ground = findGroundWalking();
-        if (applyAcceptedFloor(ground)) {
-            return;
-        }
-        SetModeFalling();
+    FloorDecision ground = findGroundWalking();
+    if (applyAcceptedFloor(ground)) {
         return;
     }
-
-    FloorDecision landing = findFloorForLanding();
-    if (applyAcceptedFloor(landing)) {
-        return;
-    }
-
-    m_currentPosition = m_currentPosition + landing.delta;
     SetModeFalling();
-    if (landing.dist >= kMinDist) {
-        m_debug.fullDrop = true;
-    }
 }
 
 // =========================================================================
@@ -1036,8 +1026,9 @@ bool KinematicCharacterControllerLegacy::Recover()
 // CONSUMES: current feet position (post-move/pre-stepdown baseline)
 //
 // Notes:
-//   - Uses overlap contacts to detect existing penetration when StepDown misses
-//     any forward TOI. This preserves stable ground for walkable overlap cases.
+//   - Uses overlap contacts to detect existing walkable support when the
+//     downward Walking support sweep misses. This preserves stable ground for
+//     walkable overlap cases.
 //   - Requires depth > minDepth (defaults to maxPenDepth) to avoid jitter
 //     from tiny numeric overlap.
 //   - Returns deepest walkable overlap normal (deterministic by Overlap sort order).
@@ -1080,9 +1071,9 @@ bool KinematicCharacterControllerLegacy::HasWalkableSupport(float& outDepth, sq:
 // EQUATION (section 3A, non-negotiable):
 //   $v_{next} = \frac{x_{finalPre} - x_{sweep}}{dt}$
 //
-// $x_{finalPre}$ is the position after sweep phases (StepUp + StepMove +
-// StepDown) but BEFORE post-sweep cleanup. $x_{sweep}$ is the post-recovery
-// baseline. Recovery + post-sweep cleanup NEVER feed into velocity.
+// $x_{finalPre}$ is the position after mode-specific movement but BEFORE
+// post-sweep cleanup. $x_{sweep}$ is the post-recovery baseline. Recovery +
+// post-sweep cleanup NEVER feed into velocity.
 //
 // INVARIANT: $|dx_{corr}|$ should be bounded by skin + maxPenDepth.
 //            $v_{next} \cdot up \approx 0$ when grounded and idle.

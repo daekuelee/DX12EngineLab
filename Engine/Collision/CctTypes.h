@@ -156,13 +156,13 @@ struct CctDebug {
     CctPhaseSnapshot afterWriteback{};
 
     // Phase counters
-    float    stepUpOffset    = 0.0f;   // upward phase displacement; not stair lift in Phase2
+    float    stepUpOffset    = 0.0f;   // legacy trace slot; not stair lift
     uint32_t forwardIters    = 0;      // StepForwardAndStrafe iterations used
     bool     stuck           = false;  // anti-oscillation triggered or max iters
     uint32_t zeroHitPushes   = 0;      // StepMove: t~0 contact-response count
-    bool     stepDownHit     = false;  // accepted floor support/landing
-    bool     stepDownSkipped = false;  // support maintenance skipped
-    bool     fullDrop        = false;  // StepDown: no ground within sweep
+    bool     stepDownHit     = false;  // accepted support/landing floor fact
+    bool     stepDownSkipped = false;  // walking support maintenance skipped
+    bool     fullDrop        = false;  // falling air move had no landing hit
     uint32_t recoverIters    = 0;      // RecoverFromPenetration iterations used
     float    recoverPushMag  = 0.0f;  // total push-out magnitude applied
     float    recoverDeepestDepth = 0.0f;  // depth of deepest contact in last Recover iter
@@ -202,7 +202,8 @@ struct CctDebug {
     uint32_t stepMoveNeedsRecoveryCount = 0;
     uint32_t stepMoveUnsupportedCount = 0;
 
-    // StepDown detail
+    // Floor / landing detail. Names preserve trace compatibility with the
+    // old StepDown slot; F1 records FallingAirMove landing facts here too.
     float    stepDownDropDist    = 0.0f;
     float    stepDownHitTOI      = 1.0f;
     sq::Vec3 stepDownHitNormal{};

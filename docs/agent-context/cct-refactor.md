@@ -1,6 +1,6 @@
 # CCT Refactor Context
 
-Updated: 2026-05-09
+Updated: 2026-05-10
 
 ## Purpose
 
@@ -13,13 +13,16 @@ The intended direction is:
 
 ## Current Active Code
 
-Phase2 mode semantics are now the active direction for KCC work:
+Phase2/F1 mode semantics are now the active direction for KCC work:
 
 - `CctMoveMode` owns `Walking` / `Falling` policy.
 - `onGround` is a compatibility mirror for `WorldState`, HUD, and older call sites.
 - `Walking` does not accumulate gravity into `verticalVelocity`.
-- Current `StepUp` must not perform speculative stair pre-lift from lateral input.
-- Current `StepDown` is split semantically into Walking support validation and Falling landing.
+- `SimulateWalking` owns walking lateral movement and walking support validation.
+- `SimulateFalling` owns a single diagonal air sweep over `walkMove + verticalOffset`.
+- `StepUp` speculative stair pre-lift is removed from the active Falling path.
+- Falling no longer borrows Walking lateral `StepMove` or Walking `StepDown`.
+- Current F1 does not implement same-tick `remainingTime` continuation.
 
 Current public KCC and world headers are bridge headers:
 
@@ -35,9 +38,10 @@ Current fixed-step integration calls KCC through `WorldState`:
 
 Current KCC phase order:
 
-- `Engine/Collision/KinematicCharacterControllerLegacy.cpp:130-179`
-  runs `PreStep`, `IntegrateVertical`, pre-sweep `Recover`, `StepUp`,
-  `StepMove`, `StepDown`, post-sweep `Recover`, then `Writeback`.
+- `Engine/Collision/KinematicCharacterControllerLegacy.cpp`
+  runs `PreStep`, `IntegrateVertical`, pre-sweep `Recover`, then dispatches to
+  `SimulateWalking` or `SimulateFalling`, then post-sweep `Recover` and
+  `Writeback`.
 
 Current velocity invariant:
 
@@ -51,12 +55,13 @@ The current KCC source contains legacy phase/filter language from mixed referenc
 
 - `Engine/Collision/KinematicCharacterControllerLegacy.h:9-19`
   documents the current phase order.
-- `Engine/Collision/KinematicCharacterControllerLegacy.cpp:244-316`
-  describes `StepUp` ceiling filtering.
-- `Engine/Collision/KinematicCharacterControllerLegacy.cpp:361-367`
-  describes `StepMove` approach filtering.
-- `Engine/Collision/KinematicCharacterControllerLegacy.cpp:451-467`
-  describes `StepDown` walkable ground filtering.
+- `Engine/Collision/KinematicCharacterControllerLegacy.cpp`
+  still preserves legacy trace slot names such as `afterStepUp`,
+  `afterStepMove`, and `afterStepDown`.
+- Walking lateral movement still uses the existing `StepMoveHitView` /
+  `QueryStepMoveHit` boundary.
+- Walking support maintenance still uses `stepDown*` trace fields for
+  compatibility.
 
 Target decision:
 
@@ -95,10 +100,10 @@ Risk:
 - Grounded ticks apply gravity before step phases, so `verticalVelocity < 0` can be common.
   StepUp legality must become an explicit movement policy, not an accidental consequence of sweep filtering.
 
-Phase2 expectation:
+Current expectation:
 
 - `Walking` keeps `verticalVelocity == 0`.
-- `StepUp` only applies positive `verticalOffset` from jump/upward motion.
+- `Falling` applies positive jump/upward motion inside `MoveFallingAir`.
 - Auto stair climb is intentionally incomplete until a future reactive transaction.
 
 ### Wall Normal Vertical Noise
@@ -168,6 +173,21 @@ Phase2 success criteria:
 - `Walking` frames should show `verticalVelocity == 0` after vertical integration.
 - If upward pop remains but culprit is `Recover`, `PostRecover`, `StepMove`, or
   `StepDown`, the next lane is not more `StepUp` gating.
+
+## F1 Current Lane
+
+F1 is tracked in:
+
+- `docs/audits/kcc/12-falling-airmove-v1-semantics.md`
+
+Active F1 invariant:
+
+```text
+Falling uses one diagonal air sweep and does not call Walking StepMove/StepDown.
+```
+
+Do not claim this solves floor edge/perch, MTD-like recovery, or Unreal-style
+same-tick remaining time.
 
 ## Phase3 Next Lane
 

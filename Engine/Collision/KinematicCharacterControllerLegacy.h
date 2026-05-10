@@ -1,27 +1,28 @@
 #pragma once
 // =========================================================================
 // SSOT: Engine/Collision/KinematicCharacterController.h
+// SSOT: docs/audits/kcc/12-falling-airmove-v1-semantics.md
 //
 // Kinematic capsule controller with phase-decomposed tick pipeline.
 // Architecture reference: Bullet btKinematicCharacterController (zlib license).
 // Implementation: original, uses our CollisionWorld + SceneQuery backend.
 //
 // PHASE ORDERING:
-//   PreStep → IntegrateVertical → Recover → StepUp → StepMove → StepDown → Writeback
+//   PreStep → IntegrateVertical → Recover → SimulateWalking/SimulateFalling
+//   → Writeback
 //
 // WHY EACH PHASE EXISTS:
 //   PreStep            — snapshot x_old for velocity writeback; save previous-tick flags
 //   IntegrateVertical  — mode-aware gravity/jump; Walking keeps verticalVelocity at 0
 //   Recover            — overlap push-out from previous tick (Bullet: recoverFromPenetration)
-//   StepUp             — lift capsule by jump component / step allowance
-//   StepMove           — lateral sweep+slide; the main movement phase
-//   StepDown           — drop, detect ground, snap
+//   SimulateWalking    — walking lateral movement + ground support maintenance
+//   SimulateFalling    — one diagonal air sweep + landing/air slide response
 //   Writeback          — compute v_next from intent displacement (§3A)
 //
 // VELOCITY SEMANTICS (§3A, non-negotiable):
 //   x_old   = feet position at tick start
 //   x_sweep = feet position after Recover (post-recovery baseline)
-//   x_final = feet position after StepDown
+//   x_final = feet position after mode-specific movement
 //   v_next  = (x_final - x_sweep) / dt   — recovery NEVER contributes to velocity
 //
 // MAPPING TO REFERENCE:
@@ -29,9 +30,8 @@
 //   |------------------|---------------------------------|----------------|
 //   | PreStep          | preStep                         | Snapshot state, reset working vars |
 //   | IntegrateVertical| Gravity/jump integration        | Produce verticalVelocity + offset |
-//   | StepUp           | Step-up phase                   | Lift capsule, sweep for ceiling |
-//   | StepMove         | Forward-and-strafe phase        | Iterative sweep + slide on walls |
-//   | StepDown         | Step-down phase                 | Drop, detect ground, snap |
+//   | SimulateWalking  | Walking movement policy         | Lateral move + support validation |
+//   | SimulateFalling  | Falling movement policy         | Air sweep + landing / air slide |
 //   | Recover          | Penetration recovery loop       | Overlap MTD push-out, pose-only |
 //   | Writeback        | (our addition, not in reference) | §3A velocity from intent only |
 // =========================================================================
@@ -68,14 +68,9 @@ private:
     void IntegrateVertical(const CctInput& input, float dt);
     void SimulateWalking(const CctInput& input, float dt);
     void SimulateFalling(const CctInput& input, float dt);
-    void ApplyVerticalLiftForJumpOrCeiling(const CctInput& input);
     void MoveWalkingLateral(const sq::Vec3& walkMove);
+    void MoveFallingAir(const sq::Vec3& walkMove, float dt);
     void UpdateGroundForWalking(float dt);
-    void MoveFallingLegacyBridge(const sq::Vec3& walkMove);
-    void FindFloorForLanding(float dt);
-    void StepUp(const sq::Vec3& walkMove);
-    void StepMove(const sq::Vec3& walkMove);
-    void StepDown(float dt);
     bool Recover();
     void Writeback(float dt);
 
