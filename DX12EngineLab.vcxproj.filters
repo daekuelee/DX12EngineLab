@@ -147,7 +147,13 @@
     <ClInclude Include="Engine\Collision\SceneQuery\SqBVH.h">
       <Filter>Engine\Collision\SceneQuery</Filter>
     </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqBVH4.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
     <ClInclude Include="Engine\Collision\SceneQuery\SqBroadphase.h">
+      <Filter>Engine\Collision\SceneQuery</Filter>
+    </ClInclude>
+    <ClInclude Include="Engine\Collision\SceneQuery\SqBackendHarness.h">
       <Filter>Engine\Collision\SceneQuery</Filter>
     </ClInclude>
     <ClInclude Include="Engine\Collision\SceneQuery\SqQuery.h">
@@ -172,6 +178,9 @@
     </ClCompile>
     <ClCompile Include="Engine\Collision\CapsuleMovement.cpp">
       <Filter>Engine\Collision</Filter>
+    </ClCompile>
+    <ClCompile Include="Engine\Collision\SceneQuery\SqBackendHarness.cpp">
+      <Filter>Engine\Collision\SceneQuery</Filter>
     </ClCompile>
     <ClCompile Include="Engine\Collision\CollisionWorld.cpp">
       <Filter>Engine\Collision</Filter>

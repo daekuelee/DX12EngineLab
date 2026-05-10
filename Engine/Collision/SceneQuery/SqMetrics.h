@@ -20,7 +20,8 @@ enum class QueryKind : uint8_t {
 
 enum class QueryBackend : uint8_t {
     BinaryBVH = 0,
-    BVH4
+    BVH4,
+    LinearFallback
 };
 
 struct QueryMetrics {

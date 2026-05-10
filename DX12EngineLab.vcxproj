@@ -153,7 +153,9 @@
     <ClInclude Include="Engine\Collision\SceneQuery\SqPrimitiveTests.h" />
     <ClInclude Include="Engine\Collision\SceneQuery\SqNarrowphase.h" />
     <ClInclude Include="Engine\Collision\SceneQuery\SqBVH.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqBVH4.h" />
     <ClInclude Include="Engine\Collision\SceneQuery\SqBroadphase.h" />
+    <ClInclude Include="Engine\Collision\SceneQuery\SqBackendHarness.h" />
     <ClInclude Include="Engine\Collision\SceneQuery\SqQuery.h" />
     <ClInclude Include="Engine\InputSampler.h" />
     <ClInclude Include="framework.h" />
@@ -195,6 +197,7 @@
     <ClCompile Include="Engine\Math\Vec3_compilecheck.cpp" />
     <ClCompile Include="Engine\Math\Vec3SimdSelfTest.cpp" />
     <ClCompile Include="Engine\Collision\CapsuleMovement.cpp" />
+    <ClCompile Include="Engine\Collision\SceneQuery\SqBackendHarness.cpp" />
     <ClCompile Include="Engine\Collision\CollisionWorld.cpp" />
     <ClCompile Include="Engine\Collision\KinematicCharacterController.cpp" />
     <ClCompile Include="Engine\WorldTypes_compilecheck.cpp" />
