@@ -43,9 +43,8 @@ flowchart LR
 | Collision / KCC depth | capsule KCC, sweep/slide, initial-overlap recovery, walking/falling split | `Engine/Collision/KinematicCharacterControllerLegacy.*`, `Engine/Collision/CctTypes.h` |
 | SceneQuery / BVH direction | closest sweep, overlap contacts, deterministic metrics, BVH4 packet child-test prototype | `Engine/Collision/SceneQuery/`, `docs/audits/scenequery/` |
 
-This is not presented as a production engine. The point is to show engine-system
-ownership: explicit GPU lifetime on the rendering side, and evidence-driven
-collision contracts on the runtime side.
+The point is to show engine-system ownership: explicit GPU lifetime on the
+rendering side, and evidence-driven collision contracts on the runtime side.
 
 ## Engineering Problems And Solutions
 
@@ -126,10 +125,6 @@ Important KCC contracts currently documented in source:
 - larger KCC work is intentionally deferred until a concrete repro returns:
   `docs/audits/kcc/13-post-initial-mtd-remaining-work.md`
 
-The current collision claim is intentionally scoped: this is an experimental
-capsule KCC / SceneQuery subsystem used to debug wall-climb/upward-pop behavior
-and clarify movement contracts. It is not presented as production physics.
-
 ### 4. Sweep, initial overlap, and MTD-like recovery
 
 A sweep asks: "if this capsule moves along this direction, what is the earliest
@@ -137,10 +132,9 @@ time of impact?" A useful mental model is to reason about a moving point against
 geometry inflated by the capsule shape, often described through Minkowski-sum or
 CSO vocabulary in continuous collision detection material.
 
-That mental model is used here to explain the contract, not to claim that every
-local primitive path is a generic GJK implementation. The local code is a
-SceneQuery system over explicit primitive tests, BVH traversal, and overlap
-contacts.
+The local code is a SceneQuery system over explicit primitive tests, BVH
+traversal, and overlap contacts; the Minkowski/CSO vocabulary describes the
+contract, not the implementation.
 
 ```mermaid
 flowchart LR
@@ -181,8 +175,7 @@ movement policy, not low-level geometry:
 
 Conceptual collision-detection background is treated separately from code
 evidence. Erin Catto's Box2D publications are useful for TOI / shape-cast /
-Minkowski-sum vocabulary and ghost-collision intuition, but they are not used as
-proof that this 3D capsule KCC has Box2D behavior.
+Minkowski-sum vocabulary and ghost-collision intuition.
 
 ### 5. Reference-backed collision engineering
 
@@ -238,7 +231,7 @@ What has been implemented or instrumented:
 
 The BVH4 work is framed as a measured prototype boundary: scalar and packet
 child-test paths share collector semantics, and packet-lane metrics are exposed
-for verification. It is not a claim of PhysX BV4 parity or proven speedup.
+for verification.
 
 ## Demo Evidence
 
@@ -249,10 +242,6 @@ Current curated media:
   visualization.
 - `assets/media/demo-main.png`: 1280x720 still fallback for portfolio/PDF links.
 - `assets/media/demo-full.mp4`: 1280x720, 16:9, about 63 seconds.
-
-Optional extra media before sharing the final GitHub link:
-
-- `assets/media/hud-uploadarena.png`: close-up HUD proof of UploadArena metrics.
 
 ## Controls
 
@@ -285,9 +274,7 @@ msbuild DX12EngineLab.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
 `.github/workflows/build.yml` runs Debug and Release x64 builds on
-`windows-latest` for push and pull request events. Do not treat this README as a
-fresh local build result unless the commands above or CI were actually run for
-the current commit.
+`windows-latest` for push and pull request events.
 
 ### Run
 
@@ -333,22 +320,12 @@ Open `DX12EngineLab.sln`, select `x64 / Debug`, and run with F5.
   PhysX BV4 parity or proven runtime speedup.
 - Floor/perch/edge semantics are documented as future KCC work, not complete
   behavior.
-- Raw reference forks, prompt logs, GPT logs, private portfolio drafts, and PDFs
-  should not be exposed as the public GitHub surface.
 
 ## Roadmap
 
-Short term:
-
-- Add one HUD close-up if UploadArena / frame metrics need stronger visual proof.
-- Keep README claims tied to source paths and current demo artifacts.
-- Keep collision claims honest: experimental KCC, not production physics.
-
-Engine work:
-
 - Expand deterministic SceneQuery benchmark cases before making performance
   claims.
-- Resume KCC work only from concrete repro traces.
-- Continue floor/perch/landing refinement as a separate movement-policy lane.
-- Treat BVH4 flattening, quantization, and deeper SIMD work as separate sessions,
-  not one mixed refactor.
+- Resume KCC work from concrete repro traces; continue floor/perch/landing
+  refinement as a separate movement-policy lane.
+- BVH4 flattening, node quantization, and deeper SIMD traversal work.
+- HUD close-up captures for UploadArena / frame metrics.
