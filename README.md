@@ -94,21 +94,28 @@ Evidence: `Renderer/DX12/ShaderLibrary.h`, `shaders/common.hlsli`.
 
 ### 3. Collision: rebuilding a solver on pinned semantics
 
-**Lineage.** The first controller was a hand-rolled AABB axis-separated push-out
-(`docs/contracts/day3/`), patched with MTV resolution, then replaced by a capsule
-sweep/slide controller in the Quake lineage — `MAX_BUMPS = 4`, `OVERCLIP = 1.001`,
-`ClipVelocity`, researched from Quake III `bg_slidemove.c` and `SV_FlyMove`
-(`docs/notes/sweep_capsule.md`). It worked — until seam contacts and wall-climb
-upward pops exposed the real disease: one `Hit.normal` was being consumed as four
+**Lineage.** Three generations: a hand-rolled AABB axis-separated push-out
+(`docs/contracts/day3/`); a Quake-lineage capsule sweep/slide (`MAX_BUMPS = 4`,
+`OVERCLIP = 1.001`, `ClipVelocity`, researched from Quake III `bg_slidemove.c` —
+`docs/notes/sweep_capsule.md`); then the current KCC, built on **Bullet's
+`btKinematicCharacterController` architecture** (zlib) — its
+recover → stepUp → stepMove → stepDown pipeline and state variables
+(`m_verticalVelocity`, `m_currentStepOffset`) taken as the starting skeleton
+(`Engine/Collision/KinematicCharacterControllerLegacy.h`). The Bullet-shaped
+controller collapsed exactly where Bullet's CCT is known to be weak: seam contacts
+and wall-climb upward pops, caused by one `Hit.normal` being consumed as four
 different things — raw geometry, movement response, floor support, and recovery
 (`docs/audits/kcc/01-wall-climb-upward-pop-fixability.md`).
 
-**Diagnosis before patching.** Instead of patching the symptom, the solver was
-frozen and audited: 12 written audits in three days (`docs/audits/kcc/`). The
-diagnosis (audit 02) was that the bug was not numeric — movement semantics were
-mixed. Gravity accumulation doubled as a stair trigger, `StepDown` was doing eight
-jobs with one distance value, and `onGround` served as both execution policy and
-result state.
+**Two failed responses, then diagnosis.** The first response was a patch grind — a
+dozen fix/stabilize/harden commits in four days. The second was transplanting an
+Unreal-like pipeline wholesale; it was reverted within a day in favor of a staged
+migration with strict boundaries, and the solver was quarantined behind `*Legacy`
+bridge headers. The return, months later, began with documents instead of code:
+12 audits in three days (`docs/audits/kcc/`). The diagnosis (audit 02): the bug
+was not numeric — movement semantics were mixed. Gravity accumulation doubled as a
+stair trigger, `StepDown` was doing eight jobs with one distance value, and
+`onGround` served as both execution policy and result state.
 
 **Contract mining, two engines.** PhysX 4.0 geometry/query/CCT source was read and
 distilled into 13 contract cards with file:line anchors, each marked
