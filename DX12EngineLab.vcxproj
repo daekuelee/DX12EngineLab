@@ -142,7 +142,6 @@
     <ClInclude Include="Engine\Math\Vec3SimdSelfTest.h" />
     <ClInclude Include="Engine\Collision\CollisionTypes.h" />
     <ClInclude Include="Engine\Collision\CollisionSceneView.h" />
-    <ClInclude Include="Engine\Collision\CapsuleMovement.h" />
     <ClInclude Include="Engine\Collision\CollisionWorld.h" />
     <ClInclude Include="Engine\Collision\CctTypes.h" />
     <ClInclude Include="Engine\Collision\KinematicCharacterController.h" />
@@ -196,7 +195,6 @@
     <ClCompile Include="Engine\Math\Transform_compilecheck.cpp" />
     <ClCompile Include="Engine\Math\Vec3_compilecheck.cpp" />
     <ClCompile Include="Engine\Math\Vec3SimdSelfTest.cpp" />
-    <ClCompile Include="Engine\Collision\CapsuleMovement.cpp" />
     <ClCompile Include="Engine\Collision\SceneQuery\SqBackendHarness.cpp" />
     <ClCompile Include="Engine\Collision\CollisionWorld.cpp" />
     <ClCompile Include="Engine\Collision\KinematicCharacterController.cpp" />

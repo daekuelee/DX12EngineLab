@@ -1044,10 +1044,9 @@ namespace Engine
         return candidates;
     }
 
-    // PR2.8: QuerySupport, ResolveAxis, ResolveOverlaps_Capsule, SweepXZ_Capsule,
-    // SweepY_Capsule, ResolveXZ_Capsule_Cleanup, ScanMaxXZPenetration, IsWallLike,
-    // ProbeY, ProbeXZ, TryStepUp_Capsule, BuildPawnAABB — all moved to
-    // Engine/Collision/CapsuleMovement.cpp
+    // PR2.8 movement helpers (QuerySupport, capsule sweeps, TryStepUp_Capsule, ...)
+    // lived in Engine/Collision/CapsuleMovement.cpp — the gen-1 solver, retired after
+    // the KCC semantic rebuild. Preserved at tag pre-kcc-migration.
 
     void WorldState::TickFrame(float frameDt)
     {
