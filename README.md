@@ -41,11 +41,10 @@ flowchart LR
 | Real-time demo path | 10,000-cube instancing / naive draw toggle, ImGui HUD, runtime controls | `Renderer/DX12/GeometryPass.h`, `Renderer/DX12/ToggleSystem.h`, `Renderer/DX12/ImGuiLayer.*` |
 | Runtime systems | fixed-step simulation, action state, camera/runtime HUD data | `Engine/App.cpp`, `Engine/WorldState.*`, `Renderer/DX12/Dx12Context.h` |
 | Collision / KCC depth | capsule KCC, sweep/slide, initial-overlap recovery, walking/falling split | `Engine/Collision/KinematicCharacterControllerLegacy.*`, `Engine/Collision/CctTypes.h` |
-| SceneQuery / BVH direction | closest sweep, overlap contacts, deterministic metrics, BVH4 packet child-test prototype | `Engine/Collision/SceneQuery/`, `docs/audits/scenequery/` |
+| SceneQuery / BVH | closest sweep, overlap contacts, 4-backend correctness cross-check, BVH4 scalar/SIMD prototype | `Engine/Collision/SceneQuery/`, `docs/audits/scenequery/` |
 
-This is not presented as a production engine. The point is to show engine-system
-ownership: explicit GPU lifetime on the rendering side, and evidence-driven
-collision contracts on the runtime side.
+The point is to show engine-system ownership: explicit GPU lifetime on the
+rendering side, and evidence-driven collision contracts on the runtime side.
 
 ## Engineering Problems And Solutions
 
@@ -93,12 +92,43 @@ layout does not depend on implicit transpose assumptions.
 
 Evidence: `Renderer/DX12/ShaderLibrary.h`, `shaders/common.hlsli`.
 
-### 3. KCC bug work as engine-system debugging
+### 3. Collision: rebuilding a solver on pinned semantics
 
-The collision work started from visible gameplay symptoms: seam/corner contacts,
-wall-climb-like upward pops, jump/landing instability, and near-zero sweep hits.
-The valuable part is not that the KCC is "done"; it is that the project now
-separates movement policy, raw query facts, and recovery semantics more clearly.
+**Lineage.** The first controller was a hand-rolled AABB axis-separated push-out
+(`docs/contracts/day3/`), patched with MTV resolution, then replaced by a capsule
+sweep/slide controller in the Quake lineage — `MAX_BUMPS = 4`, `OVERCLIP = 1.001`,
+`ClipVelocity`, researched from Quake III `bg_slidemove.c` and `SV_FlyMove`
+(`docs/notes/sweep_capsule.md`). It worked — until seam contacts and wall-climb
+upward pops exposed the real disease: one `Hit.normal` was being consumed as four
+different things — raw geometry, movement response, floor support, and recovery
+(`docs/audits/kcc/01-wall-climb-upward-pop-fixability.md`).
+
+**Diagnosis before patching.** Instead of patching the symptom, the solver was
+frozen and audited: 12 written audits in three days (`docs/audits/kcc/`). The
+diagnosis (audit 02) was that the bug was not numeric — movement semantics were
+mixed. Gravity accumulation doubled as a stair trigger, `StepDown` was doing eight
+jobs with one distance value, and `onGround` served as both execution policy and
+result state.
+
+**Contract mining, two engines.** PhysX 4.0 geometry/query/CCT source was read and
+distilled into 13 contract cards with file:line anchors, each marked
+raw-source-verified (`docs/reference/physx/contracts/`); Unreal CharacterMovement
+source into 4 movement-policy cards (`docs/reference/unreal/contracts/`). The split
+is the point: PhysX answers geometry-contract questions (what a sweep distance
+means, what an initial overlap reports), Unreal answers policy questions (what
+counts as a floor, when landing is valid). One mirror made the local bug obvious:
+PhysX refuses to report a geometric normal for an initial overlap — it returns
+`distance = 0` with the synthetic `normal = -unitDir` — while the local solver had
+been consuming exactly such raw normals as movement response
+(`docs/reference/physx/contracts/sweep-toi-hit-normal.md`). The same card/audit
+pipeline is also how AI tooling was kept inside architectural boundaries during
+this work (`AGENTS.md`).
+
+**The rebuild.** The solver was re-solved stage by stage with each semantic pinned:
+`CctMoveMode { Walking, Falling }` as the single policy authority, typed floor
+semantics (`CctFloorSource` / `CctFloorSemantic`), a per-stage `SweepFilter`,
+pose-only recovery that never feeds velocity, and velocity written back from sweep
+displacement only.
 
 ```mermaid
 flowchart TD
@@ -114,33 +144,34 @@ flowchart TD
     Fall --> Write
 ```
 
-Important KCC contracts currently documented in source:
+The hard-won artifact of the rebuild — not all normals mean the same thing:
 
-- recovery corrections are pose-only and must not feed into velocity:
-  `Engine/Collision/KinematicCharacterControllerLegacy.cpp`
-- `InitialOverlapRecover` is event-scoped and only handles `startPenetrating`
-  sweep cases, not ordinary floor/support cleanup:
-  `Engine/Collision/KinematicCharacterControllerLegacy.cpp`
-- falling landing is not identical to walking support maintenance:
-  `docs/reference/unreal/contracts/floor-find-perch-edge.md`
-- larger KCC work is intentionally deferred until a concrete repro returns:
-  `docs/audits/kcc/13-post-initial-mtd-remaining-work.md`
+| Normal / result kind | Meaning | Who should consume it |
+|---|---|---|
+| sweep TOI normal | blocking surface reached during motion | movement stage, slide, landing check |
+| initial-overlap result | movement started inside inflated contact band | recovery path, not slide/landing |
+| overlap contact normal | current penetration/support fact | recovery or floor support, not ordinary sweep TOI |
+| walkable floor normal | candidate ground slope | floor/landing policy, not raw SceneQuery |
 
-The current collision claim is intentionally scoped: this is an experimental
-capsule KCC / SceneQuery subsystem used to debug wall-climb/upward-pop behavior
-and clarify movement contracts. It is not presented as production physics.
+The honest coda: the old speculative StepUp was deleted, and its planned reactive
+replacement was deliberately never built — pinning semantics alone eliminated the
+visible bug set. Remaining work (floor quality, perch/edge, step-up) is gated on
+concrete repro traces (`docs/audits/kcc/13-post-initial-mtd-remaining-work.md`).
+The retired first-generation solver is preserved at tag `pre-kcc-migration`.
 
-### 4. Sweep, initial overlap, and MTD-like recovery
-
-A sweep asks: "if this capsule moves along this direction, what is the earliest
-time of impact?" A useful mental model is to reason about a moving point against
-geometry inflated by the capsule shape, often described through Minkowski-sum or
-CSO vocabulary in continuous collision detection material.
-
-That mental model is used here to explain the contract, not to claim that every
-local primitive path is a generic GJK implementation. The local code is a
-SceneQuery system over explicit primitive tests, BVH traversal, and overlap
-contacts.
+**The math, made explicit.** A capsule is a segment ⊕ sphere (a Minkowski sum).
+The capsule-vs-triangle TOI query therefore reduces to sweeping a *sphere* against
+the triangle extruded along the capsule's half-segment — a CSO construction,
+implemented in `BuildExtrudedFaces7` (one end cap + three edge quads = 7 prism
+faces) and `SweepCapsuleTri_PhysXLike_TOI01`
+(`Engine/Collision/SceneQuery/SqNarrowphaseLegacy.h`), following PhysX's
+extrusion approach. Degenerate capsules fall back to sphere sweeps; a colinear
+shortcut handles axis-parallel motion. Underneath sit explicit distance kernels
+(`DistSegmentTriangleSq`, `DistSegmentSegmentSq` — `SqDistance.h`), a TOI
+tie-break cascade, and packed feature ids. The book layer: Christer Ericson,
+*Real-Time Collision Detection* (read in full) for primitive tests and closest
+points; Erin Catto's TOI/shape-cast material; van den Bergen for the convex-query
+vocabulary (a generic GJK backend is a future direction, not current code).
 
 ```mermaid
 flowchart LR
@@ -152,68 +183,18 @@ flowchart LR
     TOI --> Policy["movement policy\nWalking / Falling decides meaning"]
 ```
 
-The hard lesson from the KCC work is that not all normals mean the same thing:
+### 4. SceneQuery: a correctness harness, not a benchmark
 
-| Normal / result kind | Meaning | Who should consume it |
-|---|---|---|
-| sweep TOI normal | blocking surface reached during motion | movement stage, slide, landing check |
-| initial-overlap result | movement started inside inflated contact band | recovery path, not slide/landing |
-| overlap contact normal | current penetration/support fact | recovery or floor support, not ordinary sweep TOI |
-| walkable floor normal | candidate ground slope | floor/landing policy, not raw SceneQuery |
-
-PhysX reference cards in `docs/reference/physx/contracts/` are used to keep the
-low-level geometry contracts honest:
-
-- `sweep-toi-hit-normal.md`: split ordinary sweep distance from initial-overlap
-  and MTD reporting semantics.
-- `initial-overlap-mtd.md`: keep public penetration depth and sweep MTD
-  conventions separate.
-- `scenequery-pipeline.md` and `query-filtering.md`: keep raw query mechanics
-  separate from higher-level movement policy.
-
-Unreal reference cards in `docs/reference/unreal/contracts/` are used for
-movement policy, not low-level geometry:
-
-- `floor-find-perch-edge.md`: floor is more than `normal.y`; it carries distance,
-  walkability, edge/perch, source, and valid-landing semantics.
-- `character-movement-walking-floor-step.md`: walking, floor maintenance, step,
-  and landing are policy layers above raw collision facts.
-
-Conceptual collision-detection background is treated separately from code
-evidence. Erin Catto's Box2D publications are useful for TOI / shape-cast /
-Minkowski-sum vocabulary and ghost-collision intuition, but they are not used as
-proof that this 3D capsule KCC has Box2D behavior.
-
-### 5. Reference-backed collision engineering
-
-The collision work was guided by three reference layers:
-
-1. production engine source for behavior contracts,
-2. collision-detection books and papers for geometric vocabulary, and
-3. local EngineLab audits for what is actually implemented.
-
-The goal is not to copy a physics engine. The useful output is a smaller set of
-EngineLab contracts: raw query facts, movement policy, deterministic hit
-reduction, and pose-only recovery.
-
-| Reference area | What I used it for | Local translation |
-|---|---|---|
-| PhysX `GeometryQuery` / CCT source | sweep result semantics, initial overlap, MTD, contact offset | `startPenetrating` is routed to `InitialOverlapRecover`, not consumed as slide or landing |
-| Unreal `CharacterMovement` source | floor finding, valid landing, walkable floor, perch/edge policy | Walking support and Falling landing are treated as separate movement-policy problems |
-| Christer Ericson, *Real-Time Collision Detection* | primitive tests, closest points, broadphase/narrowphase vocabulary | `SceneQuery` separates candidate acceleration from primitive-level hit/contact facts |
-| Gino van den Bergen / GJK literature | support mapping, Minkowski difference, convex proximity vocabulary | used as future convex-query direction; not claimed as a full implemented GJK backend |
-| Erin Catto GDC / Box2D collision material | TOI, shape cast, contact manifold, ghost-collision intuition | helped define sweep/TOI vs overlap/recovery semantics and near-degenerate contact debugging |
-| PhysX BV4 source | BVH4 as candidate acceleration, not final collision policy | local BVH4 packet child-test prototype keeps collector semantics shared with scalar traversal |
-
-In short: PhysX is used for low-level geometry-query contracts, Unreal is used
-for movement-policy separation, and books/GDC material provide the geometric
-language for explaining why sweep hits, overlap contacts, floor support, and MTD
-must not be collapsed into one "collision normal."
-
-### 6. SceneQuery and BVH4 direction
-
-`SceneQuery` is the local boundary for raw geometric facts. The goal is to keep
-candidate acceleration separate from final movement policy.
+`SceneQuery` is the boundary for raw geometric facts, kept separate from movement
+policy. Because the BVH4/SIMD traversal is easy to get subtly wrong, it is not
+trusted: four backends (LinearFallback / BinaryBVH / ScalarBVH4 / SimdBVH4) run
+the same deterministic query set and are cross-checked at startup. Hit
+equivalence is tolerance-based (`t` 1e-5, depth 1e-4, normal dot ≥ 0.999) against
+the linear oracle; an adversarial case deliberately overflows the contact
+capacity to prove all four backends retain the same deterministic contact set;
+and ~20 per-query cost counters (nodes popped, AABB tests, packet lanes,
+narrowphase calls) expose traversal work
+(`Engine/Collision/SceneQuery/SqBackendHarness.*`, `SqMetrics.h`).
 
 ```mermaid
 flowchart TD
@@ -225,20 +206,11 @@ flowchart TD
     Collector --> KCC["KCC consumes facts\nwalkable, landing, recovery policy"]
 ```
 
-What has been implemented or instrumented:
-
-- `SweepCapsuleClosestHit_Fast` and `OverlapCapsuleContacts_Fast` over the
-  SceneQuery backend: `Engine/Collision/SceneQuery/SqQueryLegacy.h`
-- BVH4 scalar and packet child-test entry points:
-  `Engine/Collision/SceneQuery/SqBVH4.h`
-- backend equivalence and metrics harness:
-  `Engine/Collision/SceneQuery/SqBackendHarness.*`
-- documented claim boundary for SIMD/SoA work:
-  `docs/audits/scenequery/12-bvh4-simd-soa-traversal-hardening.md`
-
-The BVH4 work is framed as a measured prototype boundary: scalar and packet
-child-test paths share collector semantics, and packet-lane metrics are exposed
-for verification. It is not a claim of PhysX BV4 parity or proven speedup.
+Production queries run BinaryBVH (`Engine/Collision/SceneQuery/SqQueryLegacy.h`);
+the BVH4 scalar and SIMD packet paths are measured prototypes behind the harness
+(`Engine/Collision/SceneQuery/SqBVH4.h`). No speedup is claimed — ns/query is
+reported as a reference measurement only, and the claim boundary is documented in
+`docs/audits/scenequery/12-bvh4-simd-soa-traversal-hardening.md`.
 
 ## Demo Evidence
 
@@ -249,10 +221,6 @@ Current curated media:
   visualization.
 - `assets/media/demo-main.png`: 1280x720 still fallback for portfolio/PDF links.
 - `assets/media/demo-full.mp4`: 1280x720, 16:9, about 63 seconds.
-
-Optional extra media before sharing the final GitHub link:
-
-- `assets/media/hud-uploadarena.png`: close-up HUD proof of UploadArena metrics.
 
 ## Controls
 
@@ -285,9 +253,7 @@ msbuild DX12EngineLab.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
 `.github/workflows/build.yml` runs Debug and Release x64 builds on
-`windows-latest` for push and pull request events. Do not treat this README as a
-fresh local build result unless the commands above or CI were actually run for
-the current commit.
+`windows-latest` for push and pull request events.
 
 ### Run
 
@@ -333,22 +299,12 @@ Open `DX12EngineLab.sln`, select `x64 / Debug`, and run with F5.
   PhysX BV4 parity or proven runtime speedup.
 - Floor/perch/edge semantics are documented as future KCC work, not complete
   behavior.
-- Raw reference forks, prompt logs, GPT logs, private portfolio drafts, and PDFs
-  should not be exposed as the public GitHub surface.
 
 ## Roadmap
 
-Short term:
-
-- Add one HUD close-up if UploadArena / frame metrics need stronger visual proof.
-- Keep README claims tied to source paths and current demo artifacts.
-- Keep collision claims honest: experimental KCC, not production physics.
-
-Engine work:
-
 - Expand deterministic SceneQuery benchmark cases before making performance
   claims.
-- Resume KCC work only from concrete repro traces.
-- Continue floor/perch/landing refinement as a separate movement-policy lane.
-- Treat BVH4 flattening, quantization, and deeper SIMD work as separate sessions,
-  not one mixed refactor.
+- Resume KCC work from concrete repro traces; continue floor/perch/landing
+  refinement as a separate movement-policy lane.
+- BVH4 flattening, node quantization, and deeper SIMD traversal work.
+- HUD close-up captures for UploadArena / frame metrics.
