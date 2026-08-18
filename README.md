@@ -94,28 +94,33 @@ Evidence: `Renderer/DX12/ShaderLibrary.h`, `shaders/common.hlsli`.
 
 ### 3. Collision: rebuilding a solver on pinned semantics
 
-**Lineage.** Three generations: a hand-rolled AABB axis-separated push-out
-(`docs/contracts/day3/`); a Quake-lineage capsule sweep/slide (`MAX_BUMPS = 4`,
-`OVERCLIP = 1.001`, `ClipVelocity`, researched from Quake III `bg_slidemove.c` —
-`docs/notes/sweep_capsule.md`); then the current KCC, built on **Bullet's
-`btKinematicCharacterController` architecture** (zlib) — its
-recover → stepUp → stepMove → stepDown pipeline and state variables
-(`m_verticalVelocity`, `m_currentStepOffset`) taken as the starting skeleton
-(`Engine/Collision/KinematicCharacterControllerLegacy.h`). The Bullet-shaped
-controller collapsed exactly where Bullet's CCT is known to be weak: seam contacts
-and wall-climb upward pops, caused by one `Hit.normal` being consumed as four
-different things — raw geometry, movement response, floor support, and recovery
-(`docs/audits/kcc/01-wall-climb-upward-pop-fixability.md`).
+**Assembly.** The stack was assembled from three references. `SceneQuery` was
+shaped after PhysX's geometry-query structure. The KCC was built on **Bullet's
+`btKinematicCharacterController`** (zlib) — its recover → stepUp → stepMove →
+stepDown pipeline and state variables (`m_verticalVelocity`, `m_currentStepOffset`)
+taken as the skeleton (`Engine/Collision/KinematicCharacterControllerLegacy.h`).
+And where Bullet's logic felt wrong, **Unreal-style compensation logic was grafted
+in** — floor handling, step policies — studied from CharacterMovement. (Earlier
+generations — a hand-rolled AABB push-out and a Quake-lineage capsule sweep/slide —
+live in `docs/contracts/day3/` and `docs/notes/sweep_capsule.md`.)
 
-**Two failed responses, then diagnosis.** The first response was a patch grind — a
-dozen fix/stabilize/harden commits in four days. The second was transplanting an
-Unreal-like pipeline wholesale; it was reverted within a day in favor of a staged
-migration with strict boundaries, and the solver was quarantined behind `*Legacy`
-bridge headers. The return, months later, began with documents instead of code:
-12 audits in three days (`docs/audits/kcc/`). The diagnosis (audit 02): the bug
-was not numeric — movement semantics were mixed. Gravity accumulation doubled as a
-stair trigger, `StepDown` was doing eight jobs with one distance value, and
-`onGround` served as both execution policy and result state.
+**The collapse.** The hybrid worked until it didn't: seam contacts, wall-climb
+upward pops, grounding flicker. The root cause was not any single engine's
+weakness — it was that **PhysX-shaped queries and Unreal-shaped policy patches
+were being combined on a Bullet skeleton through filters whose semantics were
+never defined.** One `Hit.normal` was being consumed as four different things —
+raw geometry, movement response, floor support, and recovery
+(`docs/audits/kcc/01-wall-climb-upward-pop-fixability.md`). The first response was
+a patch grind (a dozen fix/stabilize/harden commits in four days); a fully
+Unreal-shaped rewrite was tried and pulled back within a day in favor of staged
+migration; the solver was quarantined behind `*Legacy` bridge headers.
+
+**The realization.** The return, months later, began with documents instead of
+code: 12 audits in three days (`docs/audits/kcc/`). The diagnosis (audit 02): the
+bug was not numeric — the two reference engines answer *different questions*, and
+their semantics had been mixed implicitly. Gravity accumulation doubled as a stair
+trigger, `StepDown` was doing eight jobs with one distance value, and `onGround`
+served as both execution policy and result state.
 
 **Contract mining, two engines.** PhysX 4.0 geometry/query/CCT source was read and
 distilled into 13 contract cards with file:line anchors, each marked
@@ -127,15 +132,26 @@ counts as a floor, when landing is valid). One mirror made the local bug obvious
 PhysX refuses to report a geometric normal for an initial overlap — it returns
 `distance = 0` with the synthetic `normal = -unitDir` — while the local solver had
 been consuming exactly such raw normals as movement response
-(`docs/reference/physx/contracts/sweep-toi-hit-normal.md`). The same card/audit
-pipeline is also how AI tooling was kept inside architectural boundaries during
-this work (`AGENTS.md`).
+(`docs/reference/physx/contracts/sweep-toi-hit-normal.md`). Beyond the fixes, this
+is where a transferable skill was built: how to open a giant unfamiliar codebase
+and extract its core loops, phase boundaries, and policy contracts. The same
+card/audit pipeline is also how AI tooling was kept inside architectural
+boundaries during this work (`AGENTS.md`).
 
-**The rebuild.** The solver was re-solved stage by stage with each semantic pinned:
-`CctMoveMode { Walking, Falling }` as the single policy authority, typed floor
-semantics (`CctFloorSource` / `CctFloorSemantic`), a per-stage `SweepFilter`,
-pose-only recovery that never feeds velocity, and velocity written back from sweep
-displacement only.
+**The rebuild — a deliberate hybrid with explicit seams.** Instead of picking one
+engine to imitate, the architecture now owns its mixture:
+
+- **KCC = Unreal-like movement-policy layer** (`CctMoveMode { Walking, Falling }`
+  as the single policy authority, floor/landing policy from the Unreal cards)
+- **SceneQuery = PhysX-like geometry layer** (sweep/overlap facts, TOI and
+  initial-overlap reporting per the PhysX cards)
+- **The boundary between them — filters and result routing — is the explicitly
+  defined mixing seam**: typed floor semantics (`CctFloorSource` /
+  `CctFloorSemantic`), a per-stage `SweepFilter`, pose-only recovery that never
+  feeds velocity, and velocity written back from sweep displacement only.
+
+The same mixture that caused the collapse when implicit became the design when
+made explicit.
 
 ```mermaid
 flowchart TD
