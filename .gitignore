@@ -398,3 +398,7 @@ how --stat
 
 # Raw screen-recorder exports; keep curated copies under assets/media/
 20*.mp4
+
+# local AI/scratch logs (removed from tracking 2026-08-22)
+ex.cpp
+gpt.txt
