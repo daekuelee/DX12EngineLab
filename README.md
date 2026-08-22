@@ -1,333 +1,202 @@
 # DX12EngineLab
 
-**C++17 / DirectX12 engine lab for explicit GPU resource lifetime, real-time
-rendering diagnostics, and custom collision / KCC systems.**
+[![build](https://github.com/daekuelee/DX12EngineLab/actions/workflows/build.yml/badge.svg)](https://github.com/daekuelee/DX12EngineLab/actions/workflows/build.yml)
 
-DX12EngineLab is a Windows / DirectX12 engine sandbox built around two hard
-engineering threads:
+**C++17 / DirectX12 / HLSL engine lab — explicit GPU frame lifetime on the rendering
+side, and a character-movement & collision stack (kinematic character controller +
+scene query) rebuilt on pinned semantics on the simulation side.**
 
-1. making low-level rendering lifetime visible and debuggable; and
-2. building enough collision / SceneQuery infrastructure to reason about capsule
-   character movement bugs instead of treating them as black-box physics.
+~21,000 lines of own code · Jan–May 2026 · CI Debug+Release matrix · 181 tracked design & audit documents
+
+> **Abstract.** A solo engine lab built around one conviction: *engine claims should be
+> provable by instruments, not asserted.* On the rendering side, every GPU lifetime
+> boundary — allocators, uploads, descriptors, resource states — has
+> [one named owner, gated by fences](#explicit-gpu-frame-lifetime), observable in a
+> [~130-field HUD with fault injection proving the protection is real](#debugging-with-instruments).
+> On the simulation side, a character controller assembled from Bullet, Unreal, and PhysX
+> semantics [collapsed at their implicitly mixed
+> boundaries](#the-collision-stack-from-semantic-collapse-to-explicit-seams) — and
+> was rebuilt by [mining both engines into contract cards](#mining-two-engines-into-contracts)
+> and making the mixture explicit, with a
+> [genuine Minkowski (CSO) narrowphase](#the-math-a-genuine-cso-narrowphase) cross-checked
+> by [four query backends against a linear oracle](#four-backends-one-oracle-the-correctness-harness).
 
 [![DX12EngineLab demo](assets/media/demo-main.gif)](assets/media/demo-full.mp4)
 
-**Demo capture:** inline 14s loop from the engine demo.  
-Full capture: [60s 720p MP4](assets/media/demo-full.mp4)
+Inline 14s loop from the engine demo — edge contact, character movement, HUD
+diagnostics, SceneQuery/KCC debug visualization. Full capture: [60s 720p MP4](assets/media/demo-full.mp4).
+
+## Architecture at a Glance
+
+Two spines meet at a fixed-step app loop. The simulation spine is about separating
+movement policy from geometric fact; the rendering spine is about owning frame
+lifetime explicitly. Every box is a file you can open.
 
 ```mermaid
 flowchart LR
-    App["Engine/App.cpp\nfixed-step runtime"] --> World["Engine/WorldState\ninput + simulation state"]
-    World --> KCC["Experimental capsule KCC\nwalking/falling, sweep, recovery"]
-    KCC --> CW["CollisionWorldLegacy\nquery boundary + masks"]
-    CW --> SQ["SceneQuery\nsweep / overlap / metrics"]
-    SQ --> BVH["Binary BVH + BVH4 prototype\ncandidate acceleration"]
-    SQ --> NP["Primitive tests\nexact hit/contact facts"]
-
-    App --> DX12["Dx12Context\nqueue, swapchain, frame orchestration"]
-    DX12 --> Frame["FrameContextRing\ntriple-buffered resources + fences"]
-    DX12 --> GPU["DX12 passes\ngeometry, ImGui, HUD"]
-    Frame --> Upload["UploadArena\nper-frame upload metrics"]
-    GPU --> Shader["HLSL ABI\nroot params + row_major matrices"]
+    App["App loop<br/>fixed-step runtime"] --> World["WorldState<br/>input + simulation state"]
+    World --> KCC["Capsule KCC<br/>movement policy: walking / falling"]
+    KCC --> Seam["Filters + result routing<br/>the explicit seam"]
+    Seam --> SQ["SceneQuery<br/>sweep / overlap geometric facts"]
+    SQ --> BVH["BinaryBVH (production)<br/>+ BVH4 prototype"]
+    App --> DX12["Dx12Context<br/>queue · swapchain · frames"]
+    DX12 --> Frame["FrameContextRing<br/>triple buffering + fences"]
+    Frame --> Upload["UploadArena<br/>upload metrics"]
+    DX12 --> HUD["ImGui HUD<br/>~130-field instrument panel"]
 ```
 
 ## What This Project Shows
 
-| Area | What is demonstrated | Evidence |
+| Area | Demonstrated | Evidence |
 |---|---|---|
-| DX12 frame lifetime | triple-buffered frame contexts, command allocator reuse, fence ownership | `Renderer/DX12/FrameContextRing.*`, `Renderer/DX12/Dx12Context.*` |
-| GPU resource ownership | UploadArena metrics, descriptor ring reuse, resource-state tracking | `Renderer/DX12/UploadArena.*`, `Renderer/DX12/DescriptorRingAllocator.*`, `Renderer/DX12/ResourceStateTracker.*` |
-| Shader / CPU contract | root parameter enum mirrored by HLSL registers, explicit `row_major` matrices | `Renderer/DX12/ShaderLibrary.h`, `shaders/common.hlsli` |
-| Real-time demo path | 10,000-cube instancing / naive draw toggle, ImGui HUD, runtime controls | `Renderer/DX12/GeometryPass.h`, `Renderer/DX12/ToggleSystem.h`, `Renderer/DX12/ImGuiLayer.*` |
-| Runtime systems | fixed-step simulation, action state, camera/runtime HUD data | `Engine/App.cpp`, `Engine/WorldState.*`, `Renderer/DX12/Dx12Context.h` |
-| Collision / KCC depth | capsule KCC, sweep/slide, initial-overlap recovery, walking/falling split | `Engine/Collision/KinematicCharacterControllerLegacy.*`, `Engine/Collision/CctTypes.h` |
-| SceneQuery / BVH | closest sweep, overlap contacts, 4-backend correctness cross-check, BVH4 scalar/SIMD prototype | `Engine/Collision/SceneQuery/`, `docs/audits/scenequery/` |
+| Collision / KCC | capsule character controller: sweep/slide, overlap recovery, walking/falling policy split | `Engine/Collision/KinematicCharacterControllerLegacy.*` |
+| SceneQuery / BVH | TOI sweeps, Minkowski (CSO) narrowphase, 4-backend correctness cross-check | `Engine/Collision/SceneQuery/` |
+| Instrumentation | ~130-field HUD, KCC flight recorder, ~20 per-query cost counters, fault injection | `Renderer/DX12/ImGuiLayer.*`, `SqMetrics.h` |
+| DX12 frame lifetime | triple-buffered frame contexts, fence-gated allocator reuse | `Renderer/DX12/FrameContextRing.*` |
+| GPU resource ownership | UploadArena metrics, descriptor ring reuse, single resource-state authority | `Renderer/DX12/UploadArena.*`, `ResourceStateTracker.*` |
+| Shader / CPU contract | root-parameter enum mirrored by HLSL registers, explicit `row_major` matrices | `Renderer/DX12/ShaderLibrary.h`, `shaders/common.hlsli` |
+| Deterministic runtime | fixed-step accumulator, spiral-of-death clamp, single DT source of truth | `Engine/App.cpp` |
+| Input action layer | jump buffering, coyote time, action states | `Engine/Input/` |
 
-The point is to show engine-system ownership: explicit GPU lifetime on the
-rendering side, and evidence-driven collision contracts on the runtime side.
+## The Collision Stack: From Semantic Collapse to Explicit Seams
 
-## Engineering Problems And Solutions
+This stack was assembled as a hybrid of three references: SceneQuery shaped after
+PhysX's geometry queries, the KCC skeleton taken from Bullet's
+`btKinematicCharacterController`, and floor/step policy grafted in from Unreal's
+CharacterMovement where Bullet's logic fell short. Then it collapsed — seam
+contacts, wall-climb pops, grounding flicker. The root cause: **three sets of
+semantics were being mixed implicitly, through filter boundaries whose meaning was
+never defined.** One `Hit.normal` was consumed as four different things — raw geometry,
+movement response, floor support, and recovery. The way back started with documents,
+not code: **twelve audits in three days** (`docs/audits/kcc/`).
 
-### 1. Explicit GPU frame lifetime
+### Mining Two Engines Into Contracts
 
-DirectX12 does not hide command allocator, upload-buffer, descriptor, or resource
-state lifetime. This repo makes those boundaries explicit instead of relying on
-a framework.
+PhysX 4.0 geometry/query/CCT source was distilled into **13 contract cards with
+file:line anchors**, Unreal CharacterMovement into **4 movement-policy cards**
+(`docs/reference/physx/`, `docs/reference/unreal/`). The split itself was the
+finding: PhysX answers geometry-contract questions, Unreal answers policy questions.
+One mirror made the local bug obvious — PhysX refuses to report a geometric normal
+for an initial overlap, returning `distance = 0` with the synthetic
+`normal = -unitDir`, while this solver had been consuming exactly such raw normals
+as movement response.
 
-| Problem | Local solution | Evidence |
-|---|---|---|
-| Reusing a command allocator before the GPU is finished corrupts frame state. | `FrameContextRing` selects frame resources by monotonic frame id and gates reuse with fences. | `Renderer/DX12/FrameContextRing.h`, `Renderer/DX12/FrameContextRing.cpp` |
-| Per-frame upload allocation is easy to misuse if it is invisible. | `UploadArena` records allocation calls, bytes, peak offset, capacity, and last allocation tag for HUD diagnostics. | `Renderer/DX12/UploadArena.h`, `Renderer/DX12/UploadArena.cpp` |
-| Dynamic descriptors need a clear lifetime owner. | `DescriptorRingAllocator` owns shader-visible descriptor reuse and retirement. | `Renderer/DX12/DescriptorRingAllocator.*` |
-| Resource barriers become noisy and error-prone when spread across passes. | `ResourceStateTracker` centralizes state transitions and skips redundant barriers. | `Renderer/DX12/ResourceStateTracker.*`, `Renderer/DX12/BarrierScope.h` |
+### The Rebuild: A Deliberate Hybrid With Explicit Seams
 
-```mermaid
-sequenceDiagram
-    participant CPU as CPU frame
-    participant Ring as FrameContextRing
-    participant Upload as UploadArena
-    participant Cmd as Command List
-    participant GPU as GPU Queue / Fence
-
-    CPU->>Ring: BeginFrame(frameId)
-    Ring->>GPU: wait only if this frame context is still in flight
-    CPU->>Upload: allocate frame constants + transforms
-    CPU->>Cmd: record clear, geometry, ImGui
-    Cmd->>GPU: execute
-    Ring->>GPU: signal fence for this frame context
-```
-
-### 2. Shader ABI as an engine contract
-
-The renderer treats CPU root parameters and HLSL registers as an ABI. The shader
-side documents the root slots and uses `row_major` matrices so CPU-side matrix
-layout does not depend on implicit transpose assumptions.
-
-| CPU side | HLSL side | Purpose |
-|---|---|---|
-| `RP_FrameCB` | `b0 space0` | frame constants, including `ViewProj` |
-| `RP_TransformsTable` | `t0 space0` | transform `StructuredBuffer` descriptor table |
-| `RP_InstanceOffset` | `b1 space0` | root constant for naive draw instance offset |
-| `RP_DebugCB` | `b2 space0` | debug color mode constants |
-
-Evidence: `Renderer/DX12/ShaderLibrary.h`, `shaders/common.hlsli`.
-
-### 3. Collision: rebuilding a solver on pinned semantics
-
-**Assembly.** The stack was assembled from three references. `SceneQuery` was
-shaped after PhysX's geometry-query structure. The KCC was built on **Bullet's
-`btKinematicCharacterController`** (zlib) — its recover → stepUp → stepMove →
-stepDown pipeline and state variables (`m_verticalVelocity`, `m_currentStepOffset`)
-taken as the skeleton (`Engine/Collision/KinematicCharacterControllerLegacy.h`).
-And where Bullet's logic felt wrong, **Unreal-style compensation logic was grafted
-in** — floor handling, step policies — studied from CharacterMovement. (Earlier
-generations — a hand-rolled AABB push-out and a Quake-lineage capsule sweep/slide —
-live in `docs/contracts/day3/` and `docs/notes/sweep_capsule.md`.)
-
-**The collapse.** The hybrid worked until it didn't: seam contacts, wall-climb
-upward pops, grounding flicker. The root cause was not any single engine's
-weakness — it was that **PhysX-shaped queries and Unreal-shaped policy patches
-were being combined on a Bullet skeleton through filters whose semantics were
-never defined.** One `Hit.normal` was being consumed as four different things —
-raw geometry, movement response, floor support, and recovery
-(`docs/audits/kcc/01-wall-climb-upward-pop-fixability.md`). The first response was
-a patch grind (a dozen fix/stabilize/harden commits in four days); a fully
-Unreal-shaped rewrite was tried and pulled back within a day in favor of staged
-migration; the solver was quarantined behind `*Legacy` bridge headers.
-
-**The realization.** The return, months later, began with documents instead of
-code: 12 audits in three days (`docs/audits/kcc/`). The diagnosis (audit 02): the
-bug was not numeric — the two reference engines answer *different questions*, and
-their semantics had been mixed implicitly. Gravity accumulation doubled as a stair
-trigger, `StepDown` was doing eight jobs with one distance value, and `onGround`
-served as both execution policy and result state.
-
-**Contract mining, two engines.** PhysX 4.0 geometry/query/CCT source was read and
-distilled into 13 contract cards with file:line anchors, each marked
-raw-source-verified (`docs/reference/physx/contracts/`); Unreal CharacterMovement
-source into 4 movement-policy cards (`docs/reference/unreal/contracts/`). The split
-is the point: PhysX answers geometry-contract questions (what a sweep distance
-means, what an initial overlap reports), Unreal answers policy questions (what
-counts as a floor, when landing is valid). One mirror made the local bug obvious:
-PhysX refuses to report a geometric normal for an initial overlap — it returns
-`distance = 0` with the synthetic `normal = -unitDir` — while the local solver had
-been consuming exactly such raw normals as movement response
-(`docs/reference/physx/contracts/sweep-toi-hit-normal.md`). Beyond the fixes, this
-is where a transferable skill was built: how to open a giant unfamiliar codebase
-and extract its core loops, phase boundaries, and policy contracts. The same
-card/audit pipeline is also how AI tooling was kept inside architectural
-boundaries during this work (`AGENTS.md`).
-
-**The rebuild — a deliberate hybrid with explicit seams.** Instead of picking one
-engine to imitate, the architecture now owns its mixture:
-
-- **KCC = Unreal-like movement-policy layer** (`CctMoveMode { Walking, Falling }`
-  as the single policy authority, floor/landing policy from the Unreal cards)
-- **SceneQuery = PhysX-like geometry layer** (sweep/overlap facts, TOI and
-  initial-overlap reporting per the PhysX cards)
-- **The boundary between them — filters and result routing — is the explicitly
-  defined mixing seam**: typed floor semantics (`CctFloorSource` /
-  `CctFloorSemantic`), a per-stage `SweepFilter`, pose-only recovery that never
-  feeds velocity, and velocity written back from sweep displacement only.
-
-The same mixture that caused the collapse when implicit became the design when
-made explicit.
+Instead of picking one engine to imitate, the architecture now owns its mixture:
 
 ```mermaid
 flowchart TD
-    Tick["KCC Tick"] --> Pre["PreStep\nsnapshot old pose + previous flags"]
-    Pre --> Vertical["IntegrateVertical\njump + gravity + vertical offset"]
-    Vertical --> Recover["Recover\nactual-radius hard penetration cleanup"]
-    Recover --> Initial["InitialOverlapRecover\ninflated-radius startPenetrating fixup"]
-    Initial --> Baseline["capture x_sweep\nvelocity baseline after pose correction"]
-    Baseline --> Mode{"movement mode"}
-    Mode -->|Walking| Walk["SimulateWalking\nlateral movement + support maintenance"]
-    Mode -->|Falling| Fall["SimulateFalling\ndiagonal air sweep + landing/air slide"]
-    Walk --> Write["Writeback\nvelocity from sweep displacement only"]
-    Fall --> Write
+    subgraph P["KCC — movement-policy layer (Unreal-like)"]
+        Mode["Walking / Falling<br/>single policy authority"]
+    end
+    subgraph S["The explicit seam — filters + result routing"]
+        F["per-stage SweepFilter"] --- R["typed normal routing<br/>CctFloorSource / CctFloorSemantic"]
+    end
+    subgraph G["SceneQuery — geometry-fact layer (PhysX-like)"]
+        Q["sweep TOI · overlap / MTD reporting"]
+    end
+    P -->|queries| S
+    S -->|filtered queries| G
+    G -->|geometric facts| S
+    S -->|semantically routed results| P
 ```
 
-The hard-won artifact of the rebuild — not all normals mean the same thing:
+The same mixture that caused the collapse while implicit became the design once
+explicit. The hard-won artifact — not all normals mean the same thing:
 
-| Normal / result kind | Meaning | Who should consume it |
+| Result kind | Meaning | Consumer |
 |---|---|---|
-| sweep TOI normal | blocking surface reached during motion | movement stage, slide, landing check |
-| initial-overlap result | movement started inside inflated contact band | recovery path, not slide/landing |
-| overlap contact normal | current penetration/support fact | recovery or floor support, not ordinary sweep TOI |
-| walkable floor normal | candidate ground slope | floor/landing policy, not raw SceneQuery |
+| sweep TOI normal | blocking surface reached during motion | movement, slide, landing check |
+| initial-overlap result | motion started inside the inflated contact band | recovery only — never slide/landing |
+| overlap contact normal | current penetration/support fact | recovery or floor support |
+| walkable floor normal | candidate ground slope | floor/landing policy only |
 
-The honest coda: the old speculative StepUp was deleted, and its planned reactive
-replacement was deliberately never built — pinning semantics alone eliminated the
-visible bug set. Remaining work (floor quality, perch/edge, step-up) is gated on
-concrete repro traces (`docs/audits/kcc/13-post-initial-mtd-remaining-work.md`).
-The retired first-generation solver is preserved at tag `pre-kcc-migration`.
+The speculative StepUp was deleted rather than fixed — pinning semantics alone
+eliminated the visible bug set. Remaining movement work is gated on concrete repro
+traces (`docs/audits/kcc/13-post-initial-mtd-remaining-work.md`).
 
-**The math, made explicit.** A capsule is a segment ⊕ sphere (a Minkowski sum).
-The capsule-vs-triangle TOI query therefore reduces to sweeping a *sphere* against
-the triangle extruded along the capsule's half-segment — a CSO construction,
-implemented in `BuildExtrudedFaces7` (one end cap + three edge quads = 7 prism
-faces) and `SweepCapsuleTri_PhysXLike_TOI01`
-(`Engine/Collision/SceneQuery/SqNarrowphaseLegacy.h`), following PhysX's
-extrusion approach. Degenerate capsules fall back to sphere sweeps; a colinear
-shortcut handles axis-parallel motion. Underneath sit explicit distance kernels
-(`DistSegmentTriangleSq`, `DistSegmentSegmentSq` — `SqDistance.h`), a TOI
-tie-break cascade, and packed feature ids. The book layer: Christer Ericson,
-*Real-Time Collision Detection* (read in full) for primitive tests and closest
-points; Erin Catto's TOI/shape-cast material; van den Bergen for the convex-query
-vocabulary (a generic GJK backend is a future direction, not current code).
+### The Math: A Genuine CSO Narrowphase
 
-```mermaid
-flowchart LR
-    Start["capsule at x0"] --> Sweep["SweepCapsuleClosest\nquery earliest hit along delta"]
-    Sweep --> Normal{"hit kind"}
-    Normal -->|t > 0| TOI["ordinary TOI\nmove to safe fraction, then slide/land"]
-    Normal -->|startPenetrating| MTD["initial-overlap recovery\nuse overlap contacts with radius + contactOffset"]
-    MTD --> Retry["retry movement from corrected pose"]
-    TOI --> Policy["movement policy\nWalking / Falling decides meaning"]
-```
+A capsule is a segment ⊕ sphere (a Minkowski sum), so the capsule-vs-triangle TOI
+query reduces to sweeping a *sphere* against the triangle extruded along the
+capsule's half-segment — a CSO construction: one end cap plus three edge quads,
+seven prism faces (`BuildExtrudedFaces7`, `SqNarrowphaseLegacy.h`), following
+PhysX's extrusion approach. A generic GJK backend stays a future direction —
+overkill for a capsule-only controller. The book layer: Christer Ericson's
+*Real-Time Collision Detection* (read in full) and Erin Catto's TOI material.
 
-### 4. SceneQuery: a correctness harness, not a benchmark
+### Four Backends, One Oracle: The Correctness Harness
 
-`SceneQuery` is the boundary for raw geometric facts, kept separate from movement
-policy. Because the BVH4/SIMD traversal is easy to get subtly wrong, it is not
-trusted: four backends (LinearFallback / BinaryBVH / ScalarBVH4 / SimdBVH4) run
-the same deterministic query set and are cross-checked at startup. Hit
-equivalence is tolerance-based (`t` 1e-5, depth 1e-4, normal dot ≥ 0.999) against
-the linear oracle; an adversarial case deliberately overflows the contact
-capacity to prove all four backends retain the same deterministic contact set;
-and ~20 per-query cost counters (nodes popped, AABB tests, packet lanes,
-narrowphase calls) expose traversal work
-(`Engine/Collision/SceneQuery/SqBackendHarness.*`, `SqMetrics.h`).
+The BVH4/SIMD traversal is easy to get subtly wrong, so it is not trusted: four
+backends (LinearFallback / BinaryBVH / ScalarBVH4 / SimdBVH4) run the same
+deterministic query set at startup, cross-checked against the linear oracle with
+tolerance-based hit equivalence, and an adversarial case deliberately overflows
+contact capacity to prove all four retain the same deterministic contact set
+(`Engine/Collision/SceneQuery/SqBackendHarness.*`). Production queries run
+BinaryBVH; BVH4 scalar and SIMD are measured prototypes behind the harness, and no
+speedup is claimed.
 
-```mermaid
-flowchart TD
-    Query["Sweep / Overlap request"] --> Broad["Broadphase / BVH\ncandidate pruning"]
-    Broad --> Child["BVH4 packet child test\nAABB rejection only"]
-    Child --> Leaf["leaf primitive callback"]
-    Leaf --> Narrow["narrowphase primitive test"]
-    Narrow --> Collector["collector / metrics\nclosest hit or contact list"]
-    Collector --> KCC["KCC consumes facts\nwalkable, landing, recovery policy"]
-```
+## Debugging With Instruments
 
-Production queries run BinaryBVH (`Engine/Collision/SceneQuery/SqQueryLegacy.h`);
-the BVH4 scalar and SIMD packet paths are measured prototypes behind the harness
-(`Engine/Collision/SceneQuery/SqBVH4.h`). No speedup is claimed — ns/query is
-reported as a reference measurement only, and the claim boundary is documented in
-`docs/audits/scenequery/12-bvh4-simd-soa-traversal-hardening.md`.
+Claims are backed by dashboards, not assertions. A ~130-field HUD snapshot exposes
+frame, upload, and query invariants live. The KCC **flight recorder** auto-triggers
+on anomalous frames, freezes and saves the full movement trace to file, and
+classifies the culprit — the audits above were written from these traces. ~20
+per-query cost counters (nodes popped, AABB tests, narrowphase calls) expose
+traversal work, and a deliberate lifetime-stomp toggle (fault injection) proves the
+fence ring actually protects frame resources.
 
-## Demo Evidence
+## Explicit GPU Frame Lifetime
 
-Current curated media:
+DirectX12 does not hide allocator, upload, descriptor, or resource-state lifetime.
+This repo makes those boundaries explicit instead of relying on a framework:
 
-- `assets/media/demo-main.gif`: 720x405, 14-second inline README loop showing
-  edge contact, character movement, HUD diagnostics, and SceneQuery/KCC debug
-  visualization.
-- `assets/media/demo-main.png`: 1280x720 still fallback for portfolio/PDF links.
-- `assets/media/demo-full.mp4`: 1280x720, 16:9, about 63 seconds.
+| Problem | Solution | Evidence |
+|---|---|---|
+| Reusing a command allocator before the GPU finishes corrupts frame state | `FrameContextRing` selects resources by monotonic frame id, gates reuse with fences | `Renderer/DX12/FrameContextRing.*` |
+| Invisible per-frame upload allocation invites misuse | `UploadArena` records calls, bytes, peak, and tags straight into the HUD | `Renderer/DX12/UploadArena.*` |
+| Dynamic descriptors need one lifetime owner | `DescriptorRingAllocator` owns shader-visible reuse and retirement | `Renderer/DX12/DescriptorRingAllocator.*` |
+| Barriers scattered across passes get noisy and wrong | `ResourceStateTracker` is the single transition authority, skipping redundant barriers | `Renderer/DX12/ResourceStateTracker.*` |
 
-## Controls
+CPU root parameters and HLSL registers are treated as an ABI: the `RootParam` enum
+is mirrored verbatim in `shaders/common.hlsli`, with explicit `row_major` matrices.
 
-| Key | Behavior |
-|---|---|
-| `T` | Toggle instanced / naive draw mode |
-| `U` | Toggle UploadArena diagnostics |
-| `C` | Cycle color mode |
-| `G` | Toggle grid |
-| `V` | Toggle camera mode |
-| `WASD` | Move |
-| `Shift` | Sprint |
-| `Space` | Jump |
-| `F10` | Toggle capsule wireframe debug visualization |
+## Build, Run, Controls
 
-## Build And Run
-
-### Requirements
-
-- Windows
-- Visual Studio 2022
-- Windows SDK
-- DirectX 12 capable GPU/driver
-
-### Build
+Windows · Visual Studio 2022 · Windows SDK · DX12-capable GPU.
 
 ```bash
 msbuild DX12EngineLab.sln /m /p:Configuration=Debug /p:Platform=x64
-msbuild DX12EngineLab.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
-`.github/workflows/build.yml` runs Debug and Release x64 builds on
-`windows-latest` for push and pull request events.
+CI (`.github/workflows/build.yml`) builds Debug and Release x64 on every push and
+pull request. To run: open the solution, select `x64 / Debug`, F5.
 
-### Run
+| Key | Behavior | Key | Behavior |
+|---|---|---|---|
+| `WASD` | move | `T` | instanced / naive draw toggle |
+| `Space` | jump | `U` | UploadArena diagnostics |
+| `Shift` | sprint | `C` | color mode |
+| `V` | camera mode | `G` | grid |
+| `F10` | capsule debug visualization | | |
 
-Open `DX12EngineLab.sln`, select `x64 / Debug`, and run with F5.
+## Map & Evidence
 
-## Repository Map
+| Path | What lives there | Start here |
+|---|---|---|
+| `Renderer/DX12/` | frame contexts, descriptors, resource state, passes, HUD | `docs/onboarding/20-frame-lifecycle.md` |
+| `shaders/` | HLSL + the root-signature ABI | `docs/onboarding/40-binding-abi.md` |
+| `Engine/Collision/` | capsule KCC, CollisionWorld, primitive tests | `docs/audits/kcc/` (12 audits) |
+| `Engine/Collision/SceneQuery/` | sweep/overlap paths, metrics, BVH, backend harness | `docs/audits/scenequery/` |
+| `docs/reference/physx/` | 13 reviewed contract cards (no copied code) | `contracts/sweep-toi-hit-normal.md` |
+| `docs/reference/unreal/` | 4 movement-policy contract cards | `contracts/floor-find-perch-edge.md` |
+| `assets/` | runtime scenes + curated demo media | — |
 
-| Path | Purpose |
-|---|---|
-| `Renderer/DX12/` | DX12 renderer, frame contexts, descriptors, resource states, passes, and diagnostics |
-| `shaders/` | HLSL shaders and shared root-signature ABI documentation |
-| `Engine/` | app loop, fixed-step runtime, world state, math, and collision integration |
-| `Engine/Collision/` | experimental capsule KCC, CollisionWorld, SceneQuery, BVH, primitive tests |
-| `Engine/Collision/SceneQuery/` | sweep/overlap query paths, metrics, BVH4 prototype, backend harness |
-| `assets/scenes/` | runtime scene data |
-| `assets/media/` | curated public demo media |
-| `docs/onboarding/` | renderer architecture and frame-lifecycle notes |
-| `docs/reference/physx/` | reviewed PhysX contract cards, not copied production code |
-| `docs/reference/unreal/` | reviewed Unreal movement-policy contract cards |
-| `docs/audits/` | local audit reports and deferred-work records |
+## Status & Roadmap
 
-## Evidence Artifacts
-
-| Topic | Evidence |
-|---|---|
-| frame lifecycle | `docs/onboarding/20-frame-lifecycle.md`, `Renderer/DX12/FrameContextRing.*` |
-| resource ownership | `docs/onboarding/30-resource-ownership.md`, `Renderer/DX12/ResourceStateTracker.*` |
-| shader binding ABI | `docs/onboarding/40-binding-abi.md`, `shaders/common.hlsli` |
-| UploadArena | `docs/onboarding/50-uploadarena.md`, `Renderer/DX12/UploadArena.*` |
-| KCC stop point | `docs/audits/kcc/13-post-initial-mtd-remaining-work.md` |
-| PhysX sweep / MTD semantics | `docs/reference/physx/contracts/sweep-toi-hit-normal.md`, `docs/reference/physx/contracts/initial-overlap-mtd.md` |
-| PhysX CCT query/recovery mechanics | `docs/reference/physx/contracts/cct-query-recovery-mechanics.md` |
-| PhysX BV4 traversal boundary | `docs/reference/physx/contracts/bv4-layout-traversal.md`, `docs/audits/scenequery/12-bvh4-simd-soa-traversal-hardening.md` |
-| Unreal floor / perch / landing policy | `docs/reference/unreal/contracts/floor-find-perch-edge.md`, `docs/reference/unreal/contracts/character-movement-walking-floor-step.md` |
-
-## Known Limitations
-
-- This is an engine lab, not a production engine.
-- Collision/KCC code is experimental and still being refined.
-- The current public demo is an engine-system capture, not complete game
-  content.
-- BVH4/SIMD work is a correctness and metrics harness. It is not a claim of
-  PhysX BV4 parity or proven runtime speedup.
-- Floor/perch/edge semantics are documented as future KCC work, not complete
-  behavior.
-
-## Roadmap
-
-- Expand deterministic SceneQuery benchmark cases before making performance
-  claims.
-- Resume KCC work from concrete repro traces; continue floor/perch/landing
-  refinement as a separate movement-policy lane.
-- BVH4 flattening, node quantization, and deeper SIMD traversal work.
-- HUD close-up captures for UploadArena / frame metrics.
+An engine lab, not a production engine — the work here is running frames without
+breaking invariants, not rendering techniques (no shadow/lighting pipeline yet).
+Next: resume floor/perch/step-up from concrete repro traces, expand deterministic
+SceneQuery cases before any performance claim, BVH4 flattening and deeper SIMD
+traversal.
