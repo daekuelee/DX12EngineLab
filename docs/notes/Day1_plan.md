@@ -208,7 +208,7 @@
 
  After approval, create:
  1. docs/contracts/Day1_InstancingVsNaive_PLAN.md - This plan content
- 2. prompts/Day1_IMPLEMENT.md - Implementation prompt with guardrails
+ 2. docs/prompts/Day1_IMPLEMENT.md - Implementation prompt with guardrails
 
  ---
  Verification
